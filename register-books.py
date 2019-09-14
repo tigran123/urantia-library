@@ -69,15 +69,18 @@ def generate_cover(dirname, filename):
     if args.verbose: print("OK")
 
 for top,dirs,files in os.walk(args.rootdir):
+
+    # don't even enter these subdirectories
     if 'Music' in dirs: dirs.remove('Music') # lots of stuff in Music needs manual fixing
     if '.covers' in dirs: dirs.remove('.covers')
     if '.authors' in dirs: dirs.remove('.authors')
     if 'Websites' in dirs: dirs.remove('Websites')
     if 'urantia-library' in dirs: dirs.remove('urantia-library')
+
     if top == '.': continue # don't mess with the root directory
 
     hta = os.path.join(top, '.htaccess')
-    if not os.path.exists(hta): os.mknod(hta, 0o644)
+    if not os.path.exists(hta): os.mknod(hta, 0o644) # create '.htaccess' file
     with open(hta, 'r') as fh: htaccess = fh.read() # read the whole .htaccess
 
     # Check if all files in this directory are registered and have (registered) covers
