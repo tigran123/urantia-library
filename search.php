@@ -50,7 +50,7 @@ if (isset($text) && $text != '') {
         if ($info['basename'] == 'header.html' || $info['basename'] == 'footer.html' || $info['basename'] == '.htaccess' || 
              $info['basename'] == '000-browse.php' ||
             (strpos($info['dirname'],'.covers') != FALSE) || (strpos($info['dirname'],'urantia-library') != FALSE) ||
-            (strpos($info['dirname'],'Websites') != FALSE) || (strpos($info['dirname'],'/.authors/') != FALSE)) continue;
+            (strpos($info['dirname'],'Websites') != FALSE) || (strpos($info['dirname'],'.authors') != FALSE)) continue;
         $matches .= "[" . ++$count . "]&nbsp;<a href='/b" . $name . "'>" . $name . "</a> | <a href='/b" . $info['dirname'] ."'>UP</a>";
         if ($info['extension'] == 'djvu') 
             $matches .= " | <a href='/b/urantia-library/djview.php?file=..".$name."'>VIEW</a><br>";
