@@ -1,0 +1,25 @@
+Options +Indexes +FollowSymlinks
+IndexOptions FancyIndexing NameWidth=* DescriptionWidth=* FoldersFirst Charset=UTF-8 SuppressHTMLPreamble
+IndexIgnore b statcounter.txt nexus10.exclude exclude.txt urantia-library header.html footer.html 000-browse.php
+HeaderName /b/header.html
+ReadmeName footer.html
+
+AuthType Basic
+AuthName "b"
+AuthUserFile "/home/tigran123/.htpasswds/public_html/b/passwd"
+require valid-user
+
+AddDescription "Works of Art" Art
+AddDescription "Dictionaries of modern and ancient languages" Dictionaries
+AddDescription "Encyclopedias" Encyclopedias
+AddDescription "Fiction, but see also <b>fb2/Fiction</b> directory" Fiction
+AddDescription "Grammars of modern and ancient languages" Grammars
+AddDescription "Books on ancient and modern history" History
+AddDescription "Law, or what men call such" Law
+AddDescription "Facsimiles of Manuscripts, except biblical ones" Manuscripts
+AddDescription "Music scores and books" Music
+AddDescription "Various religions of 606 of Satania" Religions
+AddDescription "Mathematics, Physics and other sciences" Science
+AddDescription "Websites saved for offline reading" Websites
+AddDescription "Files in FictionBook2 (FB2) format, mostly in Russian" fb2
+AddDescription "List of MD5 checksums of all books in chronological order of addition" md5sums.txt
