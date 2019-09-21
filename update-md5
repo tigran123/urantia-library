@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "Registering new books..."
-find -type f -not -name 000-browse.php -not -name md5sums.txt -not -name update-md5 -not -name .htaccess \
+find -type f -not -name index.php -not -name 000-browse.php -not -name md5sums.txt -not -name update-md5 -not -name .htaccess \
              -not -name header.html -not -name footer.html -not -name exclude.txt \
              -not -path './urantia-library/*' -not -path './.authors/*' -not -path './Websites/*' -not -path '*/.covers*' \
              -not -name nexus10.exclude -not -exec fgrep -q {} md5sums.txt \;  -exec md5sum {} + | \
