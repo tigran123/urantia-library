@@ -53,16 +53,15 @@ def generate_cover(dirname, filename):
                 pr_msg('ebook-meta failed: ' + filename)
                 return
             if not os.path.isfile('/tmp/cover.jpg'):
-                coverdir = dirname + '/.covers/'
-                if args.verbose: print("Using nonexistent-cover.jpg for %s in %s" % (filename, dir))
-                if os.system('ln -sf nonexistent-cover.jpg ' + coverdir + filename + '.jpg'):
+                if args.verbose: print("Using /b/default-cover.jpg for %s in %s" % (filename, dir))
+                if os.system('ln -sf /b/urantia-library/default-cover.jpg ' + coverdir + filename + '.jpg'):
                    pr_exit('ln -sf')
                 return
         ext = 'jpg'
     else:
-        if args.verbose: print("Using nonexistent-cover.jpg for %s in %s" % (filename, dir))
+        if args.verbose: print("Using default-cover.jpg for %s in %s" % (filename, dir))
         if not args.dryrun:
-            if os.system('ln -sf nonexistent-cover.jpg ' + coverdir + filename + '.jpg'):
+            if os.system('ln -sf /b/urantia-library/default-cover.jpg ' + coverdir + filename + '.jpg'):
                 pr_exit('ln -sf')
         return
     makecover(dirname, filename, '/tmp/cover.' + ext)
@@ -79,6 +78,10 @@ for top,dirs,files in os.walk(args.rootdir):
 
     if top == '.': continue # don't mess with the root directory
 
+    browsephp = os.path.join(top, '000-browse.php')
+    if not os.path.isfile(browsephp):
+        if args.verbose: print("Creating hardlink 000-browse.php => /b/000-browse.php in %s" % top)
+        if not args.dryrun: os.link("/b/000-browse.php", os.path.join(top, "000-browse.php"))
     hta = os.path.join(top, '.htaccess')
     if not os.path.exists(hta): os.mknod(hta, 0o644) # create '.htaccess' file
     with open(hta, 'r') as fh: htaccess = fh.read() # read the whole .htaccess
@@ -87,13 +90,8 @@ for top,dirs,files in os.walk(args.rootdir):
     for f in files:
         if f == ".htaccess" or f == "000-browse.php": continue
 
-        relcoverimage = '.covers/' + f + '.jpg' 
-        # append AddIcon and generate cover image if necessary
-        #if relcoverimage not in htaccess and f.endswith(('.djvu', '.pdf', '.PDF', '.fb2.zip')):
-        #    print("AddIcon for \"%s\" in \"%s\"" % (f, top))
-        #    if not args.dryrun:
-        #        with open(hta, 'a') as fh: fh.write('AddIcon ' + relcoverimage + ' ' + f + '\n')
-        if not os.path.isfile(os.path.join(top, relcoverimage)) or args.force:
+        relcimage = os.path.join(top, '.covers', f + '.jpg' )
+        if not os.path.exists(relcimage) or args.force:
             generate_cover(top, f)
 
     # append AddDescription if necessary
