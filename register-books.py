@@ -71,6 +71,7 @@ for top,dirs,files in os.walk(args.rootdir):
 
     # don't even enter these subdirectories
     if 'Music' in dirs: dirs.remove('Music') # lots of stuff in Music needs manual fixing
+    if 'Scores' in dirs: dirs.remove('Scores') # lots of stuff in Music/Scores needs manual fixing
     if '.covers' in dirs: dirs.remove('.covers')
     if '.authors' in dirs: dirs.remove('.authors')
     if 'Websites' in dirs: dirs.remove('Websites')
@@ -103,18 +104,18 @@ for top,dirs,files in os.walk(args.rootdir):
                 with open(hta, 'a') as fh: fh.write('AddDescription "' + f + '" ' + f + '\n')
 
     # Remove invalid AddDescription and AddIcon lines from .htaccess
-    modified = False
-    with open(hta, 'r') as fh:
-        htaccess = fh.readlines() # need to iterate line by line
-        htcopy = htaccess.copy()  # can't delete items while iterating over htaccess
-        for line in htcopy:
-            res = re.match("(?:^AddIcon \"?([^ ]+?)\"? .*)|(?:^AddDescription .* ([^ ]*))\n", line)
-            if res:
-                filename = os.path.join(top,res.group(1) or res.group(2))
-                if not os.path.exists(filename):
-                    print("%s: removing invalid entry %s" % (top, line), end='')
-                    modified = True
-                    htaccess.remove(line)
-    if modified and not args.dryrun:
-        with open(hta, 'w+') as fh:
-            fh.writelines(htaccess)
+    #modified = False
+    #with open(hta, 'r') as fh:
+    #    htaccess = fh.readlines() # need to iterate line by line
+    #    htcopy = htaccess.copy()  # can't delete items while iterating over htaccess
+    #    for line in htcopy:
+    #        res = re.match("(?:^AddIcon \"?([^ ]+?)\"? .*)|(?:^AddDescription .* ([^ ]*))\n", line)
+    #        if res:
+    #            filename = os.path.join(top,res.group(1) or res.group(2))
+    #            if not os.path.exists(filename):
+    #                print("%s: removing invalid entry %s" % (top, line), end='')
+    #                modified = True
+    #                htaccess.remove(line)
+    #if modified and not args.dryrun:
+    #    with open(hta, 'w+') as fh:
+    #        fh.writelines(htaccess)
