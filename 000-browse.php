@@ -5,6 +5,7 @@ $dir = new RecursiveDirectoryIterator('.');
 $ite = new RecursiveIteratorIterator($dir);
 $files = new RegexIterator($ite, '/^.*\.covers\/.*\.jpg/', RegexIterator::GET_MATCH);
 
+$html = [];
 foreach($files as $image => $object) {
     $filename = str_replace(['/.covers','.jpg'],'', $image);
     $info = pathinfo($filename);
@@ -21,5 +22,8 @@ foreach($files as $image => $object) {
             break;
         }
     }
-    echo "<a href='$filename'><img style='$style' src='$image' title='$title' /></a>";
+    $html[] = "<a href='$filename'><img style='$style' src='$image' title='$title' /></a>";
 }
+
+sort($html);
+foreach ($html as $h) echo $h;
