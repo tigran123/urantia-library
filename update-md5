@@ -1,10 +1,16 @@
 #!/bin/bash
 
+if [ $(uname -s) = "Darwin" ] ; then
+    md5sum="md5 -r"
+else
+    md5sum="md5sum"
+fi
+
 echo "Registering new books..."
-find -type f -not -name 000-browse.php -not -name md5sums.txt -not -name best.html -not -name update-md5 -not -name .htaccess \
+find . -type f -not -name 000-browse.php -not -name md5sums.txt -not -name update-md5 -not -name .htaccess \
              -not -name header.html -not -name exclude.txt -not -name .updateme \
-             -not -path './urantia-library/*' -not -path './Incoming/*' -not -path './.authors/*' -not -path '*/*.sdr/*' -not -path './Websites/*' -not -path '*/.covers*' \
-             -not -name nexus10.exclude -not -exec fgrep -q {} md5sums.txt \;  -exec md5sum {} + | \
+             -not -path './urantia-library/*' -not -path '*/*.html' -not -path './Incoming/*' -not -path './.authors/*' -not -path '*/*.sdr/*' -not -path './Websites/*' -not -path '*/.covers*' \
+             -not -name nexus10.exclude -not -exec fgrep -q {} md5sums.txt \;  -exec $md5sum {} + | \
     tee -a md5sums.txt
 
 echo "Checking for duplicates..."
