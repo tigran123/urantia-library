@@ -8,7 +8,11 @@ find . -type f -not -name 000-browse.php -not -name md5sums.txt -not -name updat
     tee -a md5sums.txt
 
 echo "Checking for duplicates..."
-awk -F' ' '{print $1}' md5sums.txt |sort|uniq -d|grep -F -f - md5sums.txt
+dups=$(awk -F' ' '{print $1}' md5sums.txt |sort|uniq -d)
+for dup in $dups
+do
+   grep $dup md5sums.txt
+done
 
 #tree -D --dirsfirst -h --du -F \
 #     -I "Websites|tree-index.html|update-md5|f|exclude.txt|urantia-library" \
