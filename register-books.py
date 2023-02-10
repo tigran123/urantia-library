@@ -81,8 +81,8 @@ for top,dirs,files in os.walk(args.rootdir):
 
     browsephp = os.path.join(top, '000-browse.php')
     if not os.path.isfile(browsephp):
-        if args.verbose: print("Creating hardlink 000-browse.php => /b/000-browse.php in %s" % top)
-        if not args.dryrun: os.link("/b/000-browse.php", os.path.join(top, "000-browse.php"))
+        if args.verbose: print("Creating symlink 000-browse.php => /b/000-browse.php in %s" % top)
+        if not args.dryrun: os.symlink("/b/000-browse.php", os.path.join(top, "000-browse.php"))
     hta = os.path.join(top, '.htaccess')
     if not os.path.exists(hta): os.mknod(hta, 0o644) # create '.htaccess' file
     with open(hta, 'r') as fh: htaccess = fh.read() # read the whole .htaccess
