@@ -84,7 +84,7 @@ for top,dirs,files in os.walk(args.rootdir):
         if args.verbose: print("Creating symlink 000-browse.php => /b/000-browse.php in %s" % top)
         if not args.dryrun: os.symlink("/b/000-browse.php", os.path.join(top, "000-browse.php"))
     hta = os.path.join(top, '.htaccess')
-    if not os.path.exists(hta): os.mknod(hta, 0o644) # create '.htaccess' file
+    os.system("touch " + hta) # create '.htaccess' file
     with open(hta, 'r') as fh: htaccess = fh.read() # read the whole .htaccess
 
     # Check if all files in this directory are registered and have (registered) covers
