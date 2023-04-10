@@ -80,11 +80,11 @@ for top,dirs,files in os.walk(args.rootdir):
     if top == '.': continue # don't mess with the root directory
 
     browsephp = os.path.join(top, '000-browse.php')
-    if not os.path.exists(browsephp):
+    if not os.path.exists(browsephp) and not os.path.islink(browsephp): # broken links are okay
         if args.verbose: print("Creating symlink 000-browse.php => /b/000-browse.php in %s" % top)
-        if not args.dryrun: os.symlink("/b/000-browse.php", browsephp)
+        if not args.dryrun: os.symlink("/b/000-browse.php", os.path.join(top, "000-browse.php"))
     hta = os.path.join(top, '.htaccess')
-    os.system("touch " + hta) # create '.htaccess' file
+    if not os.path.exists(hta): os.system("touch " + hta) # create '.htaccess' file
     with open(hta, 'r') as fh: htaccess = fh.read() # read the whole .htaccess
 
     # Check if all files in this directory are registered and have (registered) covers
@@ -92,7 +92,7 @@ for top,dirs,files in os.walk(args.rootdir):
         if f == ".htaccess" or f == "000-browse.php": continue
 
         relcimage = os.path.join(top, '.covers', f + '.jpg' )
-        if not os.path.exists(relcimage) or args.force:
+        if not os.path.exists(relcimage) and not os.path.islink(relcimage) or args.force:
             generate_cover(top, f)
 
     # append AddDescription if necessary
