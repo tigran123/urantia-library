@@ -17,6 +17,6 @@ do
    grep $dup md5sums.txt
 done
 
-#tree -D --dirsfirst -h --du -F \
-#     -I "Websites|tree-index.html|update-md5|f|exclude.txt|urantia-library" \
-#     -C -T "URANTIA LIBRARY ($(date))" --charset utf-8 -H . -o tree-index.html
+tree -D --dirsfirst -h --du -F \
+     -I "|Archived-Books|Kiwix|Movies|Software|header.html|Websites|tree-index.html|Html-Docs|update-md5|f|exclude.txt|urantia-library|000-browse.php" \
+     -C -T "URANTIA LIBRARY (Indexed on $(date))" --charset utf-8 -H . -o tree-index.html
