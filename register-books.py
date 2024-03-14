@@ -3,6 +3,7 @@
 """
     register-books.py --- Update books registry if necessary
     Author: Tigran Aivazian <aivazian.tigran@gmail.com>
+    License: GPLv3
 """
 
 import os, sys, re
@@ -69,13 +70,10 @@ def generate_cover(dirname, filename):
 
 for top,dirs,files in os.walk(args.rootdir):
 
-    # don't even enter these subdirectories
-    if 'Music' in dirs: dirs.remove('Music') # lots of stuff in Music needs manual fixing
-    if 'Scores' in dirs: dirs.remove('Scores') # lots of stuff in Music/Scores needs manual fixing
-    if '.covers' in dirs: dirs.remove('.covers')
-    if '.authors' in dirs: dirs.remove('.authors')
-    if 'Websites' in dirs: dirs.remove('Websites')
-    if 'urantia-library' in dirs: dirs.remove('urantia-library')
+    # do not even enter these subdirectories
+    excludelist = ['Music', 'Scores', '.covers', '.authors', 'Websites', 'urantia-library', 'Html-Docs']
+    for d in excludelist:
+        if d in dirs: dirs.remove(d)
 
     if top == '.': continue # don't mess with the root directory
 
@@ -102,20 +100,3 @@ for top,dirs,files in os.walk(args.rootdir):
             print("AddDescription for \"%s\" in \"%s\"" % (f, top))
             if not args.dryrun:
                 with open(hta, 'a') as fh: fh.write('AddDescription "' + f + '" ' + f + '\n')
-
-    # Remove invalid AddDescription and AddIcon lines from .htaccess
-    #modified = False
-    #with open(hta, 'r') as fh:
-    #    htaccess = fh.readlines() # need to iterate line by line
-    #    htcopy = htaccess.copy()  # can't delete items while iterating over htaccess
-    #    for line in htcopy:
-    #        res = re.match("(?:^AddIcon \"?([^ ]+?)\"? .*)|(?:^AddDescription .* ([^ ]*))\n", line)
-    #        if res:
-    #            filename = os.path.join(top,res.group(1) or res.group(2))
-    #            if not os.path.exists(filename):
-    #                print("%s: removing invalid entry %s" % (top, line), end='')
-    #                modified = True
-    #                htaccess.remove(line)
-    #if modified and not args.dryrun:
-    #    with open(hta, 'w+') as fh:
-    #        fh.writelines(htaccess)
