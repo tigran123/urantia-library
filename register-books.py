@@ -7,7 +7,6 @@
 """
 
 import os, sys, re
-from subprocess import Popen, PIPE
 from argparse import ArgumentParser as argp
 
 p = argp(description="Register Books in URANTIA Library")
@@ -17,9 +16,8 @@ p.add_argument("-n",  action="store_true", help="Dry run, don't modify anything"
 p.add_argument("-f",  action="store_true", help="Force rebuilding existing covers", dest="force")
 args = p.parse_args()
 
-descr = "register-books"
 def pr_msg(str):
-    print(descr + ": " + str)
+    print("register-books: " + str)
 
 def pr_exit(str):
     pr_msg("ERROR: " + str)
