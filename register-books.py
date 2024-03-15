@@ -71,8 +71,8 @@ def generate_cover(dirname, filename):
 for top,dirs,files in os.walk(args.rootdir):
 
     # do not even enter these subdirectories
-    excludelist = ['Music', 'Scores', '.covers', '.authors', 'Websites', 'urantia-library', 'Html-Docs']
-    for d in excludelist:
+    excludeset = {'Incoming', 'Series', 'Music', 'Scores', '.covers', '.authors', 'Websites', 'urantia-library', 'Html-Docs'}
+    for d in excludeset:
         if d in dirs: dirs.remove(d)
 
     if top == '.': continue # don't mess with the root directory
