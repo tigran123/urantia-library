@@ -1,7 +1,17 @@
 #!/bin/bash
 
-echo "Registering new books..."
-find . -type f \
+if [ $# -ne 0 ] ; then
+    dir=$1
+    if [ ! -d "$dir" ] ; then
+        echo "\"$dir\" is not a directory, aborting."
+        exit
+    fi
+else
+    dir='.'
+fi
+
+echo "Registering new books in \"$dir\"..."
+find $dir -type f \
       -not -name 000-browse.php -not -name md5sums.txt -not -name update-md5 \
       -not -name .htaccess -not -name header.html -not -name exclude.txt -not -name .updateme \
       -not -path './urantia-library/*' -not -path '*/*.html' -not -path './Recommended-Books/*' \
