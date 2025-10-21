@@ -4,10 +4,10 @@ IndexIgnore b statcounter.txt nexus10.exclude exclude.txt urantia-library header
 HeaderName /b/header.html
 ReadmeName footer.html
 
-AuthType Basic
-AuthName "b"
-AuthUserFile "/home/tigran123/.htpasswds/public_html/b/passwd"
-require valid-user
+#AuthType Basic
+#AuthName "b"
+#AuthUserFile "/home/tigran123/.htpasswds/public_html/b/passwd"
+#require valid-user
 
 AddDescription "Works of Art" Art
 AddDescription "Dictionaries of modern and ancient languages" Dictionaries
