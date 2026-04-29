@@ -1,5 +1,5 @@
 <?php
-$style = 'width:300px; height: 400px float:left; padding:1px; border: solid black 1px;';
+$style = 'width:300px; height: 400px; float:left; padding:1px; border: solid black 1px;';
 
 $dir = new RecursiveDirectoryIterator('.');
 $ite = new RecursiveIteratorIterator($dir);
