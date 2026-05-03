@@ -63,21 +63,21 @@ const getFullUrl = (url: string) => {
 <template>
   <div class="space-y-6">
     <!-- Toolbar -->
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-lg shadow-sm border border-gray-100">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700">
       
       <!-- Breadcrumbs -->
-      <nav class="flex text-sm font-medium text-gray-500 overflow-x-auto" aria-label="Breadcrumb">
+      <nav class="flex text-sm font-medium text-gray-500 dark:text-gray-400 overflow-x-auto" aria-label="Breadcrumb">
         <ol class="inline-flex items-center space-x-1 md:space-x-3 whitespace-nowrap">
           <li class="inline-flex items-center">
-            <router-link to="/browse" class="inline-flex items-center hover:text-blue-600 transition-colors">
+            <router-link to="/browse" class="inline-flex items-center hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
               <HomeIcon class="h-4 w-4 mr-2" />
               Root
             </router-link>
           </li>
           <li v-for="crumb in getBreadcrumbs()" :key="crumb.path">
             <div class="flex items-center">
-              <ChevronRightIcon class="h-4 w-4 text-gray-400 mx-1" />
-              <router-link :to="`/browse${crumb.path}`" class="hover:text-blue-600 transition-colors">
+              <ChevronRightIcon class="h-4 w-4 text-gray-400 dark:text-gray-600 mx-1" />
+              <router-link :to="`/browse${crumb.path}`" class="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                 {{ crumb.name }}
               </router-link>
             </div>
@@ -86,17 +86,17 @@ const getFullUrl = (url: string) => {
       </nav>
 
       <!-- View Toggle -->
-      <div class="flex bg-gray-100 rounded-lg p-1 self-start sm:self-auto">
+      <div class="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-1 self-start sm:self-auto border border-transparent dark:border-gray-700">
         <button 
           @click="viewMode = 'grid'" 
-          :class="['p-1.5 rounded-md transition-colors', viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700']"
+          :class="['p-1.5 rounded-md transition-colors', viewMode === 'grid' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
           title="Grid View"
         >
           <Squares2X2Icon class="h-5 w-5" />
         </button>
         <button 
           @click="viewMode = 'list'" 
-          :class="['p-1.5 rounded-md transition-colors', viewMode === 'list' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700']"
+          :class="['p-1.5 rounded-md transition-colors', viewMode === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
           title="List View"
         >
           <ListBulletIcon class="h-5 w-5" />
@@ -106,15 +106,15 @@ const getFullUrl = (url: string) => {
 
     <!-- Content -->
     <div v-if="loading" class="flex justify-center items-center py-20">
-      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
     </div>
     
-    <div v-else-if="error" class="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200">
+    <div v-else-if="error" class="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 p-4 rounded-lg border border-red-200 dark:border-red-800">
       {{ error }}
     </div>
 
-    <div v-else-if="items.length === 0" class="text-center py-20 text-gray-500 bg-white rounded-lg border border-gray-100 shadow-sm">
-      <FolderIcon class="mx-auto h-12 w-12 text-gray-300 mb-3" />
+    <div v-else-if="items.length === 0" class="text-center py-20 text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm">
+      <FolderIcon class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-3" />
       <p class="text-lg">This folder is empty</p>
     </div>
 
@@ -123,64 +123,64 @@ const getFullUrl = (url: string) => {
       <div v-if="viewMode === 'grid'" class="grid gap-6 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
         <template v-for="item in items" :key="item.name">
           <template v-if="item.is_dir">
-            <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="group flex flex-col items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all hover:border-blue-300">
-              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 rounded-lg mb-3 group-hover:bg-blue-50 transition-colors">
-                <FolderIcon class="h-16 w-16 text-blue-400 group-hover:text-blue-500" />
+            <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="group flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
+              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
+                <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
               </div>
-              <h3 class="text-sm font-medium text-gray-900 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
-              <p v-if="item.description" class="text-xs text-gray-500 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+              <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
+              <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
             </a>
-            <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="group flex flex-col items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all hover:border-blue-300">
-              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 rounded-lg mb-3 group-hover:bg-blue-50 transition-colors">
-                <FolderIcon class="h-16 w-16 text-blue-400 group-hover:text-blue-500" />
+            <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="group flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
+              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
+                <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
               </div>
-              <h3 class="text-sm font-medium text-gray-900 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
-              <p v-if="item.description" class="text-xs text-gray-500 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+              <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
+              <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
             </router-link>
           </template>
           
-          <a v-else :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)" target="_blank" class="group flex flex-col items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all hover:border-green-300">
-            <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50">
+          <a v-else :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)" target="_blank" class="group flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500">
+            <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900">
               <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
-              <DocumentIcon v-else class="h-16 w-16 text-gray-300" />
+              <DocumentIcon v-else class="h-16 w-16 text-gray-300 dark:text-gray-600" />
             </div>
-            <h3 class="text-sm font-medium text-gray-900 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
-            <p v-if="item.description" class="text-xs text-gray-500 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+            <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
+            <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
           </a>
         </template>
       </div>
 
       <!-- List View -->
-      <div v-else class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">
-        <ul class="divide-y divide-gray-100">
-          <li v-for="item in items" :key="item.name" class="hover:bg-gray-50 transition-colors">
+      <div v-else class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+        <ul class="divide-y divide-gray-100 dark:divide-gray-700">
+          <li v-for="item in items" :key="item.name" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
             <template v-if="item.is_dir">
               <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex items-center p-4">
-                <FolderIcon class="h-8 w-8 text-blue-400 flex-shrink-0 mr-4" />
+                <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
                 <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-gray-900 truncate">{{ item.name }}</p>
-                  <p v-if="item.description" class="text-xs text-gray-500 truncate mt-0.5" v-html="item.description"></p>
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{{ item.name }}</p>
+                  <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
                 </div>
               </a>
               <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex items-center p-4">
-                <FolderIcon class="h-8 w-8 text-blue-400 flex-shrink-0 mr-4" />
+                <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
                 <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-gray-900 truncate">{{ item.name }}</p>
-                  <p v-if="item.description" class="text-xs text-gray-500 truncate mt-0.5" v-html="item.description"></p>
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{{ item.name }}</p>
+                  <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
                 </div>
               </router-link>
             </template>
             
             <a v-else :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)" target="_blank" class="flex items-center p-4">
-              <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 flex items-center justify-center overflow-hidden">
+              <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
                 <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-cover" />
-                <DocumentIcon v-else class="h-6 w-6 text-gray-400" />
+                <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
               </div>
               <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium text-gray-900 truncate">{{ item.name }}</p>
-                <p v-if="item.description" class="text-xs text-gray-500 truncate mt-0.5" v-html="item.description"></p>
+                <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{{ item.name }}</p>
+                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
               </div>
-              <div class="text-xs text-gray-400 ml-4 whitespace-nowrap">
+              <div class="text-xs text-gray-400 dark:text-gray-500 ml-4 whitespace-nowrap">
                 {{ formatBytes(item.size) }}
               </div>
             </a>
