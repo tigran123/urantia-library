@@ -1,12 +1,21 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse, FileResponse
 import os
 import re
 from typing import List, Dict, Any
 from pathlib import Path
 import json
 from fastapi.middleware.cors import CORSMiddleware
+import models
+import schemas
+from database import engine, get_db
+from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
+import email_utils
+import jwt
+
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
@@ -52,8 +61,50 @@ def get_htaccess_descriptions(dir_path: str) -> Dict[str, str]:
             print(f"Error reading {htaccess_path}: {e}")
     return descriptions
 
+async def get_current_user(access_token: str = Cookie(None), db: Session = Depends(get_db)):
+    if not access_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    try:
+        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    return user
+
+@app.post("/api/login")
+async def login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == login_data.email).first()
+    if not user or not verify_password(login_data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect email or password")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="User is not active")
+
+    access_token = create_access_token(data={"sub": user.email})
+    response = JSONResponse(content={"message": "Login successful"})
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=7*24*60*60
+    )
+    return response
+
+@app.post("/api/logout")
+async def logout():
+    response = JSONResponse(content={"message": "Logout successful"})
+    response.delete_cookie(key="access_token")
+    return response
+
 @app.get("/api/browse")
-async def browse(path: str = ""):
+async def browse(path: str = "", current_user: models.User = Depends(get_current_user)):
     target_dir = os.path.join(BOOKS_DIR, path)
     if not os.path.abspath(target_dir).startswith(os.path.abspath(BOOKS_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -62,7 +113,7 @@ async def browse(path: str = ""):
 
     descriptions = get_htaccess_descriptions(target_dir)
     items = []
-    
+
     try:
         entries = sorted(os.listdir(target_dir))
     except Exception as e:
@@ -77,19 +128,19 @@ async def browse(path: str = ""):
 
         entry_path = os.path.join(target_dir, entry)
         is_dir = os.path.isdir(entry_path)
-        
+
         # Check cover
         cover_url = None
         cover_path = os.path.join(target_dir, ".covers", f"{entry}.jpg")
         if os.path.exists(cover_path):
             rel_cover = os.path.relpath(cover_path, BOOKS_DIR)
             cover_url = f"/api/files/{rel_cover.replace(chr(92), '/')}"
-            
+
         try:
             size = os.path.getsize(entry_path) if not is_dir else 0
         except OSError:
             size = 0
-            
+
         items.append({
             "name": entry,
             "is_dir": is_dir,
@@ -98,46 +149,46 @@ async def browse(path: str = ""):
             "size": size,
             "path": os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
         })
-        
+
     # Sort: folders first, then files
     items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
-    
+
     return {"path": path, "items": items}
 
 @app.get("/api/search")
-async def search(q: str = ""):
+async def search(q: str = "", current_user: models.User = Depends(get_current_user)):
     if not q:
         return {"matches": []}
-        
+
     matches = []
     query_lower = q.lower()
-    
+
     # Simple recursive search
     for root, dirs, files in os.walk(BOOKS_DIR):
         # Exclude hidden and special dirs
         dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['urantia-library', 'Incoming', 'Html-Docs']]
-        
+
         rel_root = os.path.relpath(root, BOOKS_DIR)
         if rel_root == ".":
             rel_root = ""
-            
+
         descriptions = get_htaccess_descriptions(root)
-        
+
         for entry in dirs + files:
             if entry in [".htaccess", "000-browse.php", "header.html", "exclude.txt"]:
                 continue
-                
+
             entry_path = os.path.join(root, entry)
             rel_path = os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
             desc = descriptions.get(entry, "")
-            
+
             if query_lower in entry.lower() or query_lower in desc.lower():
                 is_dir = os.path.isdir(entry_path)
                 cover_path = os.path.join(root, ".covers", f"{entry}.jpg")
                 cover_url = None
                 if os.path.exists(cover_path):
                     cover_url = f"/api/files/{os.path.relpath(cover_path, BOOKS_DIR).replace(chr(92), '/')}"
-                    
+
                 matches.append({
                     "name": entry,
                     "is_dir": is_dir,
@@ -146,16 +197,105 @@ async def search(q: str = ""):
                     "parent_dir": rel_root.replace("\\", "/"),
                     "cover_url": cover_url
                 })
-                
+
                 if len(matches) > 100: # Limit results
                     break
         if len(matches) > 100:
             break
-            
+
     return {"matches": matches}
 
-# Mount static files
-app.mount("/api/files", StaticFiles(directory=BOOKS_DIR, follow_symlink=True, html=True), name="books")
+@app.post("/api/register", response_model=schemas.Message)
+async def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    # Check if user already exists
+    db_user = db.query(models.User).filter(models.User.email == user.email).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Check if a pending request already exists
+    db_request = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.email == user.email).first()
+    if db_request:
+        raise HTTPException(status_code=400, detail="Registration request already pending")
+
+    db_req = models.RegistrationRequest(
+        email=user.email,
+        source=user.source,
+        purpose=user.purpose,
+        status="pending"
+    )
+    db.add(db_req)
+    db.commit()
+    db.refresh(db_req)
+
+    # Notify admin
+    email_utils.send_admin_notification(
+        user_email=db_req.email,
+        token=db_req.token,
+        source=db_req.source,
+        purpose=db_req.purpose
+    )
+
+    return {"message": "Registration request queued for approval."}
+
+@app.get("/api/admin/approve")
+async def approve_user(token: str, db: Session = Depends(get_db)):
+    db_req = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.token == token).first()
+    if not db_req:
+        return JSONResponse(status_code=404, content={"message": "Invalid or expired token."})
+
+    if db_req.status == "approved":
+        return JSONResponse(status_code=200, content={"message": "User already approved, waiting for password setup."})
+
+    db_req.status = "approved"
+    db.commit()
+
+    # Notify user to set password
+    email_utils.send_user_approval(db_req.email, db_req.token)
+
+    return JSONResponse(status_code=200, content={"message": "User approved successfully. Email sent to set password."})
+
+@app.post("/api/set-password", response_model=schemas.Message)
+async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_db)):
+    db_req = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.token == data.token).first()
+    if not db_req or db_req.status != "approved":
+        raise HTTPException(status_code=400, detail="Invalid or unapproved token.")
+
+    # Create active user
+    hashed_password = get_password_hash(data.password)
+    new_user = models.User(
+        email=db_req.email,
+        hashed_password=hashed_password,
+        is_active=True
+    )
+    db.add(new_user)
+    db.delete(db_req)
+    db.commit()
+
+    return {"message": "Password set successfully. You can now log in."}
+
+@app.get("/api/admin/reject")
+async def reject_user(token: str, db: Session = Depends(get_db)):
+    db_req = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.token == token).first()
+    if not db_req:
+        return JSONResponse(status_code=404, content={"message": "Invalid or expired token."})
+
+    user_email = db_req.email
+    db.delete(db_req)
+    db.commit()
+
+    # Notify user
+    email_utils.send_user_rejection(user_email)
+
+    return JSONResponse(status_code=200, content={"message": "User rejected successfully."})
+
+@app.get("/api/files/{path:path}")
+async def get_file(path: str, current_user: models.User = Depends(get_current_user)):
+    file_path = os.path.join(BOOKS_DIR, path)
+    if not os.path.abspath(file_path).startswith(os.path.abspath(BOOKS_DIR)):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)
 
 # Frontend static files will be mounted here later
 app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")
