@@ -120,18 +120,18 @@ const getFullUrl = (url: string) => {
 
     <template v-else>
       <!-- Grid View -->
-      <div v-if="viewMode === 'grid'" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+      <div v-if="viewMode === 'grid'" class="grid gap-6 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
         <template v-for="item in items" :key="item.name">
           <template v-if="item.is_dir">
             <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="group flex flex-col items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all hover:border-blue-300">
-              <div class="h-32 flex items-center justify-center w-full bg-blue-50/50 rounded-lg mb-3 group-hover:bg-blue-50 transition-colors">
+              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 rounded-lg mb-3 group-hover:bg-blue-50 transition-colors">
                 <FolderIcon class="h-16 w-16 text-blue-400 group-hover:text-blue-500" />
               </div>
               <h3 class="text-sm font-medium text-gray-900 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
               <p v-if="item.description" class="text-xs text-gray-500 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
             </a>
             <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="group flex flex-col items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all hover:border-blue-300">
-              <div class="h-32 flex items-center justify-center w-full bg-blue-50/50 rounded-lg mb-3 group-hover:bg-blue-50 transition-colors">
+              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 rounded-lg mb-3 group-hover:bg-blue-50 transition-colors">
                 <FolderIcon class="h-16 w-16 text-blue-400 group-hover:text-blue-500" />
               </div>
               <h3 class="text-sm font-medium text-gray-900 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>
@@ -140,8 +140,8 @@ const getFullUrl = (url: string) => {
           </template>
           
           <a v-else :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)" target="_blank" class="group flex flex-col items-center p-4 bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all hover:border-green-300">
-            <div class="h-40 w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50">
-              <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300" />
+            <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50">
+              <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
               <DocumentIcon v-else class="h-16 w-16 text-gray-300" />
             </div>
             <h3 class="text-sm font-medium text-gray-900 text-center line-clamp-2 w-full break-words" :title="item.name">{{ item.name }}</h3>

@@ -3,7 +3,9 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/vue/24/outline'
 import api from '../api'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n({ useScope: 'global' })
 const email = ref('')
 const password = ref('')
 const showPassword = ref(false)
@@ -25,7 +27,7 @@ const handleLogin = async () => {
     if (err.response && err.response.data && err.response.data.detail) {
       errorMsg.value = err.response.data.detail
     } else {
-      errorMsg.value = 'An error occurred during login.'
+      errorMsg.value = t('auth.loginError')
     }
   } finally {
     loading.value = false
@@ -35,7 +37,7 @@ const handleLogin = async () => {
 
 <template>
   <div class="max-w-md mx-auto mt-10 bg-white p-8 border rounded-lg shadow-sm">
-    <h2 class="text-2xl font-bold mb-6 text-center text-gray-900">Sign In</h2>
+    <h2 class="text-2xl font-bold mb-6 text-center text-gray-900">{{ t('auth.signInTitle') }}</h2>
 
     <div v-if="errorMsg" class="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">
       {{ errorMsg }}
@@ -43,7 +45,7 @@ const handleLogin = async () => {
 
     <form @submit.prevent="handleLogin" class="space-y-4">
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.emailLabel') }}</label>
         <input
           v-model="email"
           type="email"
@@ -53,7 +55,7 @@ const handleLogin = async () => {
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.passwordLabel') }}</label>
         <div class="relative">
           <input
             v-model="password"
@@ -77,13 +79,13 @@ const handleLogin = async () => {
         :disabled="loading"
         class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
       >
-        {{ loading ? 'Signing in...' : 'Sign In' }}
+        {{ loading ? t('auth.signInLoading') : t('auth.signInBtn') }}
       </button>
     </form>
 
     <div class="mt-6 text-center text-sm text-gray-600">
-      Don't have an account?
-      <router-link :to="{ name: 'register' }" class="text-blue-600 hover:underline">Request access</router-link>
+      {{ t('auth.noAccount') }}
+      <router-link :to="{ name: 'register' }" class="text-blue-600 hover:underline">{{ t('auth.requestAccessLink') }}</router-link>
     </div>
   </div>
 </template>
