@@ -165,8 +165,10 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
 
         try:
             size = os.path.getsize(entry_path) if not is_dir else 0
+            mtime = datetime.fromtimestamp(os.path.getmtime(entry_path)).isoformat()
         except OSError:
             size = 0
+            mtime = None
 
         items.append({
             "name": entry,
@@ -174,6 +176,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
             "description": descriptions.get(entry, ""),
             "cover_url": cover_url,
             "size": size,
+            "mtime": mtime,
             "path": os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
         })
 

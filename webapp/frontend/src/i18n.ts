@@ -6,7 +6,15 @@ const messages = {
       title: 'Urantia Library',
       search_placeholder: 'Search library...',
       logout: 'Logout',
-      footer: '© 2026 Urantia Library'
+      footer: '© 2026 Urantia Library',
+      download: 'Download',
+      preview: 'Preview',
+      preview_not_available: 'Preview not available for this file format.',
+      please_download: 'Please download the file to view it.',
+      format: 'Format',
+      size: 'Size',
+      modified: 'Modified',
+      unknown: 'Unknown'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -36,7 +44,15 @@ const messages = {
       title: 'Библиотека Урантии',
       search_placeholder: 'Поиск по библиотеке...',
       logout: 'Выйти',
-      footer: '© 2026 Библиотека Урантии'
+      footer: '© 2026 Библиотека Урантии',
+      download: 'Скачать',
+      preview: 'Предпросмотр',
+      preview_not_available: 'Предпросмотр недоступен для этого формата файла.',
+      please_download: 'Пожалуйста, скачайте файл для просмотра.',
+      format: 'Формат',
+      size: 'Размер',
+      modified: 'Изменён',
+      unknown: 'Неизвестно'
     },
     auth: {
       signInTitle: 'Вход',
