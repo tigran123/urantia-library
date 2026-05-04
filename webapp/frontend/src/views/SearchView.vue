@@ -44,7 +44,7 @@ const getFullUrl = (url: string) => {
   return api.defaults.baseURL?.replace('/api', '') + url
 }
 
-const formatFilename = (name: string, isDir: boolean, maxLength: number = 45) => {
+const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) => {
   if (isDir || name.length <= maxLength) return name;
   const extIndex = name.lastIndexOf('.');
   if (extIndex === -1 || extIndex === 0) return name;
