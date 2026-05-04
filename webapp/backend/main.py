@@ -7,6 +7,8 @@ import re
 from typing import List, Dict, Any
 from pathlib import Path
 import json
+import logging
+from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 import models
 import schemas
@@ -26,6 +28,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def custom_logging_middleware(request: Request, call_next):
+    # Determine user email from cookie
+    user_email = "Anonymous"
+    access_token = request.cookies.get("access_token")
+    if access_token:
+        try:
+            payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_email = payload.get("sub", "Anonymous")
+        except:
+            pass
+
+    # Client IP without port
+    client_host = request.client.host if request.client else "unknown"
+
+    response = await call_next(request)
+
+    # Format current date/time
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Format and print the log
+    print(f"{now} {client_host} - {user_email} - \"{request.method} {request.url.path} HTTP/{request.scope.get('http_version', '1.1')}\" {response.status_code}")
+
+    return response
 
 @app.middleware("http")
 async def strip_charset_for_websites(request: Request, call_next):
