@@ -43,6 +43,19 @@ const getFullUrl = (url: string) => {
   if (!url) return ''
   return api.defaults.baseURL?.replace('/api', '') + url
 }
+
+const formatFilename = (name: string, isDir: boolean, maxLength: number = 45) => {
+  if (isDir || name.length <= maxLength) return name;
+  const extIndex = name.lastIndexOf('.');
+  if (extIndex === -1 || extIndex === 0) return name;
+  
+  const ext = name.substring(extIndex);
+  const baseName = name.substring(0, extIndex);
+  const keepLength = maxLength - ext.length - 3;
+  
+  if (keepLength <= 0) return name;
+  return `${baseName.substring(0, keepLength)}...${ext}`;
+}
 </script>
 
 <template>
@@ -93,14 +106,14 @@ const getFullUrl = (url: string) => {
               <div class="flex items-start justify-between">
                 <div>
                   <a v-if="!match.is_dir" :href="getFullUrl(`/api/files/${match.path.split('/').map(encodeURIComponent).join('/')}`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
-                    {{ match.name }}
+                    {{ formatFilename(match.name, match.is_dir) }}
                   </a>
                   <template v-else>
                     <a v-if="match.path.startsWith('Websites/')" :href="getFullUrl(`/api/files/${match.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
-                      {{ match.name }}
+                      {{ formatFilename(match.name, match.is_dir) }}
                     </a>
                     <router-link v-else :to="`/browse/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
-                      {{ match.name }}
+                      {{ formatFilename(match.name, match.is_dir) }}
                     </router-link>
                   </template>
                   <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-2" v-html="match.description.replace(new RegExp(route.query.q as string, 'gi'), (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`)"></p>
