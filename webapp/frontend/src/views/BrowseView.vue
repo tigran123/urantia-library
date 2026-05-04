@@ -9,7 +9,12 @@ const items = ref<any[]>([])
 const loading = ref(true)
 const error = ref('')
 const currentPath = ref('')
-const viewMode = ref<'grid' | 'list'>('grid')
+const savedViewMode = localStorage.getItem('viewMode')
+const viewMode = ref<'grid' | 'list'>(savedViewMode === 'list' ? 'list' : 'grid')
+
+watch(viewMode, (newMode) => {
+  localStorage.setItem('viewMode', newMode)
+})
 
 const formatBytes = (bytes: number, decimals = 2) => {
     if (!+bytes) return '0 Bytes'
