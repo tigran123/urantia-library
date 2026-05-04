@@ -154,6 +154,8 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                 continue
 
         entry_path = os.path.join(target_dir, entry)
+        if not os.path.exists(entry_path):
+            continue
         is_dir = os.path.isdir(entry_path)
 
         # Check cover
@@ -209,6 +211,8 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
                 continue
 
             entry_path = os.path.join(root, entry)
+            if not os.path.exists(entry_path):
+                continue
             rel_path = os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
             desc = descriptions.get(entry, "")
 
