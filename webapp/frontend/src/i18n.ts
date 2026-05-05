@@ -2,6 +2,14 @@ import { createI18n } from 'vue-i18n'
 
 const messages = {
   en: {
+    djvu: {
+      previous: 'Previous',
+      next: 'Next',
+      page: 'Page',
+      of: 'of',
+      singlePage: 'Single Page',
+      twoPages: 'Two Pages'
+    },
     app: {
       title: 'Urantia Library',
       search_placeholder: 'Search library...',
@@ -40,6 +48,15 @@ const messages = {
     }
   },
   ru: {
+    djvu: {
+      previous: 'Назад',
+      next: 'Вперёд',
+      page: 'Стр.',
+      of: 'из',
+      singlePage: 'Одна страница',
+      twoPages: 'Две страницы',
+      loadingDetails: 'Загрузка сведений о документе...'
+    },
     app: {
       title: 'Библиотека Урантии',
       search_placeholder: 'Поиск по библиотеке...',
@@ -87,4 +104,3 @@ export const i18n = createI18n({
   fallbackLocale: 'en',
   messages,
 })
-

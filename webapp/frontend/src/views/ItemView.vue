@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import api from '../api'
 import { DocumentIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
 import { useI18n } from 'vue-i18n'
+import DjvuViewer from '../components/DjvuViewer.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
@@ -93,7 +94,7 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
 </script>
 
 <template>
-  <div class="max-w-6xl mx-auto p-4 md:p-6">
+  <div class="w-full p-4 md:p-6">
     <div v-if="loading" class="flex justify-center py-12">
       <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
     </div>
@@ -160,7 +161,7 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
       </div>
 
       <!-- Built-in Viewer -->
-      <div class="px-4 md:px-8 pt-8 w-full max-w-5xl mx-auto">
+      <div class="px-4 md:px-8 pt-8 w-full">
         <h3 class="text-xl font-serif font-semibold mb-4 text-gray-800 dark:text-gray-200">{{ t('app.preview') }}</h3>
         
         <div class="rounded-xl overflow-hidden shadow-inner border border-gray-200 dark:border-gray-700 min-h-[500px] flex items-center justify-center bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
@@ -182,7 +183,7 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
           <iframe v-else-if="isPdf" :src="getDownloadUrl()" class="w-full h-[80vh] bg-white"></iframe>
 
           <!-- DjVu Viewer -->
-          <iframe v-else-if="isDjvu" :src="getFullUrl('/djvu/viewer.html') + '?url=' + encodeURIComponent(getDownloadUrl())" class="w-full h-[80vh] bg-white"></iframe>
+          <DjvuViewer v-else-if="isDjvu" :path="item.path" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">
@@ -196,4 +197,4 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
 
     </div>
   </div>
-</template>
+</template>mplate>

@@ -1,9 +1,12 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 import os
 import re
+import subprocess
+import io
+from PIL import Image
 from typing import List, Dict, Any
 from pathlib import Path
 import json
@@ -50,7 +53,8 @@ async def custom_logging_middleware(request: Request, call_next):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Format and print the log
-    print(f"{now} {client_host} - {user_email} - \"{request.method} {request.url.path} HTTP/{request.scope.get('http_version', '1.1')}\" {response.status_code}")
+    url_with_query = f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
+    print(f"{now} {client_host} - {user_email} - \"{request.method} {url_with_query} HTTP/{request.scope.get('http_version', '1.1')}\" {response.status_code}")
 
     return response
 
@@ -330,6 +334,54 @@ async def get_file(path: str, current_user: models.User = Depends(get_current_us
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path)
+
+def sanitize_djvu_path(path: str) -> str:
+    """Ensure path is within BOOKS_DIR and exists."""
+    if not path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
+    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
+        raise HTTPException(status_code=403, detail="Directory traversal detected")
+    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    if not target_path.lower().endswith(".djvu"):
+        raise HTTPException(status_code=400, detail="Not a DjVu file")
+    return target_path
+
+@app.get("/api/djvu-metadata")
+async def djvu_metadata(path: str, current_user: models.User = Depends(get_current_user)):
+    file_path = sanitize_djvu_path(path)
+    try:
+        result = subprocess.run(["djvused", "-e", "n", file_path], capture_output=True, text=True, check=True)
+        total_pages = int(result.stdout.strip())
+        return {"total_pages": total_pages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/djvu-page")
+async def djvu_page(path: str, page: int, current_user: models.User = Depends(get_current_user)):
+    file_path = sanitize_djvu_path(path)
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Invalid page number")
+    
+    try:
+        result = subprocess.run(
+            ["ddjvu", "-format=pnm", f"-page={page}", file_path],
+            capture_output=True,
+            check=True
+        )
+        
+        image_data = io.BytesIO(result.stdout)
+        img = Image.open(image_data)
+        
+        output_buffer = io.BytesIO()
+        img.save(output_buffer, format="WEBP", quality=90, method=6)
+        
+        return Response(content=output_buffer.getvalue(), media_type="image/webp")
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail="Failed to extract page")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Frontend static files will be mounted here later
 app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")
