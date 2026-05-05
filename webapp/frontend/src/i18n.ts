@@ -14,6 +14,9 @@ const messages = {
       title: 'Urantia Library',
       search_placeholder: 'Search library...',
       logout: 'Logout',
+      bookshelf: 'My Bookshelf',
+      bookshelf_desc: 'Your saved books, directories, and documents.',
+      bookshelf_empty: 'Your bookshelf is empty.',
       footer: '© 2026 Urantia Library',
       download: 'Download',
       preview: 'Preview',
@@ -22,7 +25,10 @@ const messages = {
       format: 'Format',
       size: 'Size',
       modified: 'Modified',
-      unknown: 'Unknown'
+      unknown: 'Unknown',
+      location: 'Directory:',
+      add_favorite: 'Add to Bookshelf',
+      remove_favorite: 'Remove from Bookshelf'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -61,6 +67,9 @@ const messages = {
       title: 'Библиотека Урантии',
       search_placeholder: 'Поиск по библиотеке...',
       logout: 'Выйти',
+      bookshelf: 'Моя полка',
+      bookshelf_desc: 'Ваши сохранённые книги, директории и документы.',
+      bookshelf_empty: 'Ваша полка пуста.',
       footer: '© 2026 Библиотека Урантии',
       download: 'Скачать',
       preview: 'Предпросмотр',
@@ -69,7 +78,10 @@ const messages = {
       format: 'Формат',
       size: 'Размер',
       modified: 'Изменён',
-      unknown: 'Неизвестно'
+      unknown: 'Неизвестно',
+      location: 'Директория:',
+      add_favorite: 'Добавить на полку',
+      remove_favorite: 'Убрать с полки'
     },
     auth: {
       signInTitle: 'Вход',

@@ -17,4 +17,15 @@ class UserSetPassword(BaseModel):
     token: str
     password: str
 
+class FavoriteCreate(BaseModel):
+    item_path: str
+
+class FavoriteResponse(BaseModel):
+    id: int
+    user_id: int
+    item_path: str
+
+    class Config:
+        orm_mode = True
+
 

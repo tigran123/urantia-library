@@ -2,7 +2,8 @@
 import { ref, onMounted, computed, watch, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
-import { DocumentIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
+import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
 
@@ -13,6 +14,34 @@ const loading = ref(true)
 const error = ref('')
 const currentPath = ref('')
 const originalTitle = ref(document.title)
+const favoritePaths = ref<Set<string>>(new Set())
+
+const loadFavorites = async () => {
+  try {
+    const res = await api.get('/favorites')
+    const paths = res.data.items.map((f: any) => f.path)
+    favoritePaths.value = new Set(paths)
+  } catch (err) {
+    console.error('Failed to load favorites', err)
+  }
+}
+
+const toggleFavorite = async () => {
+  if (!item.value) return
+  try {
+    const newPaths = new Set(favoritePaths.value)
+    if (favoritePaths.value.has(currentPath.value)) {
+      await api.delete(`/favorites/${encodeURIComponent(currentPath.value)}`)
+      newPaths.delete(currentPath.value)
+    } else {
+      await api.post('/favorites', { item_path: currentPath.value })
+      newPaths.add(currentPath.value)
+    }
+    favoritePaths.value = newPaths
+  } catch (err) {
+    console.error('Failed to toggle favorite', err)
+  }
+}
 
 const loadItem = async (path: string) => {
   loading.value = true
@@ -45,6 +74,7 @@ const loadItem = async (path: string) => {
 
 onMounted(() => {
   originalTitle.value = document.title
+  loadFavorites()
   loadItem(route.params.path as string)
 })
 
@@ -119,9 +149,15 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
         <!-- Right Column: Metadata & Actions -->
         <div class="md:col-span-2 flex flex-col justify-center space-y-6">
           <div>
-            <h1 class="text-2xl md:text-4xl font-serif font-bold text-gray-900 dark:text-gray-100 break-words leading-tight">
-              {{ item.name.replace(/\.[^/.]+$/, "") }}
-            </h1>
+            <div class="flex items-start justify-between gap-4">
+              <h1 class="text-2xl md:text-4xl font-serif font-bold text-gray-900 dark:text-gray-100 break-words leading-tight">
+                {{ item.name.replace(/\.[^/.]+$/, "") }}
+              </h1>
+              <button @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex-shrink-0 mt-1" :class="{ 'text-blue-500': favoritePaths.has(currentPath), 'text-gray-400 hover:text-blue-500': !favoritePaths.has(currentPath) }" :title="favoritePaths.has(currentPath) ? t('app.remove_favorite') : t('app.add_favorite')">
+                <BookmarkIconSolid v-if="favoritePaths.has(currentPath)" class="h-7 w-7" />
+                <BookmarkIcon v-else class="h-7 w-7" />
+              </button>
+            </div>
             <p class="mt-2 text-lg text-gray-500 dark:text-gray-400 font-sans break-all">
               {{ item.name }}
             </p>
@@ -197,4 +233,4 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
 
     </div>
   </div>
-</template>mplate>
+</template>

@@ -68,6 +68,11 @@ const handleLogout = async () => {
           </div>
 
           <div class="flex items-center gap-2 sm:gap-4">
+            <router-link to="/bookshelf" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none ml-2 mr-2">
+              <BookmarkIcon class="h-5 w-5" />
+              <span class="hidden sm:inline">{{ t('app.bookshelf') }}</span>
+            </router-link>
+
             <!-- Theme Switcher -->
             <ThemeSwitcher />
             <!-- Language Switcher -->

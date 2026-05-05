@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String
+from sqlalchemy import Boolean, Column, Integer, String, ForeignKey
 from database import Base
 import uuid
 
@@ -19,3 +19,10 @@ class RegistrationRequest(Base):
     source = Column(String, nullable=True)   # Optional context: where did they hear about the library
     purpose = Column(String, nullable=True)  # Optional context: purpose for registering
     token = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
+
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    item_path = Column(String, nullable=False, index=True)

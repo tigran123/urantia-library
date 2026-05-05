@@ -152,7 +152,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         raise HTTPException(status_code=500, detail=str(e))
 
     for entry in entries:
-        if entry in [".htaccess", "000-browse.php", "header.html", "footer.html", "exclude.txt", "md5sums.txt", "tree-index.html", ".covers", "webapp"]:
+        if entry in [".htaccess", "000-browse.php", "header.html", "footer.html", "exclude.txt", "md5sums.txt", "tree-index.html", ".covers", "webapp", ".cache"]:
             continue
         if entry.startswith(".authors") or entry == "urantia-library":
             if not path: # Top level exclusions
@@ -402,5 +402,76 @@ async def djvu_page(path: str, page: int, current_user: models.User = Depends(ge
         raise HTTPException(status_code=500, detail="Failed to extract page")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def get_item_info(rel_path: str):
+    target_path = os.path.join(BOOKS_DIR, rel_path)
+    if not os.path.exists(target_path) or not os.path.abspath(target_path).startswith(os.path.abspath(BOOKS_DIR)):
+        return None
+    is_dir = os.path.isdir(target_path)
+    parent_dir = os.path.dirname(target_path)
+    entry = os.path.basename(target_path)
+
+    descriptions = get_htaccess_descriptions(parent_dir)
+    desc = descriptions.get(entry, "")
+
+    cover_path = os.path.join(parent_dir, ".covers", f"{entry}.jpg")
+    cover_url = None
+    if os.path.exists(cover_path):
+        cover_url = f"/api/files/{os.path.relpath(cover_path, BOOKS_DIR).replace(chr(92), '/')}"
+
+    try:
+        size = os.path.getsize(target_path) if not is_dir else 0
+        mtime = datetime.fromtimestamp(os.path.getmtime(target_path)).isoformat()
+    except OSError:
+        size = 0
+        mtime = None
+
+    return {
+        "name": entry,
+        "is_dir": is_dir,
+        "description": desc,
+        "cover_url": cover_url,
+        "size": size,
+        "mtime": mtime,
+        "path": rel_path.replace("\\", "/")
+    }
+
+@app.get("/api/favorites")
+async def get_favorites(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    favorites = db.query(models.Favorite).filter(models.Favorite.user_id == current_user.id).all()
+    items = []
+    for fav in favorites:
+        item = get_item_info(fav.item_path)
+        if item:
+            item["favorite_id"] = fav.id
+            items.append(item)
+    return {"items": items}
+
+@app.post("/api/favorites", response_model=schemas.FavoriteResponse)
+async def add_favorite(fav: schemas.FavoriteCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    existing = db.query(models.Favorite).filter(
+        models.Favorite.user_id == current_user.id,
+        models.Favorite.item_path == fav.item_path
+    ).first()
+    if existing:
+        return existing
+
+    new_fav = models.Favorite(user_id=current_user.id, item_path=fav.item_path)
+    db.add(new_fav)
+    db.commit()
+    db.refresh(new_fav)
+    return new_fav
+
+@app.delete("/api/favorites/{item_path:path}")
+async def remove_favorite(item_path: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    fav = db.query(models.Favorite).filter(
+        models.Favorite.user_id == current_user.id,
+        models.Favorite.item_path == item_path
+    ).first()
+    if fav:
+        db.delete(fav)
+        db.commit()
+    return {"message": "Removed"}
+
 # Frontend static files will be mounted here later
 app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")

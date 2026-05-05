@@ -2,7 +2,8 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
-import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon } from '@heroicons/vue/24/outline'
+import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
+import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
 const items = ref<any[]>([])
@@ -11,6 +12,35 @@ const error = ref('')
 const currentPath = ref('')
 const savedViewMode = localStorage.getItem('viewMode')
 const viewMode = ref<'grid' | 'list'>(savedViewMode === 'list' ? 'list' : 'grid')
+const favoritePaths = ref<Set<string>>(new Set())
+
+const loadFavorites = async () => {
+  try {
+    const res = await api.get('/favorites')
+    const paths = res.data.items.map((f: any) => f.path)
+    favoritePaths.value = new Set(paths)
+  } catch (err) {
+    console.error('Failed to load favorites', err)
+  }
+}
+
+const toggleFavorite = async (path: string, event: Event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  try {
+    const newPaths = new Set(favoritePaths.value)
+    if (favoritePaths.value.has(path)) {
+      await api.delete(`/favorites/${encodeURIComponent(path)}`)
+      newPaths.delete(path)
+    } else {
+      await api.post('/favorites', { item_path: path })
+      newPaths.add(path)
+    }
+    favoritePaths.value = newPaths
+  } catch (err) {
+    console.error('Failed to toggle favorite', err)
+  }
+}
 
 watch(viewMode, (newMode) => {
   localStorage.setItem('viewMode', newMode)
@@ -41,6 +71,7 @@ const loadPath = async (path: string) => {
 }
 
 onMounted(() => {
+  loadFavorites()
   loadPath(route.params.path as string)
 })
 
@@ -68,11 +99,11 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
   if (isDir || name.length <= maxLength) return name;
   const extIndex = name.lastIndexOf('.');
   if (extIndex === -1 || extIndex === 0) return name;
-  
+
   const ext = name.substring(extIndex);
   const baseName = name.substring(0, extIndex);
   const keepLength = maxLength - ext.length - 3;
-  
+
   if (keepLength <= 0) return name;
   return `${baseName.substring(0, keepLength)}...${ext}`;
 }
@@ -82,7 +113,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
   <div class="space-y-6">
     <!-- Toolbar -->
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700">
-      
+
       <!-- Breadcrumbs -->
       <nav class="flex text-sm font-medium text-gray-500 dark:text-gray-400 overflow-x-auto" aria-label="Breadcrumb">
         <ol class="inline-flex items-center space-x-1 md:space-x-3 whitespace-nowrap">
@@ -105,15 +136,15 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
       <!-- View Toggle -->
       <div class="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-1 self-start sm:self-auto border border-transparent dark:border-gray-700">
-        <button 
-          @click="viewMode = 'grid'" 
+        <button
+          @click="viewMode = 'grid'"
           :class="['p-1.5 rounded-md transition-colors', viewMode === 'grid' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
           title="Grid View"
         >
           <Squares2X2Icon class="h-5 w-5" />
         </button>
-        <button 
-          @click="viewMode = 'list'" 
+        <button
+          @click="viewMode = 'list'"
           :class="['p-1.5 rounded-md transition-colors', viewMode === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
           title="List View"
         >
@@ -126,7 +157,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
     <div v-if="loading" class="flex justify-center items-center py-20">
       <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
     </div>
-    
+
     <div v-else-if="error" class="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 p-4 rounded-lg border border-red-200 dark:border-red-800">
       {{ error }}
     </div>
@@ -140,68 +171,80 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       <!-- Grid View -->
       <div v-if="viewMode === 'grid'" class="grid gap-6 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
         <template v-for="item in items" :key="item.name">
-          <template v-if="item.is_dir">
-            <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="group flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
-              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
-                <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
-              </div>
-              <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-              <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
-            </a>
-            <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="group flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
-              <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
-                <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
+          <div class="relative group">
+            <button @click.prevent="toggleFavorite(item.path, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': favoritePaths.has(item.path), 'text-gray-400 hover:text-blue-500': !favoritePaths.has(item.path) }" :title="favoritePaths.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+              <BookmarkIconSolid v-if="favoritePaths.has(item.path)" class="h-5 w-5" />
+              <BookmarkIcon v-else class="h-5 w-5" />
+            </button>
+            <template v-if="item.is_dir">
+              <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
+                <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
+                  <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
+                </div>
+                <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
+                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+              </a>
+              <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
+                <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
+                  <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
+                </div>
+                <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
+                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+              </router-link>
+            </template>
+
+            <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" target="_blank" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500">
+              <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+                <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
+                <DocumentIcon v-else class="h-16 w-16 text-gray-300 dark:text-gray-600" />
               </div>
               <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
               <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
             </router-link>
-          </template>
-          
-          <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" target="_blank" class="group flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500">
-            <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-              <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
-              <DocumentIcon v-else class="h-16 w-16 text-gray-300 dark:text-gray-600" />
-            </div>
-            <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-            <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
-          </router-link>
+          </div>
         </template>
       </div>
 
       <!-- List View -->
       <div v-else class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
         <ul class="divide-y divide-gray-100 dark:divide-gray-700">
-          <li v-for="item in items" :key="item.name" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-            <template v-if="item.is_dir">
-              <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex items-center p-4">
-                <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
-                <div class="flex-1 min-w-0">
+          <li v-for="item in items" :key="item.name" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group">
+            <div class="relative flex items-center">
+              <template v-if="item.is_dir">
+                <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex-1 flex items-center p-4 pr-16 min-w-0">
+                  <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
+                  <div class="flex-1 min-w-0 pr-8">
+                    <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
+                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
+                  </div>
+                </a>
+                <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center p-4 pr-16 min-w-0">
+                  <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
+                  <div class="flex-1 min-w-0 pr-8">
+                    <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
+                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
+                  </div>
+                </router-link>
+              </template>
+
+              <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" target="_blank" class="flex-1 flex items-center p-4 pr-16 min-w-0">
+                <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
+                  <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-cover" />
+                  <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
+                </div>
+                <div class="flex-1 min-w-0 pr-8">
                   <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
                   <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
                 </div>
-              </a>
-              <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex items-center p-4">
-                <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
-                  <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
+                <div class="ml-4 flex-shrink-0 text-sm text-gray-500 dark:text-gray-400">
+                  {{ formatBytes(item.size) }}
                 </div>
               </router-link>
-            </template>
-            
-            <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" target="_blank" class="flex items-center p-4">
-              <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
-                <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-cover" />
-                <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
-              </div>
-              <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
-                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
-              </div>
-              <div class="ml-4 flex-shrink-0 text-sm text-gray-500 dark:text-gray-400">
-                {{ formatBytes(item.size) }}
-              </div>
-            </router-link>
+              <button @click.prevent="toggleFavorite(item.path, $event)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': favoritePaths.has(item.path), 'text-gray-400 hover:text-blue-500': !favoritePaths.has(item.path) }" :title="favoritePaths.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+                <BookmarkIconSolid v-if="favoritePaths.has(item.path)" class="h-5 w-5" />
+                <BookmarkIcon v-else class="h-5 w-5" />
+              </button>
+            </div>
           </li>
         </ul>
       </div>
