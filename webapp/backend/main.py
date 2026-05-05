@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import io
+import hashlib
 from PIL import Image
 from typing import List, Dict, Any
 from pathlib import Path
@@ -363,25 +364,43 @@ async def djvu_page(path: str, page: int, current_user: models.User = Depends(ge
     file_path = sanitize_djvu_path(path)
     if page < 1:
         raise HTTPException(status_code=400, detail="Invalid page number")
-    
+
+    # Setup cache directory
+    cache_dir = os.path.join(BOOKS_DIR, ".cache", "djvu")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Create unique filename based on the absolute file path and page number
+    file_hash = hashlib.md5(file_path.encode('utf-8')).hexdigest()
+    cache_filename = f"{file_hash}_p{page}.webp"
+    cache_filepath = os.path.join(cache_dir, cache_filename)
+
+    headers = {"Cache-Control": "public, max-age=86400"}
+
+    # Return cached file if it exists
+    if os.path.exists(cache_filepath):
+        return FileResponse(cache_filepath, headers=headers, media_type="image/webp")
+
     try:
         result = subprocess.run(
             ["ddjvu", "-format=pnm", f"-page={page}", file_path],
             capture_output=True,
             check=True
         )
-        
+
         image_data = io.BytesIO(result.stdout)
         img = Image.open(image_data)
-        
+
         output_buffer = io.BytesIO()
         img.save(output_buffer, format="WEBP", quality=90, method=6)
-        
-        return Response(content=output_buffer.getvalue(), media_type="image/webp")
+
+        # Save to disk cache
+        with open(cache_filepath, "wb") as f:
+            f.write(output_buffer.getvalue())
+
+        return FileResponse(cache_filepath, headers=headers, media_type="image/webp")
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail="Failed to extract page")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 # Frontend static files will be mounted here later
 app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")
