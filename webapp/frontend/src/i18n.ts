@@ -28,7 +28,8 @@ const messages = {
       unknown: 'Unknown',
       location: 'Directory:',
       add_favorite: 'Add to Bookshelf',
-      remove_favorite: 'Remove from Bookshelf'
+      remove_favorite: 'Remove from Bookshelf',
+      empty_directory: 'This directory is empty'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -81,7 +82,8 @@ const messages = {
       unknown: 'Неизвестно',
       location: 'Директория:',
       add_favorite: 'Добавить на полку',
-      remove_favorite: 'Убрать с полки'
+      remove_favorite: 'Убрать с полки',
+      empty_directory: 'Эта директория пуста'
     },
     auth: {
       signInTitle: 'Вход',

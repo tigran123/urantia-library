@@ -164,7 +164,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
     <div v-else-if="items.length === 0" class="text-center py-20 text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm">
       <FolderIcon class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-3" />
-      <p class="text-lg">This folder is empty</p>
+      <p class="text-lg">{{ $t('app.empty_directory') }}</p>
     </div>
 
     <template v-else>
