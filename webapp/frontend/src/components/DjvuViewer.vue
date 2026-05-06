@@ -40,7 +40,7 @@ const fetchPageData = async (page: number) => {
     params: { path: props.path, page },
     responseType: 'blob' 
   })
-  const blob = new Blob([res.data], { type: 'image/webp' })
+  const blob = new Blob([res.data], { type: 'image/jpeg' })
   return URL.createObjectURL(blob)
 }
 

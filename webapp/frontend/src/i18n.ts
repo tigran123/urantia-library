@@ -8,7 +8,8 @@ const messages = {
       page: 'Page',
       of: 'of',
       singlePage: 'Single Page',
-      twoPages: 'Two Pages'
+      twoPages: 'Two Pages',
+      loadingDetails: 'Loading document details...'
     },
     app: {
       title: 'Urantia Library',

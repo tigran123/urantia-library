@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status
+from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -8,6 +8,7 @@ import subprocess
 import io
 import hashlib
 from PIL import Image
+import djvu.decode
 from typing import List, Dict, Any
 from pathlib import Path
 import json
@@ -152,7 +153,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         raise HTTPException(status_code=500, detail=str(e))
 
     for entry in entries:
-        if entry in [".htaccess", "000-browse.php", "header.html", "footer.html", "exclude.txt", "md5sums.txt", "tree-index.html", ".covers", "webapp", ".cache"]:
+        if entry in [".htaccess", "header.html", "exclude.txt", "md5sums.txt", "tree-index.html", ".covers", "webapp"]:
             continue
         if entry.startswith(".authors") or entry == "urantia-library":
             if not path: # Top level exclusions
@@ -353,8 +354,10 @@ def sanitize_djvu_path(path: str) -> str:
 async def djvu_metadata(path: str, current_user: models.User = Depends(get_current_user)):
     file_path = sanitize_djvu_path(path)
     try:
-        result = subprocess.run(["djvused", "-e", "n", file_path], capture_output=True, text=True, check=True)
-        total_pages = int(result.stdout.strip())
+        ctx = djvu.decode.Context()
+        doc = ctx.new_document(djvu.decode.FileURI(file_path))
+        doc.decoding_job.wait()
+        total_pages = len(doc.pages)
         return {"total_pages": total_pages}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -365,41 +368,34 @@ async def djvu_page(path: str, page: int, current_user: models.User = Depends(ge
     if page < 1:
         raise HTTPException(status_code=400, detail="Invalid page number")
 
-    # Setup cache directory
-    cache_dir = os.path.join(BOOKS_DIR, ".cache", "djvu")
-    os.makedirs(cache_dir, exist_ok=True)
-
-    # Create unique filename based on the absolute file path and page number
-    file_hash = hashlib.md5(file_path.encode('utf-8')).hexdigest()
-    cache_filename = f"{file_hash}_p{page}.webp"
-    cache_filepath = os.path.join(cache_dir, cache_filename)
-
     headers = {"Cache-Control": "public, max-age=86400"}
 
-    # Return cached file if it exists
-    if os.path.exists(cache_filepath):
-        return FileResponse(cache_filepath, headers=headers, media_type="image/webp")
-
     try:
-        result = subprocess.run(
-            ["ddjvu", "-format=pnm", f"-page={page}", file_path],
-            capture_output=True,
-            check=True
-        )
+        ctx = djvu.decode.Context()
+        doc = ctx.new_document(djvu.decode.FileURI(file_path))
+        doc.decoding_job.wait()
 
-        image_data = io.BytesIO(result.stdout)
-        img = Image.open(image_data)
+        if page > len(doc.pages):
+            raise HTTPException(status_code=404, detail="Page not found")
+
+        djvu_page = doc.pages[page - 1]
+        job = djvu_page.decode(wait=True)
+
+        width, height = job.width, job.height
+        rect = (0, 0, width, height)
+        format = djvu.decode.PixelFormatRgb()
+        format.rows_top_to_bottom = True
+
+        try:
+            pixels = job.render(djvu.decode.RENDER_COLOR, rect, rect, format)
+            img = Image.frombuffer('RGB', (width, height), pixels, 'raw', 'RGB', 0, 1)
+        except djvu.decode.NotAvailable:
+            img = Image.new('RGB', (width, height), (255, 255, 255))
 
         output_buffer = io.BytesIO()
-        img.save(output_buffer, format="WEBP", quality=90, method=6)
+        img.save(output_buffer, format="JPEG", quality=85)
 
-        # Save to disk cache
-        with open(cache_filepath, "wb") as f:
-            f.write(output_buffer.getvalue())
-
-        return FileResponse(cache_filepath, headers=headers, media_type="image/webp")
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail="Failed to extract page")
+        return Response(content=output_buffer.getvalue(), media_type="image/jpeg", headers=headers)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
