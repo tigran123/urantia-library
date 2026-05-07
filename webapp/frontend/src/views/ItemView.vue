@@ -7,6 +7,7 @@ import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
 import EpubViewer from '../components/EpubViewer.vue'
+import ImageViewer from '../components/ImageViewer.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
@@ -220,7 +221,7 @@ const isEpub = computed(() => fileExtension.value === 'epub')
           </video>
           
           <!-- Image Viewer -->
-          <img v-else-if="isImage" :src="getDownloadUrl()" class="max-w-full max-h-[80vh] object-contain" />
+          <ImageViewer v-else-if="isImage" :src="getDownloadUrl()" />
           
           <!-- PDF Viewer (iframe fallback) -->
           <iframe v-else-if="isPdf" :src="getDownloadUrl()" class="w-full h-[80vh] bg-white"></iframe>

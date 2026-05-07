@@ -30,7 +30,10 @@ const messages = {
       location: 'Directory:',
       add_favorite: 'Add to Bookshelf',
       remove_favorite: 'Remove from Bookshelf',
-      empty_directory: 'This directory is empty'
+      empty_directory: 'This directory is empty',
+      zoom_in: 'Zoom in',
+      zoom_out: 'Zoom out',
+      zoom_reset: 'Reset zoom'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -84,7 +87,10 @@ const messages = {
       location: 'Директория:',
       add_favorite: 'Добавить на полку',
       remove_favorite: 'Убрать с полки',
-      empty_directory: 'Эта директория пуста'
+      empty_directory: 'Эта директория пуста',
+      zoom_in: 'Увеличить',
+      zoom_out: 'Уменьшить',
+      zoom_reset: 'Сбросить масштаб'
     },
     auth: {
       signInTitle: 'Вход',
