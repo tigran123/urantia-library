@@ -1,0 +1,337 @@
+<script setup lang="ts">
+import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import api from '../api'
+import { useI18n } from 'vue-i18n'
+import { Bars3Icon, ChevronDoubleLeftIcon } from '@heroicons/vue/24/outline'
+import Fb2TocNode from './Fb2TocNode.vue'
+
+interface TocEntry {
+  title: string
+  anchor: number | null
+  children: TocEntry[]
+}
+
+const { t } = useI18n({ useScope: 'global' })
+
+const props = defineProps<{ path: string }>()
+
+const loading = ref(true)
+const error = ref('')
+const html = ref('')
+const title = ref('')
+const authors = ref<string[]>([])
+const notes = ref<Record<string, string>>({})
+const toc = ref<TocEntry[]>([])
+const tocOpen = ref(true)
+const fontScale = ref(1)
+const scrollEl = ref<HTMLElement | null>(null)
+
+const tooltip = ref<{ show: boolean; x: number; y: number; html: string }>({
+  show: false, x: 0, y: 0, html: ''
+})
+
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+let hideTooltipTimer: ReturnType<typeof setTimeout> | null = null
+let restoring = false
+let lastSavedAnchor = -1
+
+const saveProgress = async (anchor: number) => {
+  if (anchor === lastSavedAnchor) return
+  lastSavedAnchor = anchor
+  try {
+    await api.post('/progress', {
+      item_path: props.path,
+      location: JSON.stringify({ anchor })
+    })
+  } catch (e) {
+    console.error('Failed to save FB2 progress', e)
+  }
+}
+
+const loadProgress = async (): Promise<number | null> => {
+  try {
+    const res = await api.get(`/progress/${encodeURIComponent(props.path)}`)
+    try {
+      const data = JSON.parse(res.data.location)
+      const a = parseInt(data.anchor)
+      return Number.isFinite(a) ? a : null
+    } catch {
+      return null
+    }
+  } catch (e: any) {
+    if (e.response?.status !== 404) console.error('Failed to load FB2 progress', e)
+    return null
+  }
+}
+
+const findTopAnchor = (): number | null => {
+  const container = scrollEl.value
+  if (!container) return null
+  const containerTop = container.getBoundingClientRect().top
+  const anchored = container.querySelectorAll<HTMLElement>('[data-anchor]')
+  let best: number | null = null
+  let bestDelta = Infinity
+  for (const el of anchored) {
+    const top = el.getBoundingClientRect().top - containerTop
+    // Topmost element whose top is at or just above the viewport top edge
+    if (top <= 4) {
+      const delta = Math.abs(top)
+      if (delta < bestDelta) {
+        bestDelta = delta
+        best = parseInt(el.dataset.anchor || '')
+      }
+    } else {
+      break
+    }
+  }
+  return best
+}
+
+const onScroll = () => {
+  // Tooltip is positioned in viewport coords; dismiss it when content scrolls
+  // out from under it rather than letting it drift.
+  if (tooltip.value.show) tooltip.value.show = false
+  if (restoring) return
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    const a = findTopAnchor()
+    if (a !== null) saveProgress(a)
+  }, 600)
+}
+
+const scrollToAnchor = (anchor: number) => {
+  const container = scrollEl.value
+  if (!container) return
+  const el = container.querySelector<HTMLElement>(`#fb2-a-${anchor}`)
+  if (!el) return
+  const containerTop = container.getBoundingClientRect().top
+  const elTop = el.getBoundingClientRect().top
+  container.scrollTop += elTop - containerTop
+}
+
+const incFont = () => { fontScale.value = Math.min(2, fontScale.value + 0.1) }
+const decFont = () => { fontScale.value = Math.max(0.6, fontScale.value - 0.1) }
+const resetFont = () => { fontScale.value = 1 }
+
+const onTocNavigate = (anchor: number) => {
+  scrollToAnchor(anchor)
+}
+
+const TOOLTIP_W = 380
+const TOOLTIP_MARGIN = 8
+
+const showTooltipFor = (link: HTMLElement, noteHtml: string) => {
+  if (hideTooltipTimer) { clearTimeout(hideTooltipTimer); hideTooltipTimer = null }
+  const linkRect = link.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  let x = linkRect.left
+  if (x + TOOLTIP_W + TOOLTIP_MARGIN > vw) x = vw - TOOLTIP_W - TOOLTIP_MARGIN
+  if (x < TOOLTIP_MARGIN) x = TOOLTIP_MARGIN
+  // Place below by default; flip above if it would overflow the viewport
+  let y = linkRect.bottom + 6
+  if (y + 200 > vh && linkRect.top > 200) y = linkRect.top - 6 - 200
+  tooltip.value = { show: true, x, y, html: noteHtml }
+}
+
+const scheduleHideTooltip = () => {
+  if (hideTooltipTimer) clearTimeout(hideTooltipTimer)
+  hideTooltipTimer = setTimeout(() => {
+    tooltip.value.show = false
+  }, 150)
+}
+
+const cancelHideTooltip = () => {
+  if (hideTooltipTimer) { clearTimeout(hideTooltipTimer); hideTooltipTimer = null }
+}
+
+const onContentClick = (e: MouseEvent) => {
+  // Block all internal-anchor clicks inside the FB2 content. The app's router
+  // treats `#fragment` URL changes as navigation, which blanks the page.
+  const target = (e.target as HTMLElement | null)?.closest?.('a[href^="#"]') as HTMLAnchorElement | null
+  if (!target) return
+  e.preventDefault()
+  const noteId = (target.getAttribute('href') || '').slice(1)
+  const noteHtml = notes.value[noteId]
+  if (noteHtml) showTooltipFor(target, noteHtml)
+}
+
+const onContentMouseOver = (e: MouseEvent) => {
+  const target = (e.target as HTMLElement | null)?.closest?.('a.fb2-note') as HTMLAnchorElement | null
+  if (!target) return
+  const noteId = (target.getAttribute('href') || '').slice(1)
+  const noteHtml = notes.value[noteId]
+  if (noteHtml) showTooltipFor(target, noteHtml)
+}
+
+const onContentMouseOut = (e: MouseEvent) => {
+  const target = (e.target as HTMLElement | null)?.closest?.('a.fb2-note')
+  if (!target) return
+  // Don't dismiss when the cursor crosses into the tooltip itself
+  const related = e.relatedTarget as HTMLElement | null
+  if (related?.closest?.('.fb2-tooltip')) return
+  scheduleHideTooltip()
+}
+
+const initFb2 = async () => {
+  if (!props.path) return
+  loading.value = true
+  error.value = ''
+  html.value = ''
+  notes.value = {}
+  tooltip.value.show = false
+  lastSavedAnchor = -1
+  try {
+    const res = await api.get('/fb2-content', { params: { path: props.path } })
+    title.value = res.data.title || ''
+    authors.value = res.data.authors || []
+    html.value = res.data.html || ''
+    notes.value = res.data.notes || {}
+    toc.value = res.data.toc || []
+    const saved = await loadProgress()
+    await nextTick()
+    if (saved !== null) {
+      restoring = true
+      scrollToAnchor(saved)
+      lastSavedAnchor = saved
+      // Release the restore guard after the scroll settles so we don't re-save
+      // the same anchor we just restored to.
+      setTimeout(() => { restoring = false }, 250)
+    }
+  } catch (e: any) {
+    error.value = e.response?.data?.detail || e.message || 'Failed to load FB2'
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(initFb2)
+
+watch(() => props.path, () => {
+  initFb2()
+})
+
+onBeforeUnmount(() => {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+    const a = findTopAnchor()
+    if (a !== null) saveProgress(a)
+  }
+  if (hideTooltipTimer) clearTimeout(hideTooltipTimer)
+})
+</script>
+
+<template>
+  <div class="fb2-viewer relative flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 rounded-lg shadow w-full h-[80vh]">
+    <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10 rounded-lg">
+      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+    </div>
+    <div v-else-if="error" class="absolute inset-0 flex items-center justify-center bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg z-10 p-4 text-center">
+      {{ error }}
+    </div>
+
+    <!-- Toolbar -->
+    <div class="w-full flex items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2 z-20">
+      <div class="text-sm text-gray-700 dark:text-gray-300 truncate">
+        <span v-if="title" class="font-semibold">{{ title }}</span>
+        <span v-if="authors.length" class="ml-2 text-gray-500 dark:text-gray-400">— {{ authors.join(', ') }}</span>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A−</button>
+        <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A</button>
+        <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A+</button>
+      </div>
+    </div>
+
+    <!-- TOC sidebar + Scrollable text area -->
+    <div class="flex flex-row flex-grow min-h-0 rounded-b-lg overflow-hidden">
+      <aside
+        class="shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 transition-[width] duration-200"
+        :class="tocOpen ? 'w-64' : 'w-9'"
+      >
+        <div class="flex items-center p-1.5 border-b border-gray-200 dark:border-gray-700" :class="tocOpen ? 'justify-between' : 'justify-center'">
+          <span v-if="tocOpen" class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ t('app.toc') }}</span>
+          <button
+            @click="tocOpen = !tocOpen"
+            class="p-1 rounded text-gray-600 hover:bg-gray-200 dark:text-gray-300 dark:hover:bg-gray-700"
+            :title="tocOpen ? t('app.toc_collapse') : t('app.toc_expand')"
+          >
+            <ChevronDoubleLeftIcon v-if="tocOpen" class="w-4 h-4" />
+            <Bars3Icon v-else class="w-4 h-4" />
+          </button>
+        </div>
+        <nav v-if="tocOpen" class="flex-grow overflow-auto p-1 text-gray-800 dark:text-gray-200">
+          <p v-if="!toc.length" class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">{{ t('app.toc_empty') }}</p>
+          <Fb2TocNode
+            v-for="(entry, i) in toc"
+            :key="i"
+            :entry="entry"
+            :level="0"
+            @navigate="onTocNavigate"
+          />
+        </nav>
+      </aside>
+
+      <div
+        ref="scrollEl"
+        @scroll.passive="onScroll"
+        class="fb2-scroll flex-grow min-w-0 overflow-y-auto bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+      >
+        <div
+          class="fb2-content w-full px-6 py-8 leading-relaxed"
+          :style="{ fontSize: `${fontScale}rem` }"
+          v-html="html"
+          @click="onContentClick"
+          @mouseover="onContentMouseOver"
+          @mouseout="onContentMouseOut"
+        ></div>
+      </div>
+    </div>
+
+    <Teleport to="body">
+      <div
+        v-if="tooltip.show"
+        class="fb2-tooltip fixed z-50 max-h-80 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-xl px-3 py-2 text-sm leading-snug"
+        :style="{ left: `${tooltip.x}px`, top: `${tooltip.y}px`, width: `${TOOLTIP_W}px` }"
+        @mouseenter="cancelHideTooltip"
+        @mouseleave="scheduleHideTooltip"
+        v-html="tooltip.html"
+      ></div>
+    </Teleport>
+  </div>
+</template>
+
+<style>
+.fb2-content .fb2-section-title { font-weight: 600; margin: 1.5em 0 0.75em; }
+.fb2-content h2.fb2-section-title { font-size: 1.5em; }
+.fb2-content h3.fb2-section-title { font-size: 1.3em; }
+.fb2-content h4.fb2-section-title,
+.fb2-content h5.fb2-section-title,
+.fb2-content h6.fb2-section-title { font-size: 1.1em; }
+.fb2-content .fb2-body-title { font-size: 1.75em; font-weight: 700; margin: 0 0 1em; text-align: center; }
+.fb2-content .fb2-subtitle { font-size: 1.1em; font-weight: 600; margin: 1em 0 0.5em; }
+.fb2-content .fb2-p { margin: 0 0 0.75em; text-indent: 1.5em; text-align: justify; }
+.fb2-content .fb2-section > .fb2-p:first-of-type { text-indent: 0; }
+.fb2-content .fb2-empty-line { height: 1em; }
+.fb2-content .fb2-image-wrap { margin: 1em 0; text-align: center; }
+.fb2-content .fb2-image { max-width: 100%; height: auto; }
+.fb2-content .fb2-inline-img { max-height: 1.2em; vertical-align: middle; }
+.fb2-content .fb2-epigraph,
+.fb2-content .fb2-cite { margin: 1em 2em; font-style: italic; border-left: 3px solid rgba(127,127,127,0.3); padding-left: 1em; }
+.fb2-content .fb2-text-author { margin-top: 0.5em; font-style: italic; text-align: right; }
+.fb2-content .fb2-poem { margin: 1em 0; }
+.fb2-content .fb2-poem-title { font-weight: 600; margin-bottom: 0.5em; }
+.fb2-content .fb2-stanza { margin: 0.5em 0; }
+.fb2-content .fb2-v { margin-left: 2em; }
+.fb2-content .fb2-link { color: #2563eb; text-decoration: underline; }
+.dark .fb2-content .fb2-link { color: #60a5fa; }
+.fb2-content .fb2-note {
+  cursor: help;
+  text-decoration: none;
+  font-size: 0.75em;
+  vertical-align: super;
+  padding: 0 0.15em;
+}
+.fb2-tooltip p { margin: 0 0 0.5em; }
+.fb2-tooltip p:last-child { margin-bottom: 0; }
+</style>

@@ -8,6 +8,7 @@ import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
 import EpubViewer from '../components/EpubViewer.vue'
 import ImageViewer from '../components/ImageViewer.vue'
+import Fb2Viewer from '../components/Fb2Viewer.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
@@ -124,6 +125,10 @@ const isImage = computed(() => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].incl
 const isPdf = computed(() => fileExtension.value === 'pdf')
 const isDjvu = computed(() => fileExtension.value === 'djvu')
 const isEpub = computed(() => fileExtension.value === 'epub')
+const isFb2 = computed(() => {
+  const n = (item.value?.name || '').toLowerCase()
+  return n.endsWith('.fb2') || n.endsWith('.fb2.zip')
+})
 </script>
 
 <template>
@@ -231,6 +236,9 @@ const isEpub = computed(() => fileExtension.value === 'epub')
 
           <!-- EPUB Viewer -->
           <EpubViewer v-else-if="isEpub" :path="item.path" />
+
+          <!-- FB2 Viewer (also handles .fb2.zip) -->
+          <Fb2Viewer v-else-if="isFb2" :path="item.path" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">

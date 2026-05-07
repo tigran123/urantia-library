@@ -7,6 +7,10 @@ import re
 import subprocess
 import io
 import hashlib
+import zipfile
+import base64
+import xml.etree.ElementTree as ET
+from html import escape as _html_escape
 from PIL import Image
 import djvu.decode
 from typing import List, Dict, Any
@@ -336,6 +340,329 @@ async def get_file(path: str, current_user: models.User = Depends(get_current_us
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path)
+
+def sanitize_fb2_path(path: str) -> str:
+    """Ensure path is within BOOKS_DIR, exists, and is an FB2 (or .fb2.zip) file."""
+    if not path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
+    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
+        raise HTTPException(status_code=403, detail="Directory traversal detected")
+    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    lower = target_path.lower()
+    if not (lower.endswith(".fb2") or lower.endswith(".fb2.zip")):
+        raise HTTPException(status_code=400, detail="Not an FB2 file")
+    return target_path
+
+
+def _read_fb2_bytes(file_path: str) -> bytes:
+    if file_path.lower().endswith(".zip"):
+        with zipfile.ZipFile(file_path) as zf:
+            for name in zf.namelist():
+                if name.lower().endswith(".fb2"):
+                    return zf.read(name)
+        raise HTTPException(status_code=422, detail="No .fb2 entry inside zip")
+    with open(file_path, "rb") as f:
+        return f.read()
+
+
+_FB2_NS = "{http://www.gribuser.ru/xml/fictionbook/2.0}"
+_XLINK_NS = "{http://www.w3.org/1999/xlink}"
+
+
+def _strip_ns(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+class _Fb2Renderer:
+    SAFE_URL_RE = re.compile(r"^(https?:|mailto:|#|/)", re.IGNORECASE)
+
+    def __init__(self, binaries: Dict[str, str], anchored: bool = True, collect_toc: bool = False):
+        self.binaries = binaries
+        self.anchored = anchored
+        self.anchor = 0
+        self.collect_toc = collect_toc
+        self.toc: List[Dict[str, Any]] = []
+        self._toc_parents: List[List[Dict[str, Any]]] = [self.toc]
+
+    def _attr(self) -> str:
+        if not self.anchored:
+            return ""
+        n = self.anchor
+        self.anchor += 1
+        return f' id="fb2-a-{n}" data-anchor="{n}"'
+
+    def _last_anchor(self):
+        return self.anchor - 1 if self.anchored and self.anchor > 0 else None
+
+    _BLOCK_TAGS = {"p", "subtitle", "v", "empty-line", "title", "stanza", "epigraph"}
+
+    @classmethod
+    def _plain_text(cls, el) -> str:
+        # itertext() concatenates text without separators, so adjacent block
+        # children like <p>A</p><p>B</p> would render as "AB". Walk the tree
+        # ourselves and insert a space after each block child while preserving
+        # inline runs (so <p>Hi <em>world</em>!</p> stays "Hi world!").
+        out: List[str] = []
+
+        def walk(node):
+            if node.text:
+                out.append(node.text)
+            for child in node:
+                walk(child)
+                if child.tail:
+                    out.append(child.tail)
+                if _strip_ns(child.tag) in cls._BLOCK_TAGS:
+                    out.append(" ")
+
+        walk(el)
+        return " ".join("".join(out).split())
+
+    def _href(self, el) -> str:
+        return el.get(_XLINK_NS + "href") or el.get("href") or ""
+
+    def _safe_href(self, href: str) -> str:
+        return href if self.SAFE_URL_RE.match(href) else "#"
+
+    def render_inline(self, el) -> str:
+        out = []
+        if el.text:
+            out.append(_html_escape(el.text))
+        for child in el:
+            tag = _strip_ns(child.tag)
+            inner = self.render_inline(child)
+            if tag == "emphasis":
+                out.append(f"<em>{inner}</em>")
+            elif tag == "strong":
+                out.append(f"<strong>{inner}</strong>")
+            elif tag == "strikethrough":
+                out.append(f"<s>{inner}</s>")
+            elif tag == "sub":
+                out.append(f"<sub>{inner}</sub>")
+            elif tag == "sup":
+                out.append(f"<sup>{inner}</sup>")
+            elif tag == "code":
+                out.append(f"<code>{inner}</code>")
+            elif tag == "a":
+                href = self._safe_href(self._href(child))
+                note_type = child.get("type") or ""
+                cls = "fb2-link fb2-note" if note_type == "note" else "fb2-link"
+                out.append(f'<a href="{_html_escape(href)}" class="{cls}">{inner}</a>')
+            elif tag == "image":
+                bid = self._href(child).lstrip("#")
+                src = self.binaries.get(bid)
+                if src:
+                    out.append(f'<img src="{src}" class="fb2-inline-img" alt="" />')
+            elif tag == "style":
+                out.append(inner)
+            elif tag == "empty-line":
+                out.append("<br />")
+            else:
+                out.append(inner)
+            if child.tail:
+                out.append(_html_escape(child.tail))
+        return "".join(out)
+
+    def _title_text(self, el) -> str:
+        # <title> usually contains <p> children
+        parts = []
+        for c in el:
+            if _strip_ns(c.tag) == "p":
+                parts.append(self.render_inline(c))
+            elif _strip_ns(c.tag) == "empty-line":
+                parts.append("<br />")
+        if not parts:
+            parts.append(self.render_inline(el))
+        return " ".join(parts)
+
+    def render_block(self, el, depth: int = 0) -> str:
+        tag = _strip_ns(el.tag)
+
+        if tag == "section":
+            entry = None
+            if self.collect_toc:
+                entry = {"title": "", "anchor": None, "children": []}
+                self._toc_parents[-1].append(entry)
+                self._toc_parents.append(entry["children"])
+            try:
+                parts = []
+                for c in el:
+                    ctag = _strip_ns(c.tag)
+                    if ctag == "title":
+                        level = min(max(depth + 1, 2), 6)
+                        attr = self._attr()
+                        if entry is not None:
+                            entry["anchor"] = self._last_anchor()
+                            entry["title"] = self._plain_text(c)
+                        parts.append(
+                            f'<h{level}{attr} class="fb2-section-title">'
+                            f'{self._title_text(c)}</h{level}>'
+                        )
+                    elif ctag == "section":
+                        parts.append(self.render_block(c, depth + 1))
+                    else:
+                        parts.append(self.render_block(c, depth))
+                return f'<section class="fb2-section">{"".join(parts)}</section>'
+            finally:
+                if self.collect_toc:
+                    self._toc_parents.pop()
+
+        attr = self._attr()
+
+        if tag == "p":
+            return f'<p{attr} class="fb2-p">{self.render_inline(el)}</p>'
+        if tag == "subtitle":
+            return f'<h4{attr} class="fb2-subtitle">{self._title_text(el)}</h4>'
+        if tag == "empty-line":
+            return f'<div{attr} class="fb2-empty-line"></div>'
+        if tag == "image":
+            bid = self._href(el).lstrip("#")
+            src = self.binaries.get(bid)
+            if not src:
+                return ""
+            return f'<div{attr} class="fb2-image-wrap"><img src="{src}" class="fb2-image" alt="" /></div>'
+        if tag in ("epigraph", "cite"):
+            inner_parts = []
+            for c in el:
+                if _strip_ns(c.tag) in ("p", "poem", "subtitle", "empty-line", "text-author"):
+                    inner_parts.append(self.render_block(c, depth))
+            return f'<blockquote{attr} class="fb2-{tag}">{"".join(inner_parts)}</blockquote>'
+        if tag == "text-author":
+            return f'<p{attr} class="fb2-text-author">{self.render_inline(el)}</p>'
+        if tag == "poem":
+            inner = []
+            for c in el:
+                ctag = _strip_ns(c.tag)
+                if ctag == "title":
+                    inner.append(f'<div class="fb2-poem-title">{self._title_text(c)}</div>')
+                elif ctag == "stanza":
+                    lines = []
+                    for v in c:
+                        vtag = _strip_ns(v.tag)
+                        if vtag == "v":
+                            lines.append(f'<div class="fb2-v">{self.render_inline(v)}</div>')
+                        elif vtag == "title":
+                            lines.append(f'<div class="fb2-stanza-title">{self._title_text(v)}</div>')
+                    inner.append(f'<div class="fb2-stanza">{"".join(lines)}</div>')
+                elif ctag == "text-author":
+                    inner.append(f'<div class="fb2-text-author">{self.render_inline(c)}</div>')
+                elif ctag == "epigraph":
+                    inner.append(self.render_block(c, depth))
+            return f'<div{attr} class="fb2-poem">{"".join(inner)}</div>'
+        # Unknown block: render its inline contents in a div so text isn't lost
+        return f'<div{attr} class="fb2-other">{self.render_inline(el)}</div>'
+
+
+def _extract_binaries(root) -> Dict[str, str]:
+    """Build {binary-id: data:URI} for all <binary> elements."""
+    out: Dict[str, str] = {}
+    for b in root.iter(_FB2_NS + "binary"):
+        bid = b.get("id")
+        ctype = b.get("content-type") or "application/octet-stream"
+        if not bid or not b.text:
+            continue
+        # Re-encode to drop whitespace inside the base64 blob
+        try:
+            raw = base64.b64decode(b.text)
+            out[bid] = f"data:{ctype};base64,{base64.b64encode(raw).decode('ascii')}"
+        except Exception:
+            continue
+    return out
+
+
+def _extract_metadata(root) -> Dict[str, Any]:
+    desc = root.find(_FB2_NS + "description")
+    title = ""
+    authors: List[str] = []
+    if desc is not None:
+        ti = desc.find(_FB2_NS + "title-info")
+        if ti is not None:
+            book_title = ti.find(_FB2_NS + "book-title")
+            if book_title is not None and book_title.text:
+                title = book_title.text.strip()
+            for a in ti.findall(_FB2_NS + "author"):
+                first = a.findtext(_FB2_NS + "first-name", default="").strip()
+                middle = a.findtext(_FB2_NS + "middle-name", default="").strip()
+                last = a.findtext(_FB2_NS + "last-name", default="").strip()
+                nick = a.findtext(_FB2_NS + "nickname", default="").strip()
+                full = " ".join(p for p in (first, middle, last) if p) or nick
+                if full:
+                    authors.append(full)
+    return {"title": title, "authors": authors}
+
+
+def _render_note_section(section, binaries: Dict[str, str]) -> str:
+    """Render the contents of a single <section> from a notes body, dropping
+    its <title> (which is usually just the note number, redundant with the
+    inline marker the user clicked)."""
+    note_renderer = _Fb2Renderer(binaries, anchored=False)
+    parts = []
+    for c in section:
+        if _strip_ns(c.tag) == "title":
+            continue
+        parts.append(note_renderer.render_block(c))
+    return "".join(parts)
+
+
+def _convert_fb2(xml_bytes: bytes) -> Dict[str, Any]:
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as e:
+        raise HTTPException(status_code=422, detail=f"Invalid FB2 XML: {e}")
+    binaries = _extract_binaries(root)
+    renderer = _Fb2Renderer(binaries, collect_toc=True)
+    bodies_html: List[str] = []
+    notes: Dict[str, str] = {}
+    for body in root.findall(_FB2_NS + "body"):
+        raw_name = body.get("name") or ""
+        if raw_name:
+            # Footnotes / comments / etc. — collect by section id for tooltip
+            # rendering on the frontend, do not append to the main body HTML.
+            for section in body.iter(_FB2_NS + "section"):
+                sid = section.get("id")
+                if sid:
+                    notes[sid] = _render_note_section(section, binaries)
+            continue
+        parts = []
+        # body may have its own <title> and <epigraph> before sections
+        for c in body:
+            ctag = _strip_ns(c.tag)
+            if ctag == "title":
+                attr = renderer._attr()
+                if renderer.collect_toc:
+                    renderer.toc.append({
+                        "title": renderer._plain_text(c),
+                        "anchor": renderer._last_anchor(),
+                        "children": [],
+                    })
+                parts.append(
+                    f'<h2{attr} class="fb2-body-title">'
+                    f'{renderer._title_text(c)}</h2>'
+                )
+            else:
+                parts.append(renderer.render_block(c))
+        bodies_html.append(f'<div class="fb2-body">{"".join(parts)}</div>')
+    meta = _extract_metadata(root)
+    return {
+        "title": meta["title"],
+        "authors": meta["authors"],
+        "html": "".join(bodies_html),
+        "anchor_count": renderer.anchor,
+        "notes": notes,
+        "toc": renderer.toc,
+    }
+
+
+@app.get("/api/fb2-content")
+async def fb2_content(path: str, current_user: models.User = Depends(get_current_user)):
+    file_path = sanitize_fb2_path(path)
+    try:
+        xml_bytes = _read_fb2_bytes(file_path)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    return _convert_fb2(xml_bytes)
+
 
 def sanitize_djvu_path(path: str) -> str:
     """Ensure path is within BOOKS_DIR and exists."""
