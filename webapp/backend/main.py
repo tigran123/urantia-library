@@ -153,7 +153,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         raise HTTPException(status_code=500, detail=str(e))
 
     for entry in entries:
-        if entry in [".htaccess", "header.html", "exclude.txt", "md5sums.txt", "tree-index.html", ".covers", "webapp"]:
+        if entry in [".claude", ".htaccess", "header.html", "exclude.txt", "md5sums.txt", "tree-index.html", ".covers", "webapp"]:
             continue
         if entry.startswith(".authors") or entry == "urantia-library":
             if not path: # Top level exclusions
