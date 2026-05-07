@@ -127,7 +127,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                  <FolderIcon class="h-8 w-8 text-blue-400" />
                </div>
                <div v-else class="h-16 w-12 flex items-center justify-center bg-gray-100 rounded shadow-sm overflow-hidden border border-gray-200">
-                 <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" class="w-full h-full object-cover" />
+                 <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" class="w-full h-full object-contain" />
                  <DocumentIcon v-else class="h-6 w-6 text-gray-400" />
                </div>
             </div>
@@ -136,9 +136,9 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             <div class="flex-1 min-w-0 pr-12">
               <div class="flex items-start justify-between">
                 <div>
-                  <a v-if="!match.is_dir" :href="getFullUrl(`/api/files/${match.path.split('/').map(encodeURIComponent).join('/')}`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
+                  <router-link v-if="!match.is_dir" :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
                     {{ formatFilename(match.name, match.is_dir) }}
-                  </a>
+                  </router-link>
                   <template v-else>
                     <a v-if="match.path.startsWith('Websites/')" :href="getFullUrl(`/api/files/${match.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
                       {{ formatFilename(match.name, match.is_dir) }}

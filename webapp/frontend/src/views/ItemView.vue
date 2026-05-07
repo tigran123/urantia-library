@@ -6,6 +6,7 @@ import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon } from '@heroicons/vue/24
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
+import EpubViewer from '../components/EpubViewer.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
@@ -121,6 +122,7 @@ const isVideo = computed(() => ['mp4', 'webm', 'mkv', 'avi', 'mov'].includes(fil
 const isImage = computed(() => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExtension.value))
 const isPdf = computed(() => fileExtension.value === 'pdf')
 const isDjvu = computed(() => fileExtension.value === 'djvu')
+const isEpub = computed(() => fileExtension.value === 'epub')
 </script>
 
 <template>
@@ -141,7 +143,7 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
         <!-- Left Column: Cover Image -->
         <div class="md:col-span-1 flex flex-col items-center">
           <div class="w-full max-w-sm aspect-[3/4] rounded-lg shadow-xl overflow-hidden bg-white dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700">
-            <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-cover" />
+            <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain" />
             <DocumentIcon v-else class="w-32 h-32 text-gray-300 dark:text-gray-600" />
           </div>
         </div>
@@ -182,6 +184,14 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
                   <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.modified') }}</th>
                   <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatDate(item.mtime) }}</td>
                 </tr>
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.location') }}</th>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                    <router-link :to="`/browse/${currentPath.split('/').slice(0, -1).join('/')}`" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline">
+                      /{{ currentPath.split('/').slice(0, -1).join('/') || 'Root' }}
+                    </router-link>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -198,10 +208,7 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
 
       <!-- Built-in Viewer -->
       <div class="px-4 md:px-8 pt-8 w-full">
-        <h3 class="text-xl font-serif font-semibold mb-4 text-gray-800 dark:text-gray-200">{{ t('app.preview') }}</h3>
-        
         <div class="rounded-xl overflow-hidden shadow-inner border border-gray-200 dark:border-gray-700 min-h-[500px] flex items-center justify-center bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-          
           <!-- Audio Player -->
           <audio v-if="isAudio" controls class="w-full max-w-md" :src="getDownloadUrl()">
             Your browser does not support the audio element.
@@ -220,6 +227,9 @@ const isDjvu = computed(() => fileExtension.value === 'djvu')
 
           <!-- DjVu Viewer -->
           <DjvuViewer v-else-if="isDjvu" :path="item.path" />
+
+          <!-- EPUB Viewer -->
+          <EpubViewer v-else-if="isEpub" :path="item.path" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">

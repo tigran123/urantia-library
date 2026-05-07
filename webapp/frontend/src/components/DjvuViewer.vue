@@ -19,6 +19,35 @@ const imageUrl = ref('')
 const imageUrl2 = ref('')
 const isDoublePage = ref(false)
 
+const saveProgress = async (page: number) => {
+  try {
+    await api.post('/progress', {
+      item_path: props.path,
+      location: JSON.stringify({ page: page, isDoublePage: isDoublePage.value })
+    })
+  } catch (e) {
+    console.error('Failed to save progress', e)
+  }
+}
+
+const loadProgress = async () => {
+  try {
+    const res = await api.get(`/progress/${encodeURIComponent(props.path)}`)
+    try {
+      const data = JSON.parse(res.data.location)
+      if (data.isDoublePage !== undefined) {
+        isDoublePage.value = data.isDoublePage
+      }
+      return parseInt(data.page)
+    } catch {
+      // Fallback for old progress string format
+      return parseInt(res.data.location)
+    }
+  } catch (e: any) {
+    return null
+  }
+}
+
 const fetchMetadata = async () => {
   loadingMetadata.value = true
   error.value = ''
@@ -26,7 +55,8 @@ const fetchMetadata = async () => {
     const res = await api.get('/djvu-metadata', { params: { path: props.path } })
     totalPages.value = res.data.total_pages
     if (totalPages.value > 0) {
-      await fetchPage(1)
+      const savedPage = await loadProgress()
+      await fetchPage(savedPage && savedPage <= totalPages.value ? savedPage : 1)
     }
   } catch (err: any) {
     error.value = err.response?.data?.detail || 'Failed to load DjVu metadata'
@@ -63,6 +93,7 @@ const fetchPage = async (page: number) => {
     imageUrl.value = results[0]
     imageUrl2.value = results.length > 1 ? results[1] : ''
     currentPage.value = page
+    saveProgress(page)
   } catch (err: any) {
     error.value = err.message || 'Failed to load page'
   } finally {

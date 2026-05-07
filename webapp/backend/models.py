@@ -26,3 +26,11 @@ class Favorite(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     item_path = Column(String, nullable=False, index=True)
+
+class ReadingProgress(Base):
+    __tablename__ = "reading_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    item_path = Column(String, nullable=False, index=True)
+    location = Column(String, nullable=False)

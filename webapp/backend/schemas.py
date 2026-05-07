@@ -28,4 +28,15 @@ class FavoriteResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class ReadingProgressCreate(BaseModel):
+    item_path: str
+    location: str
 
+class ReadingProgressResponse(BaseModel):
+    id: int
+    user_id: int
+    item_path: str
+    location: str
+
+    class Config:
+        from_attributes = True

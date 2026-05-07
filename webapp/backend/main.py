@@ -469,5 +469,33 @@ async def remove_favorite(item_path: str, current_user: models.User = Depends(ge
         db.commit()
     return {"message": "Removed"}
 
+@app.get("/api/progress/{item_path:path}", response_model=schemas.ReadingProgressResponse)
+async def get_progress(item_path: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    progress = db.query(models.ReadingProgress).filter(
+        models.ReadingProgress.user_id == current_user.id,
+        models.ReadingProgress.item_path == item_path
+    ).first()
+    if not progress:
+        raise HTTPException(status_code=404, detail="No progress found")
+    return progress
+
+@app.post("/api/progress", response_model=schemas.ReadingProgressResponse)
+async def update_progress(prog: schemas.ReadingProgressCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    existing = db.query(models.ReadingProgress).filter(
+        models.ReadingProgress.user_id == current_user.id,
+        models.ReadingProgress.item_path == prog.item_path
+    ).first()
+    if existing:
+        existing.location = prog.location
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    new_prog = models.ReadingProgress(user_id=current_user.id, item_path=prog.item_path, location=prog.location)
+    db.add(new_prog)
+    db.commit()
+    db.refresh(new_prog)
+    return new_prog
+
 # Frontend static files will be mounted here later
 app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")

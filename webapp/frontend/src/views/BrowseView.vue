@@ -193,7 +193,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               </router-link>
             </template>
 
-            <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" target="_blank" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500">
+            <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500">
               <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900">
                 <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
                 <DocumentIcon v-else class="h-16 w-16 text-gray-300 dark:text-gray-600" />
@@ -227,9 +227,9 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 </router-link>
               </template>
 
-              <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" target="_blank" class="flex-1 flex items-center p-4 pr-16 min-w-0">
+              <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center p-4 pr-16 min-w-0">
                 <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
-                  <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-cover" />
+                  <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-contain" />
                   <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
                 </div>
                 <div class="flex-1 min-w-0 pr-8">
