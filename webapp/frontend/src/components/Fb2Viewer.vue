@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import { Bars3Icon, ChevronDoubleLeftIcon } from '@heroicons/vue/24/outline'
@@ -23,7 +23,36 @@ const authors = ref<string[]>([])
 const notes = ref<Record<string, string>>({})
 const toc = ref<TocEntry[]>([])
 const tocOpen = ref(true)
-const fontScale = ref(1)
+
+const FONT_SCALE_KEY = 'reader-font-scale'
+const loadFontScale = (): number => {
+  const raw = localStorage.getItem(FONT_SCALE_KEY)
+  const n = raw ? parseFloat(raw) : NaN
+  return Number.isFinite(n) && n >= 0.6 && n <= 2 ? n : 1
+}
+const fontScale = ref(loadFontScale())
+watch(fontScale, (v) => {
+  try { localStorage.setItem(FONT_SCALE_KEY, String(v)) } catch {}
+})
+
+const FONT_FAMILY_KEY = 'reader-font-family'
+const FONT_OPTIONS = [
+  { id: 'sans',  label: 'Sans',  stack: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' },
+  { id: 'serif', label: 'Serif', stack: 'Georgia, "Times New Roman", "Liberation Serif", serif' },
+  { id: 'mono',  label: 'Mono',  stack: '"SF Mono", Menlo, Consolas, "Liberation Mono", monospace' },
+]
+const loadFontFamilyId = (): string => {
+  const raw = localStorage.getItem(FONT_FAMILY_KEY) || ''
+  return FONT_OPTIONS.find(o => o.id === raw)?.id || 'sans'
+}
+const fontFamilyId = ref(loadFontFamilyId())
+watch(fontFamilyId, (v) => {
+  try { localStorage.setItem(FONT_FAMILY_KEY, v) } catch {}
+})
+const fontFamily = computed(
+  () => FONT_OPTIONS.find(o => o.id === fontFamilyId.value)?.stack || FONT_OPTIONS[0].stack
+)
+
 const scrollEl = ref<HTMLElement | null>(null)
 
 const tooltip = ref<{ show: boolean; x: number; y: number; html: string }>({
@@ -109,9 +138,28 @@ const scrollToAnchor = (anchor: number) => {
   container.scrollTop += elTop - containerTop
 }
 
-const incFont = () => { fontScale.value = Math.min(2, fontScale.value + 0.1) }
-const decFont = () => { fontScale.value = Math.max(0.6, fontScale.value - 0.1) }
-const resetFont = () => { fontScale.value = 1 }
+const adjustFont = async (mutate: () => void) => {
+  // Capture the reading position *before* mutating, then restore it after the
+  // reflow. Without this, scrollTop stays put while content height changes,
+  // so the user lands on different text after a font-size change.
+  const anchor = findTopAnchor()
+  mutate()
+  await nextTick()
+  if (anchor !== null) {
+    restoring = true
+    scrollToAnchor(anchor)
+    setTimeout(() => { restoring = false }, 250)
+  }
+}
+
+const incFont = () => adjustFont(() => { fontScale.value = Math.min(2, fontScale.value + 0.1) })
+const decFont = () => adjustFont(() => { fontScale.value = Math.max(0.6, fontScale.value - 0.1) })
+const resetFont = () => adjustFont(() => { fontScale.value = 1 })
+
+const onFontFamilyChange = (e: Event) => {
+  const v = (e.target as HTMLSelectElement).value
+  adjustFont(() => { fontFamilyId.value = v })
+}
 
 const onTocNavigate = (anchor: number) => {
   scrollToAnchor(anchor)
@@ -237,6 +285,14 @@ onBeforeUnmount(() => {
         <span v-if="authors.length" class="ml-2 text-gray-500 dark:text-gray-400">— {{ authors.join(', ') }}</span>
       </div>
       <div class="flex items-center gap-2 shrink-0">
+        <select
+          :value="fontFamilyId"
+          @change="onFontFamilyChange"
+          :title="t('app.font_family')"
+          class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option v-for="o in FONT_OPTIONS" :key="o.id" :value="o.id" :style="{ fontFamily: o.stack }">{{ o.label }}</option>
+        </select>
         <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A−</button>
         <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A</button>
         <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A+</button>
@@ -279,7 +335,7 @@ onBeforeUnmount(() => {
       >
         <div
           class="fb2-content w-full px-6 py-8 leading-relaxed"
-          :style="{ fontSize: `${fontScale}rem` }"
+          :style="{ fontSize: `${fontScale}rem`, fontFamily }"
           v-html="html"
           @click="onContentClick"
           @mouseover="onContentMouseOver"

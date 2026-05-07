@@ -129,6 +129,29 @@ const isFb2 = computed(() => {
   const n = (item.value?.name || '').toLowerCase()
   return n.endsWith('.fb2') || n.endsWith('.fb2.zip')
 })
+
+const displayFormat = computed(() => {
+  if (isFb2.value) return 'FB2'
+  return fileExtension.value
+})
+
+const fb2Meta = ref<{ title: string; authors: string[]; annotation_html: string } | null>(null)
+
+const loadFb2Meta = async (path: string) => {
+  fb2Meta.value = null
+  try {
+    const res = await api.get('/fb2-metadata', { params: { path } })
+    fb2Meta.value = res.data
+  } catch (e) {
+    console.error('Failed to load FB2 metadata', e)
+  }
+}
+
+watch(
+  () => item.value && isFb2.value ? item.value.path : null,
+  (p) => { if (p) loadFb2Meta(p); else fb2Meta.value = null },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -180,7 +203,15 @@ const isFb2 = computed(() => {
               <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.format') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400 uppercase font-semibold">{{ fileExtension }}</td>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400 uppercase font-semibold">{{ displayFormat }}</td>
+                </tr>
+                <tr v-if="fb2Meta?.title" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.book_title') }}</th>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ fb2Meta.title }}</td>
+                </tr>
+                <tr v-if="fb2Meta?.authors?.length" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.author') }}</th>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ fb2Meta.authors.join(', ') }}</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.size') }}</th>
@@ -201,6 +232,15 @@ const isFb2 = computed(() => {
               </tbody>
             </table>
           </div>
+
+          <!-- FB2 Annotation -->
+          <details v-if="fb2Meta?.annotation_html" class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group">
+            <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between rounded-lg">
+              <span>{{ t('app.annotation') }}</span>
+              <span class="transition-transform group-open:rotate-90 text-gray-400">›</span>
+            </summary>
+            <div class="px-6 pb-5 prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 fb2-content" v-html="fb2Meta.annotation_html"></div>
+          </details>
 
           <!-- Actions -->
           <div class="flex flex-wrap gap-4 pt-4">

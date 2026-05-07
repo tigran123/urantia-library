@@ -654,6 +654,20 @@ def _convert_fb2(xml_bytes: bytes) -> Dict[str, Any]:
     }
 
 
+def _extract_annotation_html(root) -> str:
+    desc = root.find(_FB2_NS + "description")
+    if desc is None:
+        return ""
+    ti = desc.find(_FB2_NS + "title-info")
+    if ti is None:
+        return ""
+    annotation = ti.find(_FB2_NS + "annotation")
+    if annotation is None:
+        return ""
+    renderer = _Fb2Renderer({}, anchored=False)
+    return "".join(renderer.render_block(c) for c in annotation)
+
+
 @app.get("/api/fb2-content")
 async def fb2_content(path: str, current_user: models.User = Depends(get_current_user)):
     file_path = sanitize_fb2_path(path)
@@ -662,6 +676,25 @@ async def fb2_content(path: str, current_user: models.User = Depends(get_current
     except zipfile.BadZipFile:
         raise HTTPException(status_code=422, detail="Corrupt zip archive")
     return _convert_fb2(xml_bytes)
+
+
+@app.get("/api/fb2-metadata")
+async def fb2_metadata(path: str, current_user: models.User = Depends(get_current_user)):
+    file_path = sanitize_fb2_path(path)
+    try:
+        xml_bytes = _read_fb2_bytes(file_path)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as e:
+        raise HTTPException(status_code=422, detail=f"Invalid FB2 XML: {e}")
+    meta = _extract_metadata(root)
+    return {
+        "title": meta["title"],
+        "authors": meta["authors"],
+        "annotation_html": _extract_annotation_html(root),
+    }
 
 
 def sanitize_djvu_path(path: str) -> str:

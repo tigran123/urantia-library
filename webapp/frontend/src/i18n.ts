@@ -37,10 +37,14 @@ const messages = {
       font_smaller: 'Smaller text',
       font_larger: 'Larger text',
       font_reset: 'Reset text size',
+      font_family: 'Typeface',
       toc: 'Contents',
       toc_collapse: 'Collapse contents',
       toc_expand: 'Show contents',
-      toc_empty: 'No table of contents'
+      toc_empty: 'No table of contents',
+      book_title: 'Title',
+      author: 'Author',
+      annotation: 'Annotation'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -101,10 +105,14 @@ const messages = {
       font_smaller: 'Меньше текст',
       font_larger: 'Больше текст',
       font_reset: 'Сбросить размер текста',
+      font_family: 'Шрифт',
       toc: 'Содержание',
       toc_collapse: 'Свернуть содержание',
       toc_expand: 'Показать содержание',
-      toc_empty: 'Содержание отсутствует'
+      toc_empty: 'Содержание отсутствует',
+      book_title: 'Название',
+      author: 'Автор',
+      annotation: 'Аннотация'
     },
     auth: {
       signInTitle: 'Вход',
