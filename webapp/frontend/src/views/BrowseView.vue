@@ -182,14 +182,14 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
                 </div>
                 <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
               </a>
               <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
                 <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
                   <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
                 </div>
                 <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
               </router-link>
             </template>
 
@@ -199,7 +199,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 <DocumentIcon v-else class="h-16 w-16 text-gray-300 dark:text-gray-600" />
               </div>
               <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-              <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-2" :title="item.description" v-html="item.description"></p>
+              <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
             </router-link>
           </div>
         </template>
@@ -215,14 +215,14 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
                   <div class="flex-1 min-w-0 pr-8">
                     <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
-                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
+                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
                   </div>
                 </a>
                 <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center p-4 pr-16 min-w-0">
                   <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
                   <div class="flex-1 min-w-0 pr-8">
                     <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
-                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
+                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
                   </div>
                 </router-link>
               </template>
@@ -234,7 +234,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 </div>
                 <div class="flex-1 min-w-0 pr-8">
                   <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
-                  <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" v-html="item.description"></p>
+                  <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
                 </div>
                 <div class="ml-4 flex-shrink-0 text-sm text-gray-500 dark:text-gray-400">
                   {{ formatBytes(item.size) }}

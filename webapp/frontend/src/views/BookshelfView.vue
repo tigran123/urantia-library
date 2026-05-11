@@ -115,7 +115,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                       {{ formatFilename(match.name, match.is_dir) }}
                     </router-link>
                   </template>
-                  <p v-if="match.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-2" v-html="match.description"></p>
+                  <p v-if="match.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="match.description"></p>
                 </div>
                 <button @click="removeFavorite(match.path)" class="text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-4 p-2 rounded-full hover:bg-red-50 dark:hover:bg-red-900/30" :title="$t('app.remove_favorite')">
                   <TrashIcon class="h-5 w-5" />

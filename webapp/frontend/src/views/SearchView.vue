@@ -147,7 +147,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                       {{ formatFilename(match.name, match.is_dir) }}
                     </router-link>
                   </template>
-                  <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-2" v-html="match.description.replace(new RegExp(route.query.q as string, 'gi'), (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`)"></p>
+                  <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-3" v-html="match.description.replace(new RegExp(route.query.q as string, 'gi'), (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`)"></p>
                 </div>
               </div>
 
