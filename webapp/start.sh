@@ -25,4 +25,4 @@ fi
 echo "Starting Urantia Library Web Server..."
 cd backend
 source .venv/bin/activate
-uvicorn main:app --host 127.0.0.1 --port 8000 --root-path /library --no-access-log
+exec uvicorn main:app --host 127.0.0.1 --port 8000 --root-path /library --no-access-log
