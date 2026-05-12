@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy
+pillow
+djvulibre-python
+bcrypt
+pyjwt
+pydantic[email]
+aiofiles
