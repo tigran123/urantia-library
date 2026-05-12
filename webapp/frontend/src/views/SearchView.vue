@@ -1,16 +1,52 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, watch, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { DocumentIcon, FolderIcon, MagnifyingGlassIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
-import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
+import { BookmarkIcon as BookmarkIconSolid, XMarkIcon } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
+const router = useRouter()
 const matches = ref<any[]>([])
 const loading = ref(false)
 const searched = ref(false)
 const error = ref('')
 const favoritePaths = ref<Set<string>>(new Set())
+
+const parsedSearch = computed(() => {
+  const q = (route.query.q as string) || ''
+  let text = q
+  const filters: {key: string, value: string, fullMatch: string}[] = []
+
+  const pathMatch = text.match(/path:([^\s]+)/)
+  if (pathMatch) {
+    filters.push({ key: 'Path', value: pathMatch[1].replace(/['"]/g, ''), fullMatch: pathMatch[0] })
+    text = text.replace(pathMatch[0], '')
+  }
+
+  const extMatch = text.match(/ext:([^\s]+)/)
+  if (extMatch) {
+    filters.push({ key: 'Extension', value: extMatch[1].replace(/['"]/g, ''), fullMatch: extMatch[0] })
+    text = text.replace(extMatch[0], '')
+  }
+
+  const typeMatch = text.match(/type:(dir|file)\b/i)
+  if (typeMatch) {
+    filters.push({ key: 'Type', value: typeMatch[1], fullMatch: typeMatch[0] })
+    text = text.replace(typeMatch[0], '')
+  }
+
+  return {
+    text: text.trim(),
+    filters
+  }
+})
+
+const removeFilter = (fullMatch: string) => {
+  const currentQ = route.query.q as string || ''
+  const newQ = currentQ.replace(fullMatch, '').replace(/\s+/g, ' ').trim()
+  router.push({ name: 'search', query: { q: newQ } })
+}
 
 const loadFavorites = async () => {
   try {
@@ -96,9 +132,19 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         <MagnifyingGlassIcon class="h-6 w-6 text-blue-600" />
         Search Results
       </h1>
-      <p class="text-gray-500">
-        Results for <span class="font-semibold text-gray-900">"{{ route.query.q }}"</span>
-      </p>
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <p class="text-gray-500">
+          Results for <span v-if="parsedSearch.text" class="font-semibold text-gray-900">"{{ parsedSearch.text }}"</span><span v-else class="italic">all matching items</span>
+        </p>
+        <div v-if="parsedSearch.filters.length > 0" class="flex flex-wrap gap-2 mt-2 sm:mt-0 sm:ml-2">
+          <span v-for="filter in parsedSearch.filters" :key="filter.key" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
+            <span class="font-bold">{{ filter.key }}:</span> {{ filter.value }}
+            <button @click="removeFilter(filter.fullMatch)" class="ml-1 text-blue-600 hover:text-blue-900 focus:outline-none">
+              <XMarkIcon class="h-3 w-3" />
+            </button>
+          </span>
+        </div>
+      </div>
     </div>
 
     <div v-if="loading" class="flex justify-center items-center py-20">
@@ -111,7 +157,17 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
     <div v-else-if="searched && matches.length === 0" class="text-center py-20 text-gray-500 bg-white rounded-lg border border-gray-100 shadow-sm">
       <MagnifyingGlassIcon class="mx-auto h-12 w-12 text-gray-300 mb-3" />
-      <p class="text-lg">No matches found.</p>
+      <p class="text-lg mb-6">No matches found.</p>
+
+      <div class="max-w-md mx-auto text-left bg-gray-50 p-4 rounded-lg border border-gray-200 text-sm">
+        <h3 class="font-semibold text-gray-700 mb-2">Search Tips & Filters:</h3>
+        <ul class="list-disc pl-5 space-y-1">
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">path:Law/</code> to search within a specific directory.</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">ext:djvu</code> or <code class="bg-gray-200 px-1 rounded text-gray-800">ext:pdf</code> to find specific file types.</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">type:dir</code> to find only directories.</li>
+           <li>Combine them: <code class="bg-gray-200 px-1 rounded text-gray-800">path:History/ ext:epub rome</code></li>
+        </ul>
+      </div>
     </div>
 
     <div v-else-if="matches.length > 0" class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">

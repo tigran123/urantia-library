@@ -197,13 +197,46 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
 
     return {"path": path, "items": items}
 
+def parse_search_query(q: str):
+    filters = {
+        "path": None,
+        "ext": None,
+        "type": None
+    }
+
+    path_match = re.search(r'path:([^\s]+)', q)
+    if path_match:
+        filters["path"] = path_match.group(1).strip('"\'').lower()
+        q = q.replace(path_match.group(0), '')
+
+    ext_match = re.search(r'ext:([^\s]+)', q)
+    if ext_match:
+        filters["ext"] = ext_match.group(1).strip('"\'').lower()
+        if not filters["ext"].startswith('.'):
+            filters["ext"] = '.' + filters["ext"]
+        q = q.replace(ext_match.group(0), '')
+
+    type_match = re.search(r'type:(dir|file)\b', q, re.IGNORECASE)
+    if type_match:
+        t = type_match.group(1).lower()
+        filters["type"] = t
+        q = q.replace(type_match.group(0), '')
+
+    q = q.strip().lower()
+    return q, filters
+
 @app.get("/api/search")
 async def search(q: str = "", current_user: models.User = Depends(get_current_user)):
     if not q:
         return {"matches": []}
 
+    query_lower, filters = parse_search_query(q)
+
+    # If the user only typed "type:dir" or "path:Law", we still want to return results
+    # even if query_lower is empty. So we shouldn't bail early if query_lower is empty,
+    # unless there are also no filters. But if not q handled the truly empty case.
+
     matches = []
-    query_lower = q.lower()
 
     # Simple recursive search
     for root, dirs, files in os.walk(BOOKS_DIR):
@@ -213,6 +246,17 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
         rel_root = os.path.relpath(root, BOOKS_DIR)
         if rel_root == ".":
             rel_root = ""
+
+        rel_root_unix = rel_root.replace("\\", "/")
+
+        # Optimization: Filter by path early to avoid walking unnecessary directories
+        if filters["path"]:
+            # If the current dir isn't a prefix of the target path, and the target path isn't a prefix of the current dir
+            # e.g., current="Other", target="Law/History" -> skip "Other"
+            if rel_root_unix and not filters["path"].startswith(rel_root_unix.lower() + "/") and not rel_root_unix.lower().startswith(filters["path"]):
+                if filters["path"] != rel_root_unix.lower():
+                    dirs[:] = []
+                    continue
 
         descriptions = get_htaccess_descriptions(root)
 
@@ -225,25 +269,41 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
                 continue
             rel_path = os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
             desc = descriptions.get(entry, "")
+            is_dir = os.path.isdir(entry_path)
 
-            if query_lower in entry.lower() or query_lower in desc.lower():
-                is_dir = os.path.isdir(entry_path)
-                cover_path = os.path.join(root, ".covers", f"{entry}.jpg")
-                cover_url = None
-                if os.path.exists(cover_path):
-                    cover_url = f"/api/files/{os.path.relpath(cover_path, BOOKS_DIR).replace(chr(92), '/')}"
+            # Apply filters
+            if filters["path"] and not rel_path.lower().startswith(filters["path"]):
+                continue
 
-                matches.append({
-                    "name": entry,
-                    "is_dir": is_dir,
-                    "description": desc,
-                    "path": rel_path,
-                    "parent_dir": rel_root.replace("\\", "/"),
-                    "cover_url": cover_url
-                })
+            if filters["ext"] and is_dir:
+                continue # Directories don't have extensions in this context
+            if filters["ext"] and not entry.lower().endswith(filters["ext"]):
+                continue
 
-                if len(matches) > 100: # Limit results
-                    break
+            if filters["type"] == "dir" and not is_dir:
+                continue
+            if filters["type"] == "file" and is_dir:
+                continue
+
+            if query_lower and query_lower not in entry.lower() and query_lower not in desc.lower():
+                continue
+
+            cover_path = os.path.join(root, ".covers", f"{entry}.jpg")
+            cover_url = None
+            if os.path.exists(cover_path):
+                cover_url = f"/api/files/{os.path.relpath(cover_path, BOOKS_DIR).replace(chr(92), '/')}"
+
+            matches.append({
+                "name": entry,
+                "is_dir": is_dir,
+                "description": desc,
+                "path": rel_path,
+                "parent_dir": rel_root.replace("\\", "/"),
+                "cover_url": cover_url
+            })
+
+            if len(matches) > 100: # Limit results
+                break
         if len(matches) > 100:
             break
 
