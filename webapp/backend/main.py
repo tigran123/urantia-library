@@ -140,6 +140,10 @@ async def logout():
     response.delete_cookie(key="access_token")
     return response
 
+@app.get("/api/me")
+async def get_me(current_user: models.User = Depends(get_current_user)):
+    return {"email": current_user.email}
+
 @app.get("/api/browse")
 async def browse(path: str = "", current_user: models.User = Depends(get_current_user)):
     target_dir = os.path.join(BOOKS_DIR, path)

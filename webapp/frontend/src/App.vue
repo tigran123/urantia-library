@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
 import api from './api'
 import { useI18n } from 'vue-i18n'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
@@ -14,8 +14,35 @@ const showSearchTips = ref(false)
 const router = useRouter()
 const route = useRoute()
 
+const currentUser = ref<{ email: string } | null>(null)
+const isProfileMenuOpen = ref(false)
+
 const isAuthRoute = computed(() => {
   return route.name === 'login' || route.name === 'register'
+})
+
+const fetchCurrentUser = async () => {
+  if (isAuthRoute.value) return
+  try {
+    const response = await api.get('/me')
+    currentUser.value = response.data
+  } catch (e) {
+    console.error('Failed to fetch user', e)
+    currentUser.value = null
+  }
+}
+
+watch(isAuthRoute, (newVal) => {
+  isProfileMenuOpen.value = false
+  if (!newVal) {
+    fetchCurrentUser()
+  } else {
+    currentUser.value = null
+  }
+})
+
+onMounted(() => {
+  fetchCurrentUser()
 })
 
 const currentBrowsePath = computed(() => {
@@ -33,6 +60,7 @@ const performSearch = () => {
 }
 
 const handleLogout = async () => {
+  isProfileMenuOpen.value = false
   try {
     await api.post('/logout')
   } catch (e) {
@@ -97,10 +125,28 @@ const handleLogout = async () => {
             <!-- Language Switcher -->
             <LanguageSwitcher />
 
-            <button @click="handleLogout" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none ml-2">
-              <ArrowRightOnRectangleIcon class="h-5 w-5" />
-              <span class="hidden sm:inline">{{ t('app.logout') }}</span>
-            </button>
+            <!-- User Profile Menu Dropdown -->
+            <div class="relative ml-2">
+              <button @click="isProfileMenuOpen = !isProfileMenuOpen" class="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none">
+                <UserCircleIcon class="h-7 w-7" />
+              </button>
+
+              <!-- Invisible Overlay to handle clicking outside -->
+              <div v-if="isProfileMenuOpen" @click="isProfileMenuOpen = false" class="fixed inset-0 z-40"></div>
+
+              <!-- Dropdown Content -->
+              <div v-if="isProfileMenuOpen" class="absolute right-0 mt-2 w-64 bg-white dark:bg-gray-800 rounded-md shadow-lg py-1 z-50 ring-1 ring-black ring-opacity-5 dark:ring-white dark:ring-opacity-10">
+                <div class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 break-words font-medium truncate" :title="currentUser?.email">
+                  {{ currentUser?.email || 'Loading...' }}
+                </div>
+                <hr class="border-gray-200 dark:border-gray-700 my-1" />
+                <!-- Future Feature Area: Settings, Profile Picture etc. -->
+                <button @click="handleLogout" class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 focus:outline-none">
+                  <ArrowRightOnRectangleIcon class="h-4 w-4" />
+                  {{ t('app.logout') }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
