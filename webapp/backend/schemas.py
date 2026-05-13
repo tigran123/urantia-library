@@ -6,6 +6,10 @@ class UserCreate(BaseModel):
     source: Optional[str] = None
     purpose: Optional[str] = None
 
+class UserResponse(BaseModel):
+    email: EmailStr
+    avatar_url: Optional[str] = None
+
 class Message(BaseModel):
     message: str
 

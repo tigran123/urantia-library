@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response
+from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -9,6 +9,8 @@ import io
 import hashlib
 import zipfile
 import base64
+import shutil
+import uuid
 import xml.etree.ElementTree as ET
 from html import escape as _html_escape
 from PIL import Image
@@ -140,9 +142,31 @@ async def logout():
     response.delete_cookie(key="access_token")
     return response
 
-@app.get("/api/me")
+@app.get("/api/me", response_model=schemas.UserResponse)
 async def get_me(current_user: models.User = Depends(get_current_user)):
-    return {"email": current_user.email}
+    return {"email": current_user.email, "avatar_url": current_user.avatar_url}
+
+os.makedirs("avatars", exist_ok=True)
+app.mount("/api/avatars", StaticFiles(directory="avatars"), name="avatars")
+
+@app.post("/api/users/me/avatar", response_model=schemas.UserResponse)
+async def upload_avatar(file: UploadFile = File(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    ext = file.filename.split(".")[-1]
+    filename = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join("avatars", filename)
+
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    avatar_url = f"/api/avatars/{filename}"
+    current_user.avatar_url = avatar_url
+    db.commit()
+    db.refresh(current_user)
+
+    return current_user
 
 @app.get("/api/browse")
 async def browse(path: str = "", current_user: models.User = Depends(get_current_user)):

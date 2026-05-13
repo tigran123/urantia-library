@@ -57,3 +57,4 @@ typing-inspection==0.4.2
     #   pydantic
 uvicorn==0.46.0
     # via -r requirements.in
+python-multipart

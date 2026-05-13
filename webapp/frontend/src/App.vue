@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
+import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
 import api from './api'
 import { useI18n } from 'vue-i18n'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import ThemeSwitcher from './components/ThemeSwitcher.vue'
+import SettingsModal from './components/SettingsModal.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -14,8 +15,9 @@ const showSearchTips = ref(false)
 const router = useRouter()
 const route = useRoute()
 
-const currentUser = ref<{ email: string } | null>(null)
+const currentUser = ref<{ email: string, avatar_url?: string } | null>(null)
 const isProfileMenuOpen = ref(false)
+const isSettingsModalOpen = ref(false)
 
 const isAuthRoute = computed(() => {
   return route.name === 'login' || route.name === 'register'
@@ -30,6 +32,11 @@ const fetchCurrentUser = async () => {
     console.error('Failed to fetch user', e)
     currentUser.value = null
   }
+}
+
+const getFullUrl = (url: string | undefined) => {
+  if (!url) return ''
+  return api.defaults.baseURL?.replace('/api', '') + url
 }
 
 watch(isAuthRoute, (newVal) => {
@@ -128,7 +135,8 @@ const handleLogout = async () => {
             <!-- User Profile Menu Dropdown -->
             <div class="relative ml-2">
               <button @click="isProfileMenuOpen = !isProfileMenuOpen" class="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none">
-                <UserCircleIcon class="h-7 w-7" />
+                <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-8 w-8 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
+                <UserCircleIcon v-else class="h-7 w-7" />
               </button>
 
               <!-- Invisible Overlay to handle clicking outside -->
@@ -140,7 +148,12 @@ const handleLogout = async () => {
                   {{ currentUser?.email || 'Loading...' }}
                 </div>
                 <hr class="border-gray-200 dark:border-gray-700 my-1" />
-                <!-- Future Feature Area: Settings, Profile Picture etc. -->
+
+                <button @click="isSettingsModalOpen = true; isProfileMenuOpen = false" class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 focus:outline-none">
+                  <Cog6ToothIcon class="h-4 w-4" />
+                  {{ t('app.settings') }}
+                </button>
+
                 <button @click="handleLogout" class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 focus:outline-none">
                   <ArrowRightOnRectangleIcon class="h-4 w-4" />
                   {{ t('app.logout') }}
@@ -188,29 +201,37 @@ const handleLogout = async () => {
     <!-- Search Tips Modal -->
     <div v-if="showSearchTips" class="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-0">
       <div class="fixed inset-0 transition-opacity" style="background-color: rgba(0, 0, 0, 0.2);" @click="showSearchTips = false"></div>
-      
+
       <div class="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6 overflow-hidden z-10 text-left border border-gray-200 dark:border-gray-700">
         <div class="absolute top-4 right-4">
           <button @click="showSearchTips = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 focus:outline-none">
             <XMarkIcon class="h-6 w-6" />
           </button>
         </div>
-        
-        <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-4">Search Tips & Filters</h3>
-        
+
+        <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-4">{{ t('search.tips_title') }}</h3>
+
         <ul class="list-disc pl-5 space-y-3 text-sm text-gray-700 dark:text-gray-300">
-           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:Law/</code> to search within a specific directory.</li>
-           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:djvu</code> or <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:pdf</code> to find specific file types.</li>
-           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">type:dir</code> to find only directories.</li>
-           <li>Combine them: <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:History/ ext:epub rome</code></li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:Law/</code> {{ t('search.tip_path') }}</li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:djvu</code> {{ t('search.tip_ext_or') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:pdf</code> {{ t('search.tip_ext') }}</li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">type:dir</code> {{ t('search.tip_type') }}</li>
+           <li>{{ t('search.tip_combine') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:History/ ext:epub rome</code></li>
         </ul>
-        
+
         <div class="mt-6 flex justify-end">
           <button @click="showSearchTips = false" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none">
-            Got it
+            {{ t('search.got_it') }}
           </button>
         </div>
       </div>
     </div>
+
+    <!-- Settings Modal -->
+    <SettingsModal
+      :is-open="isSettingsModalOpen"
+      :user="currentUser"
+      @close="isSettingsModalOpen = false"
+      @update-user="currentUser = $event"
+    />
   </div>
 </template>

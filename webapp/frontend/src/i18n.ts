@@ -14,6 +14,7 @@ const messages = {
     app: {
       title: 'Urantia Library',
       search_placeholder: 'Search library...',
+      settings: 'Settings',
       logout: 'Logout',
       bookshelf: 'My Bookshelf',
       bookshelf_desc: 'Your saved books, directories, and documents.',
@@ -73,13 +74,25 @@ const messages = {
       results_for: 'Results for',
       all_items: 'all matching items',
       no_matches: 'No matches found.',
-      tips_title: 'Search Tips & Filters:',
+      tips_title: 'Search Tips & Filters',
       tip_path: 'to search within a specific directory.',
       tip_ext_or: 'or',
       tip_ext: 'to find specific file types.',
       tip_type: 'to find only directories.',
       tip_combine: 'Combine them:',
-      found_matches: 'Found {count} matches (limit 100)'
+      found_matches: 'Found {count} matches (limit 100)',
+      got_it: 'Got it'
+    },
+    settings: {
+      title: 'Settings',
+      personal_info: 'Personal Information',
+      avatar: 'Avatar',
+      email: 'Email:',
+      future_extensions: 'Future extensions (e.g. Full Name) will be added here.',
+      profile_picture: 'Profile Picture',
+      choose_photo: 'Choose profile photo',
+      uploading: 'Uploading...',
+      save_avatar: 'Save Avatar'
     }
   },
   ru: {
@@ -95,6 +108,7 @@ const messages = {
     app: {
       title: 'Библиотека Урантии',
       search_placeholder: 'Поиск по библиотеке...',
+      settings: 'Настройки',
       logout: 'Выйти',
       bookshelf: 'Моя полка',
       bookshelf_desc: 'Ваши сохранённые книги, директории и документы.',
@@ -154,13 +168,25 @@ const messages = {
       results_for: 'Результаты по запросу',
       all_items: 'все совпадения',
       no_matches: 'Совпадений не найдено.',
-      tips_title: 'Советы по поиску и фильтры:',
+      tips_title: 'Советы по поиску и фильтры',
       tip_path: 'для поиска в определенной директории.',
       tip_ext_or: 'или',
       tip_ext: 'для поиска определенных типов файлов.',
       tip_type: 'для поиска только директорий.',
       tip_combine: 'Комбинируйте их:',
-      found_matches: 'Найдено {count} совпадений (лимит 100)'
+      found_matches: 'Найдено {count} совпадений (лимит 100)',
+      got_it: 'Понятно'
+    },
+    settings: {
+      title: 'Настройки',
+      personal_info: 'Личная информация',
+      avatar: 'Аватар',
+      email: 'Почта:',
+      future_extensions: 'Будущие расширения (например, Полное имя) будут добавлены здесь.',
+      profile_picture: 'Фото профиля',
+      choose_photo: 'Выбрать фото',
+      uploading: 'Загрузка...',
+      save_avatar: 'Сохранить аватар'
     }
   }
 }
