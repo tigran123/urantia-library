@@ -67,6 +67,19 @@ const messages = {
       submitLoading: 'Submitting...',
       submitBtn: 'Submit Request',
       alreadyHaveAccount: 'Already have an account?'
+    },
+    search: {
+      title: 'Search Results',
+      results_for: 'Results for',
+      all_items: 'all matching items',
+      no_matches: 'No matches found.',
+      tips_title: 'Search Tips & Filters:',
+      tip_path: 'to search within a specific directory.',
+      tip_ext_or: 'or',
+      tip_ext: 'to find specific file types.',
+      tip_type: 'to find only directories.',
+      tip_combine: 'Combine them:',
+      found_matches: 'Found {count} matches (limit 100)'
     }
   },
   ru: {
@@ -135,6 +148,19 @@ const messages = {
       submitLoading: 'Отправка...',
       submitBtn: 'Отправить запрос',
       alreadyHaveAccount: 'Уже есть аккаунт?'
+    },
+    search: {
+      title: 'Результаты поиска',
+      results_for: 'Результаты по запросу',
+      all_items: 'все совпадения',
+      no_matches: 'Совпадений не найдено.',
+      tips_title: 'Советы по поиску и фильтры:',
+      tip_path: 'для поиска в определенной директории.',
+      tip_ext_or: 'или',
+      tip_ext: 'для поиска определенных типов файлов.',
+      tip_type: 'для поиска только директорий.',
+      tip_combine: 'Комбинируйте их:',
+      found_matches: 'Найдено {count} совпадений (лимит 100)'
     }
   }
 }

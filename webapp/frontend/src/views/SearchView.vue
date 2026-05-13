@@ -130,11 +130,11 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
     <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
       <h1 class="text-2xl font-bold text-gray-900 mb-2 flex items-center gap-2">
         <MagnifyingGlassIcon class="h-6 w-6 text-blue-600" />
-        Search Results
+        {{ $t('search.title') }}
       </h1>
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
         <p class="text-gray-500">
-          Results for <span v-if="parsedSearch.text" class="font-semibold text-gray-900">"{{ parsedSearch.text }}"</span><span v-else class="italic">all matching items</span>
+          {{ $t('search.results_for') }} <span v-if="parsedSearch.text" class="font-semibold text-gray-900">"{{ parsedSearch.text }}"</span><span v-else class="italic">{{ $t('search.all_items') }}</span>
         </p>
         <div v-if="parsedSearch.filters.length > 0" class="flex flex-wrap gap-2 mt-2 sm:mt-0 sm:ml-2">
           <span v-for="filter in parsedSearch.filters" :key="filter.key" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
@@ -157,22 +157,22 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
     <div v-else-if="searched && matches.length === 0" class="text-center py-20 text-gray-500 bg-white rounded-lg border border-gray-100 shadow-sm">
       <MagnifyingGlassIcon class="mx-auto h-12 w-12 text-gray-300 mb-3" />
-      <p class="text-lg mb-6">No matches found.</p>
+      <p class="text-lg mb-6">{{ $t('search.no_matches') }}</p>
 
       <div class="max-w-md mx-auto text-left bg-gray-50 p-4 rounded-lg border border-gray-200 text-sm">
-        <h3 class="font-semibold text-gray-700 mb-2">Search Tips & Filters:</h3>
+        <h3 class="font-semibold text-gray-700 mb-2">{{ $t('search.tips_title') }}</h3>
         <ul class="list-disc pl-5 space-y-1">
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">path:Law/</code> to search within a specific directory.</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">ext:djvu</code> or <code class="bg-gray-200 px-1 rounded text-gray-800">ext:pdf</code> to find specific file types.</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">type:dir</code> to find only directories.</li>
-           <li>Combine them: <code class="bg-gray-200 px-1 rounded text-gray-800">path:History/ ext:epub rome</code></li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">path:Law/</code> {{ $t('search.tip_path') }}</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">ext:djvu</code> {{ $t('search.tip_ext_or') }} <code class="bg-gray-200 px-1 rounded text-gray-800">ext:pdf</code> {{ $t('search.tip_ext') }}</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">type:dir</code> {{ $t('search.tip_type') }}</li>
+           <li>{{ $t('search.tip_combine') }} <code class="bg-gray-200 px-1 rounded text-gray-800">path:History/ ext:epub rome</code></li>
         </ul>
       </div>
     </div>
 
     <div v-else-if="matches.length > 0" class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">
       <div class="px-4 py-3 bg-gray-50 border-b border-gray-100 text-sm text-gray-500 font-medium">
-        Found {{ matches.length }} matches (limited to 100)
+        {{ $t('search.found_matches', { count: matches.length }) }}
       </div>
       <ul class="divide-y divide-gray-100">
         <li v-for="match in matches" :key="match.path" class="hover:bg-gray-50 transition-colors p-4 group">
