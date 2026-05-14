@@ -38,6 +38,8 @@ pydantic-core==2.46.4
     # via pydantic
 pyjwt==2.12.1
     # via -r requirements.in
+python-multipart==0.0.28
+    # via -r requirements.in
 sqlalchemy==2.0.49
     # via -r requirements.in
 starlette==1.0.0
@@ -57,4 +59,3 @@ typing-inspection==0.4.2
     #   pydantic
 uvicorn==0.46.0
     # via -r requirements.in
-python-multipart
