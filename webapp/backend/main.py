@@ -125,7 +125,23 @@ async def logout():
 
 @app.get("/api/me", response_model=schemas.UserResponse)
 async def get_me(current_user: models.User = Depends(get_current_user)):
-    return {"email": current_user.email, "avatar_url": current_user.avatar_url}
+    return {
+        "email": current_user.email,
+        "avatar_url": current_user.avatar_url,
+        "search_per_page": current_user.search_per_page,
+    }
+
+@app.put("/api/users/me/settings", response_model=schemas.UserResponse)
+async def update_settings(
+    settings: schemas.UserSettingsUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if settings.search_per_page is not None:
+        current_user.search_per_page = max(10, min(settings.search_per_page, 200))
+    db.commit()
+    db.refresh(current_user)
+    return current_user
 
 os.makedirs("avatars", exist_ok=True)
 app.mount("/api/avatars", StaticFiles(directory="avatars"), name="avatars")
@@ -237,9 +253,18 @@ def parse_search_query(q: str):
     return q, filters
 
 @app.get("/api/search")
-async def search(q: str = "", current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def search(
+    q: str = "",
+    page: int = 1,
+    per_page: int = 50,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    page = max(page, 1)
+    per_page = max(1, min(per_page, 200))
+
     if not q:
-        return {"matches": []}
+        return {"matches": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0}
 
     query_lower, filters = parse_search_query(q)
 
@@ -266,7 +291,15 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
             func.lower(models.BookLocation.symlink_path).like(f"%{filters['ext']}")
         )
 
-    results = query.limit(100).all()
+    total = query.order_by(None).count()
+    total_pages = (total + per_page - 1) // per_page
+
+    results = (
+        query.order_by(models.Book.title, models.Book.id)
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
 
     matches = []
     for book, loc in results:
@@ -285,7 +318,13 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
             "description": book.description,
         })
 
-    return {"matches": matches}
+    return {
+        "matches": matches,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+    }
 
 @app.post("/api/register", response_model=schemas.Message)
 async def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):

@@ -9,6 +9,10 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     email: EmailStr
     avatar_url: Optional[str] = None
+    search_per_page: Optional[int] = None
+
+class UserSettingsUpdate(BaseModel):
+    search_per_page: Optional[int] = None
 
 class Message(BaseModel):
     message: str

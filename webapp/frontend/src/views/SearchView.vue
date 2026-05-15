@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch, computed, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
@@ -12,6 +12,23 @@ const loading = ref(false)
 const searched = ref(false)
 const error = ref('')
 const favoriteIds = ref<Set<string>>(new Set())
+
+const DEFAULT_PER_PAGE = 50
+const currentUser = inject<Ref<{ search_per_page?: number | null } | null>>(
+  'currentUser',
+  ref(null)
+)
+const perPage = computed(() => currentUser.value?.search_per_page ?? DEFAULT_PER_PAGE)
+const total = ref(0)
+const totalPages = ref(0)
+const currentPage = computed(() => {
+  const p = parseInt((route.query.page as string) || '1', 10)
+  return isNaN(p) || p < 1 ? 1 : p
+})
+
+const goToPage = (page: number) => {
+  router.push({ name: 'search', query: { ...route.query, page: String(page) } })
+}
 
 const parsedSearch = computed(() => {
   const q = (route.query.q as string) || ''
@@ -72,9 +89,11 @@ const toggleFavorite = async (item: any, event: Event) => {
   }
 }
 
-const doSearch = async (q: string) => {
+const doSearch = async (q: string, page: number) => {
   if (!q) {
     matches.value = []
+    total.value = 0
+    totalPages.value = 0
     searched.value = false
     return
   }
@@ -84,8 +103,10 @@ const doSearch = async (q: string) => {
   searched.value = true
 
   try {
-    const res = await api.get('/search', { params: { q } })
+    const res = await api.get('/search', { params: { q, page, per_page: perPage.value } })
     matches.value = res.data.matches
+    total.value = res.data.total ?? 0
+    totalPages.value = res.data.total_pages ?? 0
   } catch (err: any) {
     error.value = err.response?.data?.detail || err.message
   } finally {
@@ -95,11 +116,20 @@ const doSearch = async (q: string) => {
 
 onMounted(() => {
   loadFavorites()
-  doSearch(route.query.q as string)
+  doSearch(route.query.q as string, currentPage.value)
 })
 
-watch(() => route.query.q, (newQ) => {
-  doSearch(newQ as string)
+watch(() => [route.query.q, route.query.page], () => {
+  doSearch(route.query.q as string, currentPage.value)
+})
+
+watch(perPage, () => {
+  if (!searched.value) return
+  if (currentPage.value !== 1) {
+    router.replace({ name: 'search', query: { ...route.query, page: '1' } })
+  } else {
+    doSearch(route.query.q as string, 1)
+  }
 })
 
 const getFullUrl = (url: string) => {
@@ -149,9 +179,16 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         <MagnifyingGlassIcon class="h-6 w-6 text-blue-600" />
         {{ $t('search.title') }}
       </h1>
-      <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap">
         <p class="text-gray-500">
-          {{ $t('search.results_for') }} <span v-if="parsedSearch.text" class="font-semibold text-gray-900">"{{ parsedSearch.text }}"</span><span v-else class="italic">{{ $t('search.all_items') }}</span>
+          <template v-if="searched">
+            {{ $t('search.found_results_count', { count: total }) }}
+          </template>
+          <template v-else>
+            {{ $t('search.results_for_label') }}
+          </template>
+          <span v-if="parsedSearch.text" class="font-semibold text-gray-900">"{{ parsedSearch.text }}"</span>
+          <span v-else class="italic">{{ $t('search.all_items') }}</span>
         </p>
         <div v-if="parsedSearch.filters.length > 0" class="flex flex-wrap gap-2 mt-2 sm:mt-0 sm:ml-2">
           <span v-for="filter in parsedSearch.filters" :key="filter.key" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
@@ -187,8 +224,22 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
     </div>
 
     <div v-else-if="matches.length > 0" class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">
-      <div class="px-4 py-3 bg-gray-50 border-b border-gray-100 text-sm text-gray-500 font-medium">
-        {{ $t('search.found_matches', { count: matches.length }) }}
+      <div v-if="totalPages > 1" class="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between text-sm">
+        <button
+          @click="goToPage(currentPage - 1)"
+          :disabled="currentPage <= 1"
+          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+        >
+          ← {{ $t('search.previous') }}
+        </button>
+        <span class="text-gray-500">{{ $t('search.page_of', { page: currentPage, total: totalPages }) }}</span>
+        <button
+          @click="goToPage(currentPage + 1)"
+          :disabled="currentPage >= totalPages"
+          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+        >
+          {{ $t('search.next') }} →
+        </button>
       </div>
       <ul class="divide-y divide-gray-100">
         <li v-for="match in matches" :key="match.path" class="hover:bg-gray-50 transition-colors p-4 group">
@@ -230,6 +281,23 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           </div>
         </li>
       </ul>
+      <div v-if="totalPages > 1" class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between text-sm">
+        <button
+          @click="goToPage(currentPage - 1)"
+          :disabled="currentPage <= 1"
+          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+        >
+          ← {{ $t('search.previous') }}
+        </button>
+        <span class="text-gray-500">{{ $t('search.page_of', { page: currentPage, total: totalPages }) }}</span>
+        <button
+          @click="goToPage(currentPage + 1)"
+          :disabled="currentPage >= totalPages"
+          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+        >
+          {{ $t('search.next') }} →
+        </button>
+      </div>
     </div>
   </div>
 </template>

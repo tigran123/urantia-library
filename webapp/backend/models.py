@@ -10,6 +10,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     avatar_url = Column(String, nullable=True)
+    search_per_page = Column(Integer, nullable=True)
 
 class RegistrationRequest(Base):
     __tablename__ = "registration_requests"

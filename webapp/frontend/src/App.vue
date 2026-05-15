@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
 import api from './api'
@@ -15,7 +15,8 @@ const showSearchTips = ref(false)
 const router = useRouter()
 const route = useRoute()
 
-const currentUser = ref<{ email: string, avatar_url?: string } | null>(null)
+const currentUser = ref<{ email: string, avatar_url?: string, search_per_page?: number | null } | null>(null)
+provide('currentUser', currentUser)
 const isProfileMenuOpen = ref(false)
 const isSettingsModalOpen = ref(false)
 

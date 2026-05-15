@@ -5,11 +5,12 @@
 
 -- 1. Users and Authentication
 CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, 
-    email VARCHAR UNIQUE NOT NULL, 
-    hashed_password VARCHAR NOT NULL, 
-    is_active BOOLEAN DEFAULT TRUE, 
-    avatar_url VARCHAR
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email VARCHAR UNIQUE NOT NULL,
+    hashed_password VARCHAR NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    avatar_url VARCHAR,
+    search_per_page INTEGER DEFAULT 50
 );
 
 CREATE TABLE registration_requests (

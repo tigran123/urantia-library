@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { XMarkIcon } from '@heroicons/vue/24/outline'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
@@ -7,7 +7,7 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 
 const props = defineProps<{
-  user: { email: string, avatar_url?: string } | null,
+  user: { email: string, avatar_url?: string, search_per_page?: number | null } | null,
   isOpen: boolean
 }>()
 
@@ -23,8 +23,35 @@ const isUploading = ref(false)
 
 const tabs = computed(() => [
   { id: 'Personal Information', label: t('settings.personal_info') },
-  { id: 'Avatar', label: t('settings.avatar') }
+  { id: 'Avatar', label: t('settings.avatar') },
+  { id: 'Search', label: t('settings.search') }
 ])
+
+const PER_PAGE_OPTIONS = [25, 50, 100, 200]
+const searchPerPage = ref<number>(50)
+const isSavingSearch = ref(false)
+
+watch(
+  () => [props.isOpen, props.user?.search_per_page],
+  () => {
+    searchPerPage.value = props.user?.search_per_page ?? 50
+  },
+  { immediate: true }
+)
+
+const saveSearchSettings = async () => {
+  isSavingSearch.value = true
+  try {
+    const response = await api.put('/users/me/settings', { search_per_page: searchPerPage.value })
+    emit('update-user', response.data)
+    emit('close')
+  } catch (error) {
+    console.error('Failed to save search settings', error)
+    alert('Failed to save settings')
+  } finally {
+    isSavingSearch.value = false
+  }
+}
 
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
@@ -109,6 +136,29 @@ const close = () => {
             </div>
           </div>
           
+          <div v-if="activeTab === 'Search'">
+            <h4 class="text-md font-medium text-gray-900 dark:text-white mb-4">{{ t('settings.search') }}</h4>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              {{ t('settings.results_per_page') }}
+            </label>
+            <select
+              v-model.number="searchPerPage"
+              class="block w-48 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+            >
+              <option v-for="n in PER_PAGE_OPTIONS" :key="n" :value="n">{{ n }}</option>
+            </select>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">{{ t('settings.results_per_page_help') }}</p>
+            <div class="mt-6 flex justify-end">
+              <button
+                @click="saveSearchSettings"
+                :disabled="isSavingSearch"
+                class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {{ isSavingSearch ? t('settings.saving') : t('settings.save') }}
+              </button>
+            </div>
+          </div>
+
           <div v-if="activeTab === 'Avatar'">
             <h4 class="text-md font-medium text-gray-900 dark:text-white mb-4">{{ t('settings.profile_picture') }}</h4>
             <div class="flex items-center space-x-6">
