@@ -1,3 +1,4 @@
+migrate_library.py
 webapp/secrets.env
 webapp/backend/avatars/
 # Python
