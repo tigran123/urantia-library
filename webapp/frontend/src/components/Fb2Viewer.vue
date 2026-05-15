@@ -13,7 +13,7 @@ interface TocEntry {
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ path: string }>()
+const props = defineProps<{ path: string; hashId: string }>()
 
 const loading = ref(true)
 const error = ref('')
@@ -66,10 +66,11 @@ let lastSavedAnchor = -1
 
 const saveProgress = async (anchor: number) => {
   if (anchor === lastSavedAnchor) return
+  if (!props.hashId) return
   lastSavedAnchor = anchor
   try {
     await api.post('/progress', {
-      item_path: props.path,
+      hash_id: props.hashId,
       location: JSON.stringify({ anchor })
     })
   } catch (e) {
@@ -78,8 +79,9 @@ const saveProgress = async (anchor: number) => {
 }
 
 const loadProgress = async (): Promise<number | null> => {
+  if (!props.hashId) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.path)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
     try {
       const data = JSON.parse(res.data.location)
       const a = parseInt(data.anchor)

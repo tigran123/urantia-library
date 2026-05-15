@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ path: string }>()
+const props = defineProps<{ path: string; hashId: string }>()
 
 const viewer = ref<HTMLElement | null>(null)
 let book: Book | null = null
@@ -83,10 +83,10 @@ const onFontFamilyChange = (e: Event) => {
 }
 
 const saveProgress = async (cfi: string) => {
-  if (!cfi) return
+  if (!cfi || !props.hashId) return
   try {
     await api.post('/progress', {
-      item_path: props.path,
+      hash_id: props.hashId,
       location: cfi
     })
   } catch (e) {
@@ -95,8 +95,9 @@ const saveProgress = async (cfi: string) => {
 }
 
 const loadProgress = async () => {
+  if (!props.hashId) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.path)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
     return res.data.location
   } catch (e: any) {
     if (e.response?.status !== 404) {

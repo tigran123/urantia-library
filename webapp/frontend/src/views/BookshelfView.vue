@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
-import { DocumentIcon, FolderIcon, BookmarkIcon, TrashIcon, ArrowLeftIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, BookmarkIcon, TrashIcon, ArrowLeftIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 
 const router = useRouter()
@@ -27,10 +27,10 @@ onMounted(() => {
   loadFavorites()
 })
 
-const removeFavorite = async (path: string) => {
+const removeFavorite = async (hash_id: string) => {
   try {
-    await api.delete(`/favorites/${encodeURIComponent(path)}`)
-    favorites.value = favorites.value.filter(f => f.path !== path)
+    await api.delete(`/favorites/${encodeURIComponent(hash_id)}`)
+    favorites.value = favorites.value.filter(f => f.hash_id !== hash_id)
   } catch (err: any) {
     console.error(err)
   }
@@ -87,48 +87,27 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
     <div v-else class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
       <ul class="divide-y divide-gray-100 dark:divide-gray-700">
-        <li v-for="match in favorites" :key="match.path" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors p-4">
-          <div class="flex gap-4">
-            <!-- Icon/Cover -->
-            <div class="flex-shrink-0">
-               <div v-if="match.is_dir" class="h-12 w-12 flex items-center justify-center bg-blue-50 dark:bg-gray-700/50 rounded-lg">
-                 <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500" />
-               </div>
-               <div v-else class="h-16 w-12 flex items-center justify-center bg-gray-100 dark:bg-gray-900 rounded shadow-sm overflow-hidden border border-gray-200 dark:border-gray-700">
-                 <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" class="w-full h-full object-contain" />
-                 <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
-               </div>
-            </div>
-
-            <!-- Details -->
-            <div class="flex-1 min-w-0">
-              <div class="flex items-start justify-between">
-                <div>
-                  <router-link v-if="!match.is_dir" :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 dark:text-blue-400 hover:underline break-words">
-                    {{ formatFilename(match.name, match.is_dir) }}
-                  </router-link>
-                  <template v-else>
-                    <a v-if="match.path.startsWith('Websites/')" :href="getFullUrl(`/api/files/${match.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="text-lg font-medium text-blue-600 dark:text-blue-400 hover:underline break-words">
-                      {{ formatFilename(match.name, match.is_dir) }}
-                    </a>
-                    <router-link v-else :to="`/browse/${match.path}`" class="text-lg font-medium text-blue-600 dark:text-blue-400 hover:underline break-words">
-                      {{ formatFilename(match.name, match.is_dir) }}
-                    </router-link>
-                  </template>
-                  <p v-if="match.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="match.description"></p>
-                </div>
-                <button @click="removeFavorite(match.path)" class="text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-4 p-2 rounded-full hover:bg-red-50 dark:hover:bg-red-900/30" :title="$t('app.remove_favorite')">
-                  <TrashIcon class="h-5 w-5" />
-                </button>
+        <li v-for="match in favorites" :key="match.hash_id" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group">
+          <div class="relative flex items-center">
+            <component
+              :is="match.path ? 'router-link' : 'div'"
+              v-bind="match.path ? { to: `/item/${match.path}` } : {}"
+              :class="['flex-1 flex items-center p-4 pr-16 min-w-0', !match.path && 'cursor-not-allowed']"
+            >
+              <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden relative" :class="{ 'opacity-60': !match.path }">
+                <DocumentIcon class="absolute h-6 w-6 text-gray-400 dark:text-gray-600 z-0" />
+                <img :src="getFullUrl(`/api/covers/${match.hash_id}`)" @error="$event.target.style.display = 'none'" class="relative z-10 w-full h-full object-contain bg-gray-100 dark:bg-gray-900" />
               </div>
-
-              <div class="mt-2 text-xs text-gray-400 flex items-center gap-1">
-                 {{ $t('app.location') }}
-                 <router-link :to="`/browse/${match.path.split('/').slice(0, -1).join('/')}`" class="hover:text-blue-500 hover:underline">
-                   /{{ match.path.split('/').slice(0, -1).join('/') || 'Root' }}
-                 </router-link>
+              <div class="flex-1 min-w-0 pr-8" :class="{ 'opacity-60': !match.path }">
+                <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="match.title || match.original_filename">{{ match.title || formatFilename(match.original_filename || '', false) }}</p>
+                <p v-if="match.author" class="text-xs text-gray-600 dark:text-gray-300 truncate mt-0.5" :title="match.author">{{ match.author }}</p>
+                <span v-if="!match.path" class="inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">{{ $t('app.missing_file') }}</span>
+                <p v-if="match.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="match.description"></p>
               </div>
-            </div>
+            </component>
+            <button @click="removeFavorite(match.hash_id)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-gray-400 hover:text-red-500 dark:hover:text-red-400" :title="$t('app.remove_favorite')">
+              <TrashIcon class="h-5 w-5" />
+            </button>
           </div>
         </li>
       </ul>

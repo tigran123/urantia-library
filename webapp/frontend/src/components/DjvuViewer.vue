@@ -7,6 +7,7 @@ const { t } = useI18n({ useScope: 'global' })
 
 const props = defineProps<{
   path: string
+  hashId: string
 }>()
 
 const totalPages = ref(0)
@@ -20,9 +21,10 @@ const imageUrl2 = ref('')
 const isDoublePage = ref(false)
 
 const saveProgress = async (page: number) => {
+  if (!props.hashId) return
   try {
     await api.post('/progress', {
-      item_path: props.path,
+      hash_id: props.hashId,
       location: JSON.stringify({ page: page, isDoublePage: isDoublePage.value })
     })
   } catch (e) {
@@ -31,8 +33,9 @@ const saveProgress = async (page: number) => {
 }
 
 const loadProgress = async () => {
+  if (!props.hashId) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.path)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
     try {
       const data = JSON.parse(res.data.location)
       if (data.isDoublePage !== undefined) {

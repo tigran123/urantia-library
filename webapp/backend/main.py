@@ -169,7 +169,7 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
     return current_user
 
 @app.get("/api/browse")
-async def browse(path: str = "", current_user: models.User = Depends(get_current_user)):
+async def browse(path: str = "", current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     target_dir = os.path.join(BOOKS_DIR, path)
     if not os.path.abspath(target_dir).startswith(os.path.abspath(BOOKS_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -185,7 +185,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         raise HTTPException(status_code=500, detail=str(e))
 
     for entry in entries:
-        if entry in [".claude", ".htaccess", "header.html", "exclude.txt", "md5sums.txt", "tree-index.html", ".covers", "webapp"]:
+        if entry in [".claude", ".htaccess", ".vscode", ".data", "md5sums.txt", ".covers", "webapp"]:
             continue
         if entry.startswith(".authors") or entry == "urantia-library":
             if not path: # Top level exclusions
@@ -210,7 +210,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
             size = 0
             mtime = None
 
-        items.append({
+        item_data = {
             "name": entry,
             "is_dir": is_dir,
             "description": descriptions.get(entry, ""),
@@ -218,7 +218,24 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
             "size": size,
             "mtime": mtime,
             "path": os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
-        })
+        }
+
+        if os.path.islink(entry_path):
+            try:
+                file_hash = os.path.basename(os.readlink(entry_path))
+                item_data["hash_id"] = file_hash
+                book = db.query(models.Book).filter(models.Book.id == file_hash).first()
+                if book:
+                    if book.title:
+                        item_data["title"] = book.title
+                    if book.author:
+                        item_data["author"] = book.author
+                    if book.description:
+                        item_data["description"] = book.description
+            except OSError:
+                pass
+
+        items.append(item_data)
 
     # Sort: folders first, then files
     items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
@@ -254,7 +271,7 @@ def parse_search_query(q: str):
     return q, filters
 
 @app.get("/api/search")
-async def search(q: str = "", current_user: models.User = Depends(get_current_user)):
+async def search(q: str = "", current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not q:
         return {"matches": []}
 
@@ -289,7 +306,7 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
         descriptions = get_htaccess_descriptions(root)
 
         for entry in dirs + files:
-            if entry in [".htaccess", "000-browse.php", "header.html", "exclude.txt"]:
+            if entry in [".htaccess"]:
                 continue
 
             entry_path = os.path.join(root, entry)
@@ -321,14 +338,31 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
             if os.path.exists(cover_path):
                 cover_url = f"/api/files/{os.path.relpath(cover_path, BOOKS_DIR).replace(chr(92), '/')}"
 
-            matches.append({
+            match_data = {
                 "name": entry,
                 "is_dir": is_dir,
                 "description": desc,
                 "path": rel_path,
                 "parent_dir": rel_root.replace("\\", "/"),
                 "cover_url": cover_url
-            })
+            }
+
+            if os.path.islink(entry_path):
+                try:
+                    file_hash = os.path.basename(os.readlink(entry_path))
+                    match_data["hash_id"] = file_hash
+                    book = db.query(models.Book).filter(models.Book.id == file_hash).first()
+                    if book:
+                        if book.title:
+                            match_data["title"] = book.title
+                        if book.author:
+                            match_data["author"] = book.author
+                        if book.description:
+                            match_data["description"] = book.description
+                except OSError:
+                    pass
+
+            matches.append(match_data)
 
             if len(matches) > 100: # Limit results
                 break
@@ -847,81 +881,67 @@ async def djvu_page(path: str, page: int, current_user: models.User = Depends(ge
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def get_item_info(rel_path: str):
-    target_path = os.path.join(BOOKS_DIR, rel_path)
-    if not os.path.exists(target_path) or not os.path.abspath(target_path).startswith(os.path.abspath(BOOKS_DIR)):
-        return None
-    is_dir = os.path.isdir(target_path)
-    parent_dir = os.path.dirname(target_path)
-    entry = os.path.basename(target_path)
-
-    descriptions = get_htaccess_descriptions(parent_dir)
-    desc = descriptions.get(entry, "")
-
-    cover_path = os.path.join(parent_dir, ".covers", f"{entry}.jpg")
-    cover_url = None
-    if os.path.exists(cover_path):
-        cover_url = f"/api/files/{os.path.relpath(cover_path, BOOKS_DIR).replace(chr(92), '/')}"
-
-    try:
-        size = os.path.getsize(target_path) if not is_dir else 0
-        mtime = datetime.fromtimestamp(os.path.getmtime(target_path)).isoformat()
-    except OSError:
-        size = 0
-        mtime = None
-
-    return {
-        "name": entry,
-        "is_dir": is_dir,
-        "description": desc,
-        "cover_url": cover_url,
-        "size": size,
-        "mtime": mtime,
-        "path": rel_path.replace("\\", "/")
-    }
+@app.get("/api/covers/{hash_id}")
+async def get_cover(hash_id: str, current_user: models.User = Depends(get_current_user)):
+    cover_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{hash_id}.jpg")
+    if not os.path.exists(cover_path) or not os.path.isfile(cover_path):
+        raise HTTPException(status_code=404, detail="Cover not found")
+    return FileResponse(cover_path)
 
 @app.get("/api/favorites")
 async def get_favorites(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    favorites = db.query(models.Favorite).filter(models.Favorite.user_id == current_user.id).all()
-    items = []
-    for fav in favorites:
-        item = get_item_info(fav.item_path)
-        if item:
-            item["favorite_id"] = fav.id
-            items.append(item)
-    return {"items": items}
+    results = db.query(models.Favorite, models.Book, models.BookLocation).join(
+        models.Book, models.Favorite.hash_id == models.Book.id
+    ).outerjoin(
+        models.BookLocation, models.Book.id == models.BookLocation.hash_id
+    ).filter(models.Favorite.user_id == current_user.id).all()
+
+    fav_dict = {}
+    for fav, book, loc in results:
+        if fav.id not in fav_dict:
+            fav_dict[fav.id] = {
+                "favorite_id": fav.id,
+                "hash_id": fav.hash_id,
+                "title": book.title,
+                "author": book.author,
+                "description": book.description,
+                "original_filename": book.original_filename,
+                "path": loc.symlink_path if loc else None
+            }
+
+    return {"items": list(fav_dict.values())}
 
 @app.post("/api/favorites", response_model=schemas.FavoriteResponse)
 async def add_favorite(fav: schemas.FavoriteCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     existing = db.query(models.Favorite).filter(
         models.Favorite.user_id == current_user.id,
-        models.Favorite.item_path == fav.item_path
+        models.Favorite.hash_id == fav.hash_id
     ).first()
     if existing:
         return existing
 
-    new_fav = models.Favorite(user_id=current_user.id, item_path=fav.item_path)
+    new_fav = models.Favorite(user_id=current_user.id, hash_id=fav.hash_id)
     db.add(new_fav)
     db.commit()
     db.refresh(new_fav)
     return new_fav
 
-@app.delete("/api/favorites/{item_path:path}")
-async def remove_favorite(item_path: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@app.delete("/api/favorites/{hash_id}")
+async def remove_favorite(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     fav = db.query(models.Favorite).filter(
         models.Favorite.user_id == current_user.id,
-        models.Favorite.item_path == item_path
+        models.Favorite.hash_id == hash_id
     ).first()
     if fav:
         db.delete(fav)
         db.commit()
     return {"message": "Removed"}
 
-@app.get("/api/progress/{item_path:path}", response_model=schemas.ReadingProgressResponse)
-async def get_progress(item_path: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+@app.get("/api/progress/{hash_id}", response_model=schemas.ReadingProgressResponse)
+async def get_progress(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     progress = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
-        models.ReadingProgress.item_path == item_path
+        models.ReadingProgress.hash_id == hash_id
     ).first()
     if not progress:
         raise HTTPException(status_code=404, detail="No progress found")
@@ -931,7 +951,7 @@ async def get_progress(item_path: str, current_user: models.User = Depends(get_c
 async def update_progress(prog: schemas.ReadingProgressCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     existing = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
-        models.ReadingProgress.item_path == prog.item_path
+        models.ReadingProgress.hash_id == prog.hash_id
     ).first()
     if existing:
         existing.location = prog.location
@@ -939,7 +959,7 @@ async def update_progress(prog: schemas.ReadingProgressCreate, current_user: mod
         db.refresh(existing)
         return existing
 
-    new_prog = models.ReadingProgress(user_id=current_user.id, item_path=prog.item_path, location=prog.location)
+    new_prog = models.ReadingProgress(user_id=current_user.id, hash_id=prog.hash_id, location=prog.location)
     db.add(new_prog)
     db.commit()
     db.refresh(new_prog)

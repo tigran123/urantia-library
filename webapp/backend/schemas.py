@@ -22,24 +22,24 @@ class UserSetPassword(BaseModel):
     password: str
 
 class FavoriteCreate(BaseModel):
-    item_path: str
+    hash_id: str
 
 class FavoriteResponse(BaseModel):
     id: int
     user_id: int
-    item_path: str
+    hash_id: str
 
     class Config:
         from_attributes = True
 
 class ReadingProgressCreate(BaseModel):
-    item_path: str
+    hash_id: str
     location: str
 
 class ReadingProgressResponse(BaseModel):
     id: int
     user_id: int
-    item_path: str
+    hash_id: str
     location: str
 
     class Config:

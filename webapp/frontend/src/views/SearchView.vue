@@ -11,7 +11,7 @@ const matches = ref<any[]>([])
 const loading = ref(false)
 const searched = ref(false)
 const error = ref('')
-const favoritePaths = ref<Set<string>>(new Set())
+const favoriteIds = ref<Set<string>>(new Set())
 
 const parsedSearch = computed(() => {
   const q = (route.query.q as string) || ''
@@ -51,26 +51,28 @@ const removeFilter = (fullMatch: string) => {
 const loadFavorites = async () => {
   try {
     const res = await api.get('/favorites')
-    const paths = res.data.items.map((f: any) => f.path)
-    favoritePaths.value = new Set(paths)
+    const ids = res.data.items.map((f: any) => f.hash_id)
+    favoriteIds.value = new Set(ids)
   } catch (err) {
     console.error('Failed to load favorites', err)
   }
 }
 
-const toggleFavorite = async (path: string, event: Event) => {
+const toggleFavorite = async (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
+  if (!item.hash_id) return
+  const id = item.hash_id
   try {
-    const newPaths = new Set(favoritePaths.value)
-    if (favoritePaths.value.has(path)) {
-      await api.delete(`/favorites/${encodeURIComponent(path)}`)
-      newPaths.delete(path)
+    const newIds = new Set(favoriteIds.value)
+    if (favoriteIds.value.has(id)) {
+      await api.delete(`/favorites/${encodeURIComponent(id)}`)
+      newIds.delete(id)
     } else {
-      await api.post('/favorites', { item_path: path })
-      newPaths.add(path)
+      await api.post('/favorites', { hash_id: id })
+      newIds.add(id)
     }
-    favoritePaths.value = newPaths
+    favoriteIds.value = newIds
   } catch (err) {
     console.error('Failed to toggle favorite', err)
   }
@@ -193,7 +195,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <div class="flex items-start justify-between">
                 <div>
                   <router-link v-if="!match.is_dir" :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
-                    {{ formatFilename(match.name, match.is_dir) }}
+                    {{ match.title || formatFilename(match.name, match.is_dir) }}
                   </router-link>
                   <template v-else>
                     <a v-if="match.path.startsWith('Websites/')" :href="getFullUrl(`/api/files/${match.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
@@ -203,6 +205,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                       {{ formatFilename(match.name, match.is_dir) }}
                     </router-link>
                   </template>
+                  <p v-if="match.author" class="text-sm text-gray-700 mt-0.5" :title="match.author">{{ match.author }}</p>
+                  <p v-if="match.title" class="text-xs text-gray-500 mt-0.5 break-all">{{ match.name }}</p>
                   <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-3" v-html="match.description.replace(new RegExp(route.query.q as string, 'gi'), (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`)"></p>
                 </div>
               </div>
@@ -216,8 +220,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             </div>
 
             <!-- Bookmark Button -->
-            <button @click.prevent="toggleFavorite(match.path, $event)" class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoritePaths.has(match.path), 'text-gray-400 hover:text-blue-500': !favoritePaths.has(match.path) }" :title="favoritePaths.has(match.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-              <BookmarkIconSolid v-if="favoritePaths.has(match.path)" class="h-5 w-5" />
+            <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(match.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(match.hash_id) }" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+              <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" class="h-5 w-5" />
               <BookmarkIcon v-else class="h-5 w-5" />
             </button>
           </div>

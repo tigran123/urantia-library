@@ -17,30 +17,31 @@ const loading = ref(true)
 const error = ref('')
 const currentPath = ref('')
 const originalTitle = ref(document.title)
-const favoritePaths = ref<Set<string>>(new Set())
+const favoriteIds = ref<Set<string>>(new Set())
 
 const loadFavorites = async () => {
   try {
     const res = await api.get('/favorites')
-    const paths = res.data.items.map((f: any) => f.path)
-    favoritePaths.value = new Set(paths)
+    const ids = res.data.items.map((f: any) => f.hash_id)
+    favoriteIds.value = new Set(ids)
   } catch (err) {
     console.error('Failed to load favorites', err)
   }
 }
 
 const toggleFavorite = async () => {
-  if (!item.value) return
+  if (!item.value || !item.value.hash_id) return
+  const id = item.value.hash_id
   try {
-    const newPaths = new Set(favoritePaths.value)
-    if (favoritePaths.value.has(currentPath.value)) {
-      await api.delete(`/favorites/${encodeURIComponent(currentPath.value)}`)
-      newPaths.delete(currentPath.value)
+    const newIds = new Set(favoriteIds.value)
+    if (favoriteIds.value.has(id)) {
+      await api.delete(`/favorites/${encodeURIComponent(id)}`)
+      newIds.delete(id)
     } else {
-      await api.post('/favorites', { item_path: currentPath.value })
-      newPaths.add(currentPath.value)
+      await api.post('/favorites', { hash_id: id })
+      newIds.add(id)
     }
-    favoritePaths.value = newPaths
+    favoriteIds.value = newIds
   } catch (err) {
     console.error('Failed to toggle favorite', err)
   }
@@ -182,19 +183,19 @@ watch(
           <div>
             <div class="flex items-start justify-between gap-4">
               <h1 class="text-2xl md:text-4xl font-serif font-bold text-gray-900 dark:text-gray-100 break-words leading-tight">
-                {{ item.name.replace(/\.[^/.]+$/, "") }}
+                {{ item.title || item.name.replace(/\.[^/.]+$/, "") }}
               </h1>
-              <button @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex-shrink-0 mt-1" :class="{ 'text-blue-500': favoritePaths.has(currentPath), 'text-gray-400 hover:text-blue-500': !favoritePaths.has(currentPath) }" :title="favoritePaths.has(currentPath) ? t('app.remove_favorite') : t('app.add_favorite')">
-                <BookmarkIconSolid v-if="favoritePaths.has(currentPath)" class="h-7 w-7" />
+              <button v-if="item.hash_id" @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex-shrink-0 mt-1" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? t('app.remove_favorite') : t('app.add_favorite')">
+                <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-7 w-7" />
                 <BookmarkIcon v-else class="h-7 w-7" />
               </button>
             </div>
-            <p class="mt-2 text-lg text-gray-500 dark:text-gray-400 font-sans break-all">
+            <h2 v-if="item.author" class="mt-2 text-xl md:text-2xl text-gray-700 dark:text-gray-300 font-medium">
+              {{ item.author }}
+            </h2>
+            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400 font-sans break-all">
               {{ item.name }}
             </p>
-          </div>
-          
-          <div v-if="item.description" class="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300" v-html="item.description">
           </div>
           
           <!-- Metadata Table -->
@@ -228,6 +229,10 @@ watch(
                       /{{ currentPath.split('/').slice(0, -1).join('/') || 'Root' }}
                     </router-link>
                   </td>
+                </tr>
+                <tr v-if="item.description" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">Description</th>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400 prose dark:prose-invert max-w-none text-sm" v-html="item.description"></td>
                 </tr>
               </tbody>
             </table>
@@ -272,13 +277,13 @@ watch(
           <iframe v-else-if="isPdf" :src="getDownloadUrl()" class="w-full h-[80vh] bg-white"></iframe>
 
           <!-- DjVu Viewer -->
-          <DjvuViewer v-else-if="isDjvu" :path="item.path" />
+          <DjvuViewer v-else-if="isDjvu" :path="item.path" :hash-id="item.hash_id" />
 
           <!-- EPUB Viewer -->
-          <EpubViewer v-else-if="isEpub" :path="item.path" />
+          <EpubViewer v-else-if="isEpub" :path="item.path" :hash-id="item.hash_id" />
 
           <!-- FB2 Viewer (also handles .fb2.zip) -->
-          <Fb2Viewer v-else-if="isFb2" :path="item.path" />
+          <Fb2Viewer v-else-if="isFb2" :path="item.path" :hash-id="item.hash_id" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">
