@@ -214,7 +214,6 @@ const handleLogout = async () => {
         <ul class="list-disc pl-5 space-y-3 text-sm text-gray-700 dark:text-gray-300">
            <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:Law/</code> {{ t('search.tip_path') }}</li>
            <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:djvu</code> {{ t('search.tip_ext_or') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:pdf</code> {{ t('search.tip_ext') }}</li>
-           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">type:dir</code> {{ t('search.tip_type') }}</li>
            <li>{{ t('search.tip_combine') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:History/ ext:epub rome</code></li>
         </ul>
 

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, func
 from fastapi.responses import JSONResponse, FileResponse, Response
 import os
 import re
@@ -80,26 +81,6 @@ async def strip_charset_for_websites(request: Request, call_next):
 
 BOOKS_DIR = os.environ.get("BOOKS_DIR", "/Books")
 
-# Regex to parse .htaccess AddDescription
-DESCRIPTION_REGEX = re.compile(r'^AddDescription\s+"(.*?)"\s+(.*)$')
-
-def get_htaccess_descriptions(dir_path: str) -> Dict[str, str]:
-    descriptions = {}
-    htaccess_path = os.path.join(dir_path, ".htaccess")
-    if os.path.exists(htaccess_path):
-        try:
-            with open(htaccess_path, "r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    match = DESCRIPTION_REGEX.match(line.strip())
-                    if match:
-                        desc, filename = match.groups()
-                        # Some filenames might have quotes around them, or just be literal.
-                        filename = filename.strip('"')
-                        descriptions[filename] = desc
-        except Exception as e:
-            print(f"Error reading {htaccess_path}: {e}")
-    return descriptions
-
 async def get_current_user(access_token: str = Cookie(None), db: Session = Depends(get_db)):
     if not access_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -176,7 +157,6 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
     if not os.path.exists(target_dir) or not os.path.isdir(target_dir):
         raise HTTPException(status_code=404, detail="Directory not found")
 
-    descriptions = get_htaccess_descriptions(target_dir)
     items = []
 
     try:
@@ -185,23 +165,13 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         raise HTTPException(status_code=500, detail=str(e))
 
     for entry in entries:
-        if entry in [".claude", ".htaccess", ".vscode", ".data", "md5sums.txt", ".covers", "webapp"]:
+        if entry in [".claude", ".vscode", ".data", "md5sums.txt", "urantia-library"]:
             continue
-        if entry.startswith(".authors") or entry == "urantia-library":
-            if not path: # Top level exclusions
-                continue
 
         entry_path = os.path.join(target_dir, entry)
         if not os.path.exists(entry_path):
             continue
         is_dir = os.path.isdir(entry_path)
-
-        # Check cover
-        cover_url = None
-        cover_path = os.path.join(target_dir, ".covers", f"{entry}.jpg")
-        if os.path.exists(cover_path):
-            rel_cover = os.path.relpath(cover_path, BOOKS_DIR)
-            cover_url = f"/api/files/{rel_cover.replace(chr(92), '/')}"
 
         try:
             size = os.path.getsize(entry_path) if not is_dir else 0
@@ -213,8 +183,8 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         item_data = {
             "name": entry,
             "is_dir": is_dir,
-            "description": descriptions.get(entry, ""),
-            "cover_url": cover_url,
+            "description": "",
+            "cover_url": None,
             "size": size,
             "mtime": mtime,
             "path": os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
@@ -224,6 +194,9 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
             try:
                 file_hash = os.path.basename(os.readlink(entry_path))
                 item_data["hash_id"] = file_hash
+                cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{file_hash}.jpg")
+                if os.path.exists(cover_fs_path):
+                    item_data["cover_url"] = f"/api/covers/{file_hash}"
                 book = db.query(models.Book).filter(models.Book.id == file_hash).first()
                 if book:
                     if book.title:
@@ -246,7 +219,6 @@ def parse_search_query(q: str):
     filters = {
         "path": None,
         "ext": None,
-        "type": None
     }
 
     path_match = re.search(r'path:([^\s]+)', q)
@@ -261,12 +233,6 @@ def parse_search_query(q: str):
             filters["ext"] = '.' + filters["ext"]
         q = q.replace(ext_match.group(0), '')
 
-    type_match = re.search(r'type:(dir|file)\b', q, re.IGNORECASE)
-    if type_match:
-        t = type_match.group(1).lower()
-        filters["type"] = t
-        q = q.replace(type_match.group(0), '')
-
     q = q.strip().lower()
     return q, filters
 
@@ -277,97 +243,47 @@ async def search(q: str = "", current_user: models.User = Depends(get_current_us
 
     query_lower, filters = parse_search_query(q)
 
-    # If the user only typed "type:dir" or "path:Law", we still want to return results
-    # even if query_lower is empty. So we shouldn't bail early if query_lower is empty,
-    # unless there are also no filters. But if not q handled the truly empty case.
+    query = db.query(models.Book, models.BookLocation).join(
+        models.BookLocation, models.Book.id == models.BookLocation.hash_id
+    )
+
+    if query_lower:
+        like = f"%{query_lower}%"
+        query = query.filter(or_(
+            func.lower(models.Book.title).like(like),
+            func.lower(models.Book.author).like(like),
+            func.lower(models.Book.description).like(like),
+        ))
+
+    if filters["path"]:
+        query = query.filter(
+            func.lower(models.BookLocation.symlink_path).like(f"{filters['path']}%")
+        )
+
+    if filters["ext"]:
+        # parse_search_query normalizes ext to start with a dot.
+        query = query.filter(
+            func.lower(models.BookLocation.symlink_path).like(f"%{filters['ext']}")
+        )
+
+    results = query.limit(100).all()
 
     matches = []
-
-    # Simple recursive search
-    for root, dirs, files in os.walk(BOOKS_DIR):
-        # Exclude hidden and special dirs
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['urantia-library', 'Incoming', 'Html-Docs']]
-
-        rel_root = os.path.relpath(root, BOOKS_DIR)
-        if rel_root == ".":
-            rel_root = ""
-
-        rel_root_unix = rel_root.replace("\\", "/")
-
-        # Optimization: Filter by path early to avoid walking unnecessary directories
-        if filters["path"]:
-            # If the current dir isn't a prefix of the target path, and the target path isn't a prefix of the current dir
-            # e.g., current="Other", target="Law/History" -> skip "Other"
-            if rel_root_unix and not filters["path"].startswith(rel_root_unix.lower() + "/") and not rel_root_unix.lower().startswith(filters["path"]):
-                if filters["path"] != rel_root_unix.lower():
-                    dirs[:] = []
-                    continue
-
-        descriptions = get_htaccess_descriptions(root)
-
-        for entry in dirs + files:
-            if entry in [".htaccess"]:
-                continue
-
-            entry_path = os.path.join(root, entry)
-            if not os.path.exists(entry_path):
-                continue
-            rel_path = os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
-            desc = descriptions.get(entry, "")
-            is_dir = os.path.isdir(entry_path)
-
-            # Apply filters
-            if filters["path"] and not rel_path.lower().startswith(filters["path"]):
-                continue
-
-            if filters["ext"] and is_dir:
-                continue # Directories don't have extensions in this context
-            if filters["ext"] and not entry.lower().endswith(filters["ext"]):
-                continue
-
-            if filters["type"] == "dir" and not is_dir:
-                continue
-            if filters["type"] == "file" and is_dir:
-                continue
-
-            if query_lower and query_lower not in entry.lower() and query_lower not in desc.lower():
-                continue
-
-            cover_path = os.path.join(root, ".covers", f"{entry}.jpg")
-            cover_url = None
-            if os.path.exists(cover_path):
-                cover_url = f"/api/files/{os.path.relpath(cover_path, BOOKS_DIR).replace(chr(92), '/')}"
-
-            match_data = {
-                "name": entry,
-                "is_dir": is_dir,
-                "description": desc,
-                "path": rel_path,
-                "parent_dir": rel_root.replace("\\", "/"),
-                "cover_url": cover_url
-            }
-
-            if os.path.islink(entry_path):
-                try:
-                    file_hash = os.path.basename(os.readlink(entry_path))
-                    match_data["hash_id"] = file_hash
-                    book = db.query(models.Book).filter(models.Book.id == file_hash).first()
-                    if book:
-                        if book.title:
-                            match_data["title"] = book.title
-                        if book.author:
-                            match_data["author"] = book.author
-                        if book.description:
-                            match_data["description"] = book.description
-                except OSError:
-                    pass
-
-            matches.append(match_data)
-
-            if len(matches) > 100: # Limit results
-                break
-        if len(matches) > 100:
-            break
+    for book, loc in results:
+        sym_path = loc.symlink_path
+        cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{book.id}.jpg")
+        cover_url = f"/api/covers/{book.id}" if os.path.exists(cover_fs_path) else None
+        matches.append({
+            "name": os.path.basename(sym_path),
+            "is_dir": False,
+            "path": sym_path,
+            "parent_dir": os.path.dirname(sym_path),
+            "cover_url": cover_url,
+            "hash_id": book.id,
+            "title": book.title,
+            "author": book.author,
+            "description": book.description,
+        })
 
     return {"matches": matches}
 

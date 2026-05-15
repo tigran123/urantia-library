@@ -2,7 +2,7 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
-import { DocumentIcon, FolderIcon, MagnifyingGlassIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
@@ -28,12 +28,6 @@ const parsedSearch = computed(() => {
   if (extMatch) {
     filters.push({ key: 'Extension', value: extMatch[1].replace(/['"]/g, ''), fullMatch: extMatch[0] })
     text = text.replace(extMatch[0], '')
-  }
-
-  const typeMatch = text.match(/type:(dir|file)\b/i)
-  if (typeMatch) {
-    filters.push({ key: 'Type', value: typeMatch[1], fullMatch: typeMatch[0] })
-    text = text.replace(typeMatch[0], '')
   }
 
   return {
@@ -113,6 +107,27 @@ const getFullUrl = (url: string) => {
   return api.defaults.baseURL?.replace('/api', '') + url
 }
 
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;')
+   .replace(/</g, '&lt;')
+   .replace(/>/g, '&gt;')
+   .replace(/"/g, '&quot;')
+   .replace(/'/g, '&#39;')
+
+const wrapMatches = (html: string) => {
+  const term = parsedSearch.value.text
+  if (!term || !html) return html || ''
+  return html.replace(
+    new RegExp(escapeRegex(term), 'gi'),
+    (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`
+  )
+}
+
+const highlightText = (text: string) => wrapMatches(escapeHtml(text || ''))
+const highlightHtml = (html: string) => wrapMatches(html || '')
+
 const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) => {
   if (isDir || name.length <= maxLength) return name;
   const extIndex = name.lastIndexOf('.');
@@ -166,7 +181,6 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         <ul class="list-disc pl-5 space-y-1">
            <li><code class="bg-gray-200 px-1 rounded text-gray-800">path:Law/</code> {{ $t('search.tip_path') }}</li>
            <li><code class="bg-gray-200 px-1 rounded text-gray-800">ext:djvu</code> {{ $t('search.tip_ext_or') }} <code class="bg-gray-200 px-1 rounded text-gray-800">ext:pdf</code> {{ $t('search.tip_ext') }}</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">type:dir</code> {{ $t('search.tip_type') }}</li>
            <li>{{ $t('search.tip_combine') }} <code class="bg-gray-200 px-1 rounded text-gray-800">path:History/ ext:epub rome</code></li>
         </ul>
       </div>
@@ -181,10 +195,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <div class="relative flex gap-4">
             <!-- Icon/Cover -->
             <div class="flex-shrink-0">
-               <div v-if="match.is_dir" class="h-12 w-12 flex items-center justify-center bg-blue-50 rounded-lg">
-                 <FolderIcon class="h-8 w-8 text-blue-400" />
-               </div>
-               <div v-else class="h-16 w-12 flex items-center justify-center bg-gray-100 rounded shadow-sm overflow-hidden border border-gray-200">
+               <div class="h-16 w-12 flex items-center justify-center bg-gray-100 rounded shadow-sm overflow-hidden border border-gray-200">
                  <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" class="w-full h-full object-contain" />
                  <DocumentIcon v-else class="h-6 w-6 text-gray-400" />
                </div>
@@ -194,20 +205,12 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             <div class="flex-1 min-w-0 pr-12">
               <div class="flex items-start justify-between">
                 <div>
-                  <router-link v-if="!match.is_dir" :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
-                    {{ match.title || formatFilename(match.name, match.is_dir) }}
+                  <router-link :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
+                    <span v-html="highlightText(match.title || formatFilename(match.name, match.is_dir))"></span>
                   </router-link>
-                  <template v-else>
-                    <a v-if="match.path.startsWith('Websites/')" :href="getFullUrl(`/api/files/${match.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
-                      {{ formatFilename(match.name, match.is_dir) }}
-                    </a>
-                    <router-link v-else :to="`/browse/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
-                      {{ formatFilename(match.name, match.is_dir) }}
-                    </router-link>
-                  </template>
-                  <p v-if="match.author" class="text-sm text-gray-700 mt-0.5" :title="match.author">{{ match.author }}</p>
+                  <p v-if="match.author" class="text-sm text-gray-700 mt-0.5" :title="match.author" v-html="highlightText(match.author)"></p>
                   <p v-if="match.title" class="text-xs text-gray-500 mt-0.5 break-all">{{ match.name }}</p>
-                  <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-3" v-html="match.description.replace(new RegExp(route.query.q as string, 'gi'), (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`)"></p>
+                  <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-3" v-html="highlightHtml(match.description)"></p>
                 </div>
               </div>
 

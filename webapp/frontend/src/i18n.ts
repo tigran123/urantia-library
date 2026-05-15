@@ -79,7 +79,6 @@ const messages = {
       tip_path: 'to search within a specific directory.',
       tip_ext_or: 'or',
       tip_ext: 'to find specific file types.',
-      tip_type: 'to find only directories.',
       tip_combine: 'Combine them:',
       found_matches: 'Found {count} matches (limit 100)',
       got_it: 'Got it'
@@ -174,7 +173,6 @@ const messages = {
       tip_path: 'для поиска в определенной директории.',
       tip_ext_or: 'или',
       tip_ext: 'для поиска определенных типов файлов.',
-      tip_type: 'для поиска только директорий.',
       tip_combine: 'Комбинируйте их:',
       found_matches: 'Найдено {count} совпадений (лимит 100)',
       got_it: 'Понятно'
