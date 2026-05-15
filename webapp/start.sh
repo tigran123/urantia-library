@@ -9,7 +9,7 @@ if [ ! -d "backend/.venv" ]; then
     echo "Setting up Python virtual environment..."
     cd backend
     uv venv
-    uv pip install fastapi uvicorn aiofiles
+    uv pip sync requirements.txt
     cd ..
 fi
 
@@ -17,12 +17,12 @@ fi
 if [ ! -d "frontend/dist" ]; then
     echo "Building frontend..."
     cd frontend
-    npm install
+    npm ci
     npm run build
     cd ..
 fi
 
 echo "Starting Urantia Library Web Server..."
 cd backend
-source .venv/bin/activate
-exec uvicorn main:app --host 127.0.0.1 --port 8000 --root-path /library --no-access-log
+. .venv/bin/activate
+exec uvicorn main:app --host 127.0.0.1 --port 8000 --root-path /library --no-access-log --reload

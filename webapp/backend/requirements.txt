@@ -7,7 +7,9 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
     # via pydantic
 anyio==4.13.0
-    # via starlette
+    # via
+    #   starlette
+    #   watchfiles
 bcrypt==5.0.0
     # via -r requirements.in
 click==8.3.3
@@ -24,6 +26,8 @@ greenlet==3.5.0
     # via sqlalchemy
 h11==0.16.0
     # via uvicorn
+httptools==0.7.1
+    # via uvicorn
 idna==3.14
     # via
     #   anyio
@@ -38,8 +42,12 @@ pydantic-core==2.46.4
     # via pydantic
 pyjwt==2.12.1
     # via -r requirements.in
+python-dotenv==1.2.2
+    # via uvicorn
 python-multipart==0.0.28
     # via -r requirements.in
+pyyaml==6.0.3
+    # via uvicorn
 sqlalchemy==2.0.49
     # via -r requirements.in
 starlette==1.0.0
@@ -59,3 +67,9 @@ typing-inspection==0.4.2
     #   pydantic
 uvicorn==0.46.0
     # via -r requirements.in
+uvloop==0.22.1
+    # via uvicorn
+watchfiles==1.1.1
+    # via uvicorn
+websockets==16.0
+    # via uvicorn
