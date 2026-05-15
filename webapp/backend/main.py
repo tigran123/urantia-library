@@ -295,7 +295,7 @@ async def search(
     total_pages = (total + per_page - 1) // per_page
 
     results = (
-        query.order_by(models.Book.title, models.Book.id)
+        query.order_by(models.Book.title, models.Book.id, models.BookLocation.symlink_path)
         .offset((page - 1) * per_page)
         .limit(per_page)
         .all()
