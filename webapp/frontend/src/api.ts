@@ -10,8 +10,11 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      // Redirect to login if unauthorized
-      if (router.currentRoute.value.name !== 'login') {
+      // Public routes that don't require an active session
+      const publicRoutes = ['login', 'register', 'set-password']
+
+      // Redirect to login if unauthorized AND not already on a public page
+      if (router.currentRoute.value.name && !publicRoutes.includes(router.currentRoute.value.name.toString())) {
         router.push({ name: 'login' })
       }
     }
