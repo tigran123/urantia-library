@@ -27,7 +27,7 @@ const tabs = computed(() => [
   { id: 'Search', label: t('settings.search') }
 ])
 
-const PER_PAGE_OPTIONS = [25, 50, 100, 200]
+const PER_PAGE_OPTIONS = [10, 25, 50, 100, 200]
 const searchPerPage = ref<number>(50)
 const isSavingSearch = ref(false)
 
