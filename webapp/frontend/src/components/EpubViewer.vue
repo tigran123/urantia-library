@@ -4,7 +4,14 @@ import ePub, { Book, Rendition, type Location } from 'epubjs'
 import type { NavItem } from 'epubjs/types/navigation'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
-import { Bars3Icon, ChevronDoubleLeftIcon } from '@heroicons/vue/24/outline'
+import {
+  Bars3Icon,
+  ChevronDoubleLeftIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ArrowsPointingOutIcon,
+  ArrowsPointingInIcon,
+} from '@heroicons/vue/24/outline'
 import EpubTocNode from './EpubTocNode.vue'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -24,6 +31,7 @@ const toc = ref<NavItem[]>([])
 const tocOpen = ref(true)
 const bookTitle = ref('')
 const bookAuthors = ref<string[]>([])
+const immersive = ref(false)
 
 const FONT_SCALE_KEY = 'reader-font-scale'
 const FONT_FAMILY_KEY = 'reader-font-family'
@@ -65,7 +73,7 @@ const currentCfi = (): string | undefined => {
 }
 
 // Wrap mutations so the reader stays on the same content position after
-// epub.js re-paginates. Captures CFI before the mutation, then redisplays
+// epub.js re-paginates. Capture CFI before the mutation, then redisplay
 // at that CFI once the new layout settles.
 const reflowAtCurrentLocation = (mutate: () => void) => {
   if (!rendition) { mutate(); return }
@@ -95,10 +103,7 @@ const onFontFamilyChange = (e: Event) => {
 const saveProgress = async (cfi: string) => {
   if (!cfi || !props.hashId) return
   try {
-    await api.post('/progress', {
-      hash_id: props.hashId,
-      location: cfi
-    })
+    await api.post('/progress', { hash_id: props.hashId, location: cfi })
   } catch (e) {
     console.error('Failed to save progress', e)
   }
@@ -110,19 +115,24 @@ const loadProgress = async () => {
     const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
     return res.data.location
   } catch (e: any) {
-    if (e.response?.status !== 404) {
-      console.error('Failed to load progress', e)
-    }
+    if (e.response?.status !== 404) console.error('Failed to load progress', e)
     return null
   }
 }
 
 let saveTimeout: any
 
-// !important is needed because many epubs bake `width:100%;height:100%`
-// directly onto the cover <img>, which would otherwise win over our rule
-// and stretch the cover to fill a landscape page.
+// !important on width/height/object-fit because many epubs bake
+// `width:100%;height:100%` onto the cover <img>, stretching it on landscape.
+// Zero margin/padding on html/body so epub.js's column width matches what
+// the user sees — previously a few characters were getting clipped at the
+// right edge on narrow viewports.
 const themeRules = (isDark: boolean) => ({
+  'html, body': {
+    margin: '0 !important',
+    padding: '0 !important',
+    'box-sizing': 'border-box !important',
+  },
   body: {
     background: isDark ? '#111827' : '#ffffff',
     color: isDark ? '#f3f4f6' : '#111827',
@@ -153,15 +163,24 @@ const applyTheme = () => {
 
 const onTocNavigate = (href: string) => {
   if (rendition && href) rendition.display(href).catch(() => {})
+  if (immersive.value) tocOpen.value = false
 }
 
-const prevPage = () => {
-  if (rendition) rendition.prev()
-}
+const prevPage = () => { if (rendition) rendition.prev() }
+const nextPage = () => { if (rendition) rendition.next() }
 
-const nextPage = () => {
-  if (rendition) rendition.next()
-}
+const toggleImmersive = () => { immersive.value = !immersive.value }
+
+// When entering immersive: lock body scroll so accidental swipes near the
+// page edges don't drift the underlying app. When leaving: restore.
+// The ResizeObserver picks up the dimensional change and handles
+// repagination, so no explicit resize+redisplay is needed here — calling
+// resize() ourselves caused the rendition to drop the current CFI.
+watch(immersive, (v) => {
+  document.body.style.overflow = v ? 'hidden' : ''
+  document.documentElement.style.overflow = v ? 'hidden' : ''
+  if (v) tocOpen.value = false
+})
 
 const initEpub = async () => {
   if (!viewer.value || !props.path) return
@@ -179,9 +198,14 @@ const initEpub = async () => {
 
     book = ePub(res.data as ArrayBuffer)
 
+    // Pass explicit pixel dimensions so epub.js's first pagination uses the
+    // real container size. Avoids the right-edge text clipping seen on
+    // narrow mobile viewports when relying on width:'100%' alone.
+    const initW = viewer.value.clientWidth
+    const initH = viewer.value.clientHeight
     rendition = book.renderTo(viewer.value, {
-      width: '100%',
-      height: '100%',
+      width: initW,
+      height: initH,
       spread: 'none',
       manager: 'continuous',
       flow: 'paginated'
@@ -197,7 +221,6 @@ const initEpub = async () => {
     bookAuthors.value = creator ? [creator] : []
 
     const savedLocation = await loadProgress()
-
     if (savedLocation) {
       await rendition.display(savedLocation)
     } else {
@@ -215,8 +238,19 @@ const initEpub = async () => {
     // state — Prev/Next stop working until reload. Forward the new size and
     // redisplay at the current CFI so pagination is rebuilt around the same
     // content. Debounced so it only fires once the user stops dragging.
+    // Seed lastW/lastH with the current dimensions so the initial spurious
+    // observe() callback (which fires with no actual size change) is
+    // ignored — it would otherwise clobber the just-restored saved CFI.
+    let lastW = viewer.value.clientWidth
+    let lastH = viewer.value.clientHeight
     resizeObs?.disconnect()
     resizeObs = new ResizeObserver(() => {
+      if (!viewer.value) return
+      const w = viewer.value.clientWidth
+      const h = viewer.value.clientHeight
+      if (w === lastW && h === lastH) return
+      lastW = w
+      lastH = h
       if (resizeTimer) clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (!rendition || !viewer.value) return
@@ -260,47 +294,65 @@ onBeforeUnmount(() => {
   clearTimeout(saveTimeout)
   themeObs?.disconnect()
   themeObs = null
+  document.body.style.overflow = ''
+  document.documentElement.style.overflow = ''
   destroyBook()
 })
 </script>
 
 <template>
-  <div class="epub-viewer relative flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 rounded-lg shadow w-full h-[80vh]">
-    <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10 rounded-lg">
+  <div
+    :class="[
+      'epub-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full overscroll-contain',
+      immersive
+        ? 'fixed inset-0 z-50 h-dvh rounded-none'
+        : 'relative h-[80vh] rounded-lg shadow'
+    ]"
+  >
+    <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-30 rounded-lg">
       <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
     </div>
-    <div v-else-if="error" class="absolute inset-0 flex items-center justify-center bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg z-10 p-4 text-center">
+    <div v-else-if="error" class="absolute inset-0 flex items-center justify-center bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg z-30 p-4 text-center">
       {{ error }}
     </div>
 
-    <!-- Toolbar -->
-    <div class="w-full flex flex-wrap items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2 z-20">
-      <div class="flex items-center gap-2">
-        <button @click="prevPage" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors font-medium">Previous</button>
-        <button @click="nextPage" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors font-medium">Next</button>
+    <!-- Normal toolbar (hidden in immersive) -->
+    <div v-if="!immersive" class="w-full flex flex-wrap items-center justify-between p-2 sm:p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2 z-20">
+      <div class="flex items-center gap-1 sm:gap-2">
+        <button @click="prevPage" :title="t('search.previous')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors">
+          <ChevronLeftIcon class="h-5 w-5" />
+        </button>
+        <button @click="nextPage" :title="t('search.next')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors">
+          <ChevronRightIcon class="h-5 w-5" />
+        </button>
       </div>
       <div class="text-sm text-gray-700 dark:text-gray-300 truncate min-w-0 hidden md:block">
         <span v-if="bookTitle" class="font-semibold">{{ bookTitle }}</span>
         <span v-if="bookAuthors.length" class="ml-2 text-gray-500 dark:text-gray-400">— {{ bookAuthors.join(', ') }}</span>
       </div>
-      <div class="flex items-center gap-2 shrink-0">
+      <div class="flex items-center gap-1 sm:gap-2 shrink-0">
         <select
           :value="fontFamilyId"
           @change="onFontFamilyChange"
           :title="t('app.font_family')"
-          class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          class="px-1 sm:px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option v-for="o in FONT_OPTIONS" :key="o.id" :value="o.id" :style="{ fontFamily: o.stack }">{{ o.label }}</option>
         </select>
-        <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A−</button>
-        <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A</button>
-        <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A+</button>
+        <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A−</button>
+        <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A</button>
+        <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A+</button>
+        <button @click="toggleImmersive" :title="t('app.immersive_enter')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">
+          <ArrowsPointingOutIcon class="h-5 w-5" />
+        </button>
       </div>
     </div>
 
     <!-- TOC sidebar + Rendition -->
-    <div class="flex flex-row flex-grow min-h-0 rounded-b-lg overflow-hidden">
+    <div class="flex flex-row flex-grow min-h-0 overflow-hidden" :class="immersive ? '' : 'rounded-b-lg'">
+      <!-- Non-immersive sidebar -->
       <aside
+        v-if="!immersive"
         class="shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 transition-[width] duration-200"
         :class="tocOpen ? 'w-64' : 'w-9'"
       >
@@ -328,7 +380,74 @@ onBeforeUnmount(() => {
       </aside>
 
       <div class="relative flex-grow min-w-0 bg-white dark:bg-gray-900 overflow-hidden">
-        <div ref="viewer" class="absolute inset-0 p-4"></div>
+        <div ref="viewer" class="absolute inset-0" :class="immersive ? 'p-0' : 'p-1 sm:p-4'"></div>
+
+        <!-- Immersive floating controls -->
+        <template v-if="immersive">
+          <!-- TOC overlay drawer -->
+          <aside
+            v-if="tocOpen"
+            class="absolute inset-y-0 left-0 z-40 w-64 max-w-[80%] bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-xl flex flex-col"
+          >
+            <div class="flex items-center justify-between p-1.5 border-b border-gray-200 dark:border-gray-700">
+              <span class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ t('app.toc') }}</span>
+              <button
+                @click="tocOpen = false"
+                class="p-1 rounded text-gray-600 hover:bg-gray-200 dark:text-gray-300 dark:hover:bg-gray-700"
+                :title="t('app.toc_collapse')"
+              >
+                <ChevronDoubleLeftIcon class="w-4 h-4" />
+              </button>
+            </div>
+            <nav class="flex-grow overflow-auto p-1 text-gray-800 dark:text-gray-200">
+              <p v-if="!toc.length" class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">{{ t('app.toc_empty') }}</p>
+              <EpubTocNode
+                v-for="(entry, i) in toc"
+                :key="i"
+                :entry="entry"
+                :level="0"
+                @navigate="onTocNavigate"
+              />
+            </nav>
+          </aside>
+
+          <!-- Top-left: TOC toggle -->
+          <button
+            v-if="!tocOpen"
+            @click="tocOpen = true"
+            :title="t('app.toc_expand')"
+            class="absolute top-2 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
+          >
+            <Bars3Icon class="h-5 w-5" />
+          </button>
+
+          <!-- Top-right: exit immersive -->
+          <button
+            @click="toggleImmersive"
+            :title="t('app.immersive_exit')"
+            class="absolute top-2 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
+          >
+            <ArrowsPointingInIcon class="h-5 w-5" />
+          </button>
+
+          <!-- Bottom-left: previous page -->
+          <button
+            @click="prevPage"
+            :title="t('search.previous')"
+            class="absolute bottom-3 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
+          >
+            <ChevronLeftIcon class="h-6 w-6" />
+          </button>
+
+          <!-- Bottom-right: next page -->
+          <button
+            @click="nextPage"
+            :title="t('search.next')"
+            class="absolute bottom-3 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
+          >
+            <ChevronRightIcon class="h-6 w-6" />
+          </button>
+        </template>
       </div>
     </div>
   </div>

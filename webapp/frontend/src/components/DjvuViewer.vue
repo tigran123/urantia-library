@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
+import { ChevronLeftIcon, ChevronRightIcon, BookOpenIcon, DocumentIcon } from '@heroicons/vue/24/outline'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -165,19 +166,21 @@ watch(() => props.path, (newPath) => {
       <!-- Toolbar -->
       <div class="w-full flex flex-wrap items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2">
         <div class="flex items-center space-x-2">
-          <button 
-            @click="prevPage" 
+          <button
+            @click="prevPage"
             :disabled="currentPage === 1 || loadingPage"
-            class="px-3 py-1.5 md:px-4 md:py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium text-sm md:text-base"
+            :title="t('djvu.previous')"
+            class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {{ t('djvu.previous') }}
+            <ChevronLeftIcon class="h-5 w-5" />
           </button>
-          <button 
-            @click="nextPage" 
+          <button
+            @click="nextPage"
             :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
-            class="px-3 py-1.5 md:px-4 md:py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium text-sm md:text-base"
+            :title="t('djvu.next')"
+            class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {{ t('djvu.next') }}
+            <ChevronRightIcon class="h-5 w-5" />
           </button>
         </div>
         
@@ -197,12 +200,14 @@ watch(() => props.path, (newPath) => {
         </div>
         
         <div>
-          <button 
-            @click="toggleViewMode" 
+          <button
+            @click="toggleViewMode"
             :disabled="loadingPage"
-            class="px-3 py-1.5 md:px-4 md:py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium text-sm md:text-base"
+            :title="isDoublePage ? t('djvu.singlePage') : t('djvu.twoPages')"
+            class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {{ isDoublePage ? t('djvu.singlePage') : t('djvu.twoPages') }}
+            <DocumentIcon v-if="isDoublePage" class="h-5 w-5" />
+            <BookOpenIcon v-else class="h-5 w-5" />
           </button>
         </div>
       </div>

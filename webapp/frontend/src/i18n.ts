@@ -3,13 +3,13 @@ import { createI18n } from 'vue-i18n'
 const messages = {
   en: {
     djvu: {
-      previous: 'Previous',
-      next: 'Next',
       page: 'Page',
       of: 'of',
-      singlePage: 'Single Page',
-      twoPages: 'Two Pages',
-      loadingDetails: 'Loading document details...'
+      loadingDetails: 'Loading document details...',
+      previous: 'Previous',
+      next: 'Next',
+      singlePage: 'Single page',
+      twoPages: 'Two pages'
     },
     app: {
       title: 'Urantia Library',
@@ -46,7 +46,9 @@ const messages = {
       toc_empty: 'No table of contents',
       book_title: 'Title',
       author: 'Author',
-      annotation: 'Annotation'
+      annotation: 'Annotation',
+      immersive_enter: 'Reading mode',
+      immersive_exit: 'Exit reading mode'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -105,13 +107,13 @@ const messages = {
   },
   ru: {
     djvu: {
-      previous: 'Назад',
-      next: 'Вперёд',
       page: 'Стр.',
       of: 'из',
+      loadingDetails: 'Загрузка сведений о документе...',
+      previous: 'Назад',
+      next: 'Вперёд',
       singlePage: 'Одна страница',
-      twoPages: 'Две страницы',
-      loadingDetails: 'Загрузка сведений о документе...'
+      twoPages: 'Две страницы'
     },
     app: {
       title: 'Библиотека Урантии',
@@ -148,7 +150,9 @@ const messages = {
       toc_empty: 'Содержание отсутствует',
       book_title: 'Название',
       author: 'Автор',
-      annotation: 'Аннотация'
+      annotation: 'Аннотация',
+      immersive_enter: 'Режим чтения',
+      immersive_exit: 'Выйти из режима чтения'
     },
     auth: {
       signInTitle: 'Вход',
