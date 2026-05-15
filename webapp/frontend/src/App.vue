@@ -92,17 +92,16 @@ const handleLogout = async () => {
       <div class="w-full px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16 items-center">
           <div class="flex items-center">
-            <router-link to="/" class="flex items-center gap-2 text-xl font-bold text-gray-900 dark:text-white">
+            <router-link to="/" class="flex items-center text-gray-900 dark:text-white" :title="t('app.title')">
               <BookOpenIcon class="h-8 w-8 text-blue-600 dark:text-blue-400" />
-              {{ t('app.title') }}
             </router-link>
           </div>
 
           <div class="flex-1 px-8 hidden sm:block">
             <form @submit.prevent="performSearch" class="relative">
-              <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <MagnifyingGlassIcon class="h-5 w-5 text-gray-400 dark:text-gray-500" />
-              </div>
+              <button type="submit" class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400 dark:text-gray-500 hover:text-blue-500 focus:outline-none" title="Search">
+                <MagnifyingGlassIcon class="h-5 w-5" />
+              </button>
               <input
                 v-model="searchQuery"
                 type="search"
@@ -167,9 +166,9 @@ const handleLogout = async () => {
       <!-- Mobile search -->
       <div class="sm:hidden px-4 pb-3">
         <form @submit.prevent="performSearch" class="relative">
-          <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <MagnifyingGlassIcon class="h-5 w-5 text-gray-400 dark:text-gray-500" />
-          </div>
+          <button type="submit" class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400 dark:text-gray-500 hover:text-blue-500 focus:outline-none" title="Search">
+            <MagnifyingGlassIcon class="h-5 w-5" />
+          </button>
           <input
             v-model="searchQuery"
             type="search"

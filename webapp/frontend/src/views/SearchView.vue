@@ -187,8 +187,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <template v-else>
             {{ $t('search.results_for_label') }}
           </template>
-          <span v-if="parsedSearch.text" class="font-semibold text-gray-900">"{{ parsedSearch.text }}"</span>
-          <span v-else class="italic">{{ $t('search.all_items') }}</span>
+          <span v-if="parsedSearch.text" class="font-semibold text-gray-900">&nbsp;"{{ parsedSearch.text }}"</span>
+          <span v-else class="italic">&nbsp;{{ $t('search.all_items') }}</span>
         </p>
         <div v-if="parsedSearch.filters.length > 0" class="flex flex-wrap gap-2 mt-2 sm:mt-0 sm:ml-2">
           <span v-for="filter in parsedSearch.filters" :key="filter.key" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
