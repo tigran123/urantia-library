@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
-import { ChevronLeftIcon, ChevronRightIcon, BookOpenIcon, DocumentIcon } from '@heroicons/vue/24/outline'
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  BookOpenIcon,
+  DocumentIcon,
+  ArrowsPointingOutIcon,
+  ArrowsPointingInIcon,
+} from '@heroicons/vue/24/outline'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -20,6 +27,22 @@ const error = ref('')
 const imageUrl = ref('')
 const imageUrl2 = ref('')
 const isDoublePage = ref(false)
+const immersive = ref(false)
+
+const toggleImmersive = () => { immersive.value = !immersive.value }
+
+// Lock body scroll while immersive so accidental swipes near the page edges
+// don't drift the underlying app, and to ensure the floating controls don't
+// sit behind the browser chrome.
+watch(immersive, (v) => {
+  document.body.style.overflow = v ? 'hidden' : ''
+  document.documentElement.style.overflow = v ? 'hidden' : ''
+})
+
+onBeforeUnmount(() => {
+  document.body.style.overflow = ''
+  document.documentElement.style.overflow = ''
+})
 
 const saveProgress = async (page: number) => {
   if (!props.hashId) return
@@ -152,7 +175,14 @@ watch(() => props.path, (newPath) => {
 </script>
 
 <template>
-  <div class="djvu-viewer flex flex-col items-center bg-gray-100 dark:bg-gray-800 rounded-lg shadow w-full">
+  <div
+    :class="[
+      'djvu-viewer flex flex-col items-center bg-gray-100 dark:bg-gray-800 w-full overscroll-contain',
+      immersive
+        ? 'fixed inset-0 z-50 h-dvh rounded-none'
+        : 'relative rounded-lg shadow djvu-resizable'
+    ]"
+  >
     <div v-if="loadingMetadata" class="p-8">
       <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500 mx-auto"></div>
       <p class="mt-4 text-gray-600 dark:text-gray-400">{{ t('djvu.loadingDetails') }}</p>
@@ -163,8 +193,8 @@ watch(() => props.path, (newPath) => {
     </div>
     
     <template v-else-if="totalPages > 0">
-      <!-- Toolbar -->
-      <div class="w-full flex flex-wrap items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2">
+      <!-- Toolbar (hidden in immersive mode) -->
+      <div v-if="!immersive" class="w-full flex flex-wrap items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2">
         <div class="flex items-center space-x-2">
           <button
             @click="prevPage"
@@ -199,7 +229,7 @@ watch(() => props.path, (newPath) => {
           <span>{{ t('djvu.of') }} {{ totalPages }}</span>
         </div>
         
-        <div>
+        <div class="flex items-center space-x-2">
           <button
             @click="toggleViewMode"
             :disabled="loadingPage"
@@ -208,6 +238,13 @@ watch(() => props.path, (newPath) => {
           >
             <DocumentIcon v-if="isDoublePage" class="h-5 w-5" />
             <BookOpenIcon v-else class="h-5 w-5" />
+          </button>
+          <button
+            @click="toggleImmersive"
+            :title="t('app.immersive_enter')"
+            class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors"
+          >
+            <ArrowsPointingOutIcon class="h-5 w-5" />
           </button>
         </div>
       </div>
@@ -219,35 +256,65 @@ watch(() => props.path, (newPath) => {
         </div>
         
         <div v-if="imageUrl" class="flex flex-row items-center justify-center h-full w-full gap-1 md:gap-2">
-          <img 
-            :src="imageUrl" 
-            :class="['max-h-full object-contain shadow-md bg-white', isDoublePage ? 'max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)]' : 'max-w-full']" 
-            alt="DjVu Page" 
+          <img
+            :src="imageUrl"
+            :class="['max-h-full object-contain shadow-md bg-white', isDoublePage ? 'max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)]' : 'max-w-full']"
+            alt="DjVu Page"
           />
-          <img 
-            v-if="isDoublePage && imageUrl2" 
-            :src="imageUrl2" 
-            class="max-h-full max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)] object-contain shadow-md bg-white" 
-            alt="DjVu Page 2" 
+          <img
+            v-if="isDoublePage && imageUrl2"
+            :src="imageUrl2"
+            class="max-h-full max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)] object-contain shadow-md bg-white"
+            alt="DjVu Page 2"
           />
         </div>
+
+        <!-- Immersive floating controls -->
+        <template v-if="immersive">
+          <button
+            @click="toggleImmersive"
+            :title="t('app.immersive_exit')"
+            class="absolute top-2 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
+          >
+            <ArrowsPointingInIcon class="h-5 w-5" />
+          </button>
+          <button
+            @click="prevPage"
+            :disabled="currentPage === 1 || loadingPage"
+            :title="t('djvu.previous')"
+            class="absolute bottom-3 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronLeftIcon class="h-6 w-6" />
+          </button>
+          <button
+            @click="nextPage"
+            :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
+            :title="t('djvu.next')"
+            class="absolute bottom-3 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronRightIcon class="h-6 w-6" />
+          </button>
+          <div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-black/15 text-white/80 text-sm select-none pointer-events-none">
+            {{ currentPage }}<span v-if="isDoublePage && currentPage < totalPages">–{{ currentPage + 1 }}</span> / {{ totalPages }}
+          </div>
+        </template>
       </div>
     </template>
   </div>
 </template>
 
 <style scoped>
-.djvu-viewer {
+.djvu-resizable {
   resize: both;
   overflow: hidden;
   height: 80vh;
   min-height: 400px;
 }
 /* hide number input arrows */
-input[type=number]::-webkit-inner-spin-button, 
-input[type=number]::-webkit-outer-spin-button { 
-  -webkit-appearance: none; 
-  margin: 0; 
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 input[type=number] {
   -moz-appearance: textfield;
