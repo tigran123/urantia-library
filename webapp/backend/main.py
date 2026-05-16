@@ -111,7 +111,7 @@ async def login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=True,
+        secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
         samesite="lax",
         max_age=7*24*60*60
     )
