@@ -774,6 +774,359 @@ async def fb2_metadata(path: str, current_user: models.User = Depends(get_curren
     }
 
 
+# ---------------- Markdown / plain-text viewer ----------------
+
+def sanitize_text_path(path: str) -> str:
+    """Ensure path is within BOOKS_DIR, exists, and is a .md/.markdown/.txt file."""
+    if not path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
+    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
+        raise HTTPException(status_code=403, detail="Directory traversal detected")
+    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    lower = target_path.lower()
+    if not (lower.endswith(".md") or lower.endswith(".markdown") or lower.endswith(".txt")):
+        raise HTTPException(status_code=400, detail="Not a Markdown or text file")
+    return target_path
+
+
+def _read_text_file(file_path: str) -> str:
+    with open(file_path, "rb") as f:
+        raw = f.read()
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+_MD_SAFE_URL_RE = re.compile(r"^(https?:|mailto:|/|#|\.\.?/)", re.IGNORECASE)
+
+
+class _MdRenderer:
+    """Minimal CommonMark-ish renderer. Handles ATX/setext headings, paragraphs,
+    fenced code, blockquotes, flat lists, horizontal rules, and inline emphasis/
+    code/links/images. Raw HTML in source is escaped, never passed through."""
+
+    _ATX_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+    _FENCE_RE = re.compile(r"^\s{0,3}(```+|~~~+)\s*([^\s`]*)\s*$")
+    _HR_RE = re.compile(r"^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})\s*$")
+    _BQ_RE = re.compile(r"^\s{0,3}>\s?(.*)$")
+    _UL_RE = re.compile(r"^(\s*)([-*+])\s+(.*)$")
+    _OL_RE = re.compile(r"^(\s*)(\d+)\.\s+(.*)$")
+    _SETEXT_H1_RE = re.compile(r"^=+\s*$")
+    _SETEXT_H2_RE = re.compile(r"^-+\s*$")
+
+    def __init__(self, collect_toc: bool = True):
+        self.collect_toc = collect_toc
+        self.anchor = 0
+        self.toc_flat: List[Dict[str, Any]] = []
+
+    def _attr(self):
+        n = self.anchor
+        self.anchor += 1
+        return f' id="md-a-{n}" data-anchor="{n}"', n
+
+    @staticmethod
+    def _strip_html(html: str) -> str:
+        return re.sub(r"<[^>]+>", "", html)
+
+    @classmethod
+    def _safe_url(cls, url: str) -> str:
+        url = url.strip()
+        return url if _MD_SAFE_URL_RE.match(url) else "#"
+
+    def _inline(self, text: str) -> str:
+        placeholders: List[str] = []
+
+        def stash(html: str) -> str:
+            placeholders.append(html)
+            return f"\x00{len(placeholders) - 1}\x00"
+
+        # Inline code first (its contents must NOT have other rules applied).
+        def code_repl(m):
+            return stash(f"<code>{_html_escape(m.group(2))}</code>")
+        text = re.sub(r"(`+)([^`\n]+?)\1", code_repl, text)
+
+        # Images
+        def image_repl(m):
+            alt, url = m.group(1), m.group(2)
+            return stash(
+                f'<img src="{_html_escape(self._safe_url(url))}" '
+                f'alt="{_html_escape(alt)}" class="md-image" />'
+            )
+        text = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", image_repl, text)
+
+        # Links
+        def link_repl(m):
+            label, url = m.group(1), m.group(2)
+            return stash(
+                f'<a href="{_html_escape(self._safe_url(url))}" class="md-link">'
+                f'{self._inline(label)}</a>'
+            )
+        text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", link_repl, text)
+
+        # Autolinks <http://...> / <mailto:...>
+        def auto_repl(m):
+            url = m.group(1)
+            return stash(
+                f'<a href="{_html_escape(url)}" class="md-link">{_html_escape(url)}</a>'
+            )
+        text = re.sub(r"<((?:https?:|mailto:)[^>\s]+)>", auto_repl, text)
+
+        text = _html_escape(text)
+
+        # Hard line breaks (two+ trailing spaces before \n) — convert before
+        # collapsing newlines elsewhere.
+        text = re.sub(r" {2,}\n", "<br />\n", text)
+
+        # Bold, then italic. Order matters so ** doesn't get eaten as two * runs.
+        text = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<strong>\1</strong>", text, flags=re.S)
+        text = re.sub(r"__(?=\S)(.+?)(?<=\S)__", r"<strong>\1</strong>", text, flags=re.S)
+        text = re.sub(r"(?<![\*\w])\*(?=\S)([^\*\n]+?)(?<=\S)\*(?![\*\w])", r"<em>\1</em>", text)
+        text = re.sub(r"(?<![_\w])_(?=\S)([^_\n]+?)(?<=\S)_(?![_\w])", r"<em>\1</em>", text)
+        text = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<s>\1</s>", text, flags=re.S)
+
+        return re.sub(r"\x00(\d+)\x00", lambda m: placeholders[int(m.group(1))], text)
+
+    def _emit_heading(self, level: int, raw: str) -> str:
+        attr, n = self._attr()
+        inner = self._inline(raw.strip())
+        if self.collect_toc:
+            self.toc_flat.append({
+                "title": self._strip_html(inner),
+                "level": level,
+                "anchor": n,
+            })
+        return f'<h{level}{attr} class="md-h{level}">{inner}</h{level}>'
+
+    def _emit_paragraph(self, lines: List[str]) -> str:
+        attr, _ = self._attr()
+        joined = "\n".join(lines)
+        content = self._inline(joined)
+        # Soft line breaks → single space (CommonMark default). Skip newlines
+        # that were already promoted to <br />.
+        content = re.sub(r"(?<!<br />)\n", " ", content)
+        return f'<p{attr} class="md-p">{content}</p>'
+
+    def _emit_codeblock(self, code: str, lang: str = "") -> str:
+        attr, _ = self._attr()
+        lang_class = f' class="language-{_html_escape(lang)}"' if lang else ""
+        return (
+            f'<pre{attr} class="md-codeblock"><code{lang_class}>'
+            f'{_html_escape(code)}</code></pre>'
+        )
+
+    def _emit_blockquote(self, lines: List[str]) -> str:
+        attr, _ = self._attr()
+        inner = "<br />".join(self._inline(l) for l in lines)
+        return f'<blockquote{attr} class="md-blockquote">{inner}</blockquote>'
+
+    def _emit_list(self, ordered: bool, items: List[List[str]]) -> str:
+        attr, _ = self._attr()
+        tag = "ol" if ordered else "ul"
+        parts = []
+        for item_lines in items:
+            content = self._inline(" ".join(l.strip() for l in item_lines))
+            parts.append(f'<li class="md-li">{content}</li>')
+        return f'<{tag}{attr} class="md-{tag}">{"".join(parts)}</{tag}>'
+
+    def _emit_hr(self) -> str:
+        attr, _ = self._attr()
+        return f'<hr{attr} class="md-hr" />'
+
+    def _is_block_start(self, line: str, nxt: str) -> bool:
+        if self._ATX_RE.match(line): return True
+        if self._FENCE_RE.match(line): return True
+        if self._HR_RE.match(line): return True
+        if self._BQ_RE.match(line): return True
+        if self._UL_RE.match(line): return True
+        if self._OL_RE.match(line): return True
+        if nxt and (self._SETEXT_H1_RE.match(nxt) or self._SETEXT_H2_RE.match(nxt)):
+            return True
+        return False
+
+    def render(self, text: str) -> str:
+        text = text.replace("\r\n", "\n").replace("\r", "\n").expandtabs(4)
+        lines = text.split("\n")
+        n = len(lines)
+        out: List[str] = []
+        i = 0
+        while i < n:
+            line = lines[i]
+            stripped = line.strip()
+
+            if not stripped:
+                i += 1
+                continue
+
+            m = self._FENCE_RE.match(line)
+            if m:
+                fence, lang = m.group(1), m.group(2)
+                i += 1
+                code_lines: List[str] = []
+                while i < n and not lines[i].strip().startswith(fence):
+                    code_lines.append(lines[i])
+                    i += 1
+                if i < n:
+                    i += 1  # consume closing fence
+                out.append(self._emit_codeblock("\n".join(code_lines), lang))
+                continue
+
+            m = self._ATX_RE.match(line)
+            if m:
+                out.append(self._emit_heading(len(m.group(1)), m.group(2)))
+                i += 1
+                continue
+
+            if i + 1 < n:
+                nxt = lines[i + 1]
+                if self._SETEXT_H1_RE.match(nxt) and len(nxt.strip()) >= 1:
+                    out.append(self._emit_heading(1, stripped))
+                    i += 2
+                    continue
+                if self._SETEXT_H2_RE.match(nxt) and len(nxt.strip()) >= 2:
+                    out.append(self._emit_heading(2, stripped))
+                    i += 2
+                    continue
+
+            if self._HR_RE.match(line):
+                out.append(self._emit_hr())
+                i += 1
+                continue
+
+            if self._BQ_RE.match(line):
+                bq: List[str] = []
+                while i < n and self._BQ_RE.match(lines[i]):
+                    bq.append(self._BQ_RE.match(lines[i]).group(1))
+                    i += 1
+                out.append(self._emit_blockquote(bq))
+                continue
+
+            m_ul = self._UL_RE.match(line)
+            m_ol = self._OL_RE.match(line)
+            if m_ul or m_ol:
+                ordered = m_ol is not None
+                items: List[List[str]] = []
+                while i < n:
+                    cur = lines[i]
+                    if not cur.strip():
+                        break
+                    mm = self._OL_RE.match(cur) if ordered else self._UL_RE.match(cur)
+                    if mm:
+                        items.append([mm.group(3)])
+                        i += 1
+                        continue
+                    # Continuation: indented line under last item
+                    if items and cur.startswith(" "):
+                        items[-1].append(cur)
+                        i += 1
+                        continue
+                    break
+                out.append(self._emit_list(ordered, items))
+                continue
+
+            # Paragraph
+            para = [line]
+            i += 1
+            while i < n and lines[i].strip():
+                nxt = lines[i + 1] if i + 1 < n else ""
+                if self._is_block_start(lines[i], nxt):
+                    break
+                para.append(lines[i])
+                i += 1
+            out.append(self._emit_paragraph(para))
+
+        return "".join(out)
+
+
+def _nest_toc(flat: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert flat [{title, level, anchor}] into a nested tree of
+    {title, anchor, children}."""
+    root: List[Dict[str, Any]] = []
+    stack: List[tuple] = []  # (level, children_list)
+    for item in flat:
+        entry = {"title": item["title"], "anchor": item["anchor"], "children": []}
+        while stack and stack[-1][0] >= item["level"]:
+            stack.pop()
+        (stack[-1][1] if stack else root).append(entry)
+        stack.append((item["level"], entry["children"]))
+    return root
+
+
+def _extract_md_title(toc_flat: List[Dict[str, Any]]) -> str:
+    for item in toc_flat:
+        if item["level"] == 1 and item["title"].strip():
+            return item["title"].strip()
+    return ""
+
+
+def _convert_md(text: str) -> Dict[str, Any]:
+    renderer = _MdRenderer(collect_toc=True)
+    html = renderer.render(text)
+    return {
+        "title": _extract_md_title(renderer.toc_flat),
+        "html": html,
+        "raw": text,
+        "toc": _nest_toc(renderer.toc_flat),
+        "anchor_count": renderer.anchor,
+    }
+
+
+def _convert_txt(text: str) -> Dict[str, Any]:
+    """Plain-text viewer: each blank-line-separated block becomes one anchored
+    <pre>, preserving the author's line wrapping and any ASCII layout."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    parts: List[str] = []
+    anchor = 0
+    for block in re.split(r"\n\s*\n", normalized):
+        if not block.strip():
+            continue
+        escaped = _html_escape(block.rstrip("\n"))
+        parts.append(
+            f'<pre id="md-a-{anchor}" data-anchor="{anchor}" class="md-txt-block">{escaped}</pre>'
+        )
+        anchor += 1
+    return {"title": "", "html": "".join(parts), "raw": normalized, "toc": [], "anchor_count": anchor}
+
+
+@app.get("/api/md-content")
+async def md_content(path: str, current_user: models.User = Depends(get_current_user)):
+    file_path = sanitize_text_path(path)
+    text = _read_text_file(file_path)
+    if file_path.lower().endswith(".txt"):
+        return _convert_txt(text)
+    return _convert_md(text)
+
+
+@app.get("/api/text-preview")
+async def text_preview(
+    path: str,
+    max_chars: int = 2000,
+    current_user: models.User = Depends(get_current_user),
+):
+    """Return up to max_chars of text from a .md/.txt file for use as a
+    cover-slot placeholder preview. For .md the snippet is also rendered to
+    HTML so the preview can mirror the in-viewer formatting. Clamp the limit
+    to keep responses tiny."""
+    file_path = sanitize_text_path(path)
+    text = _read_text_file(file_path)
+    limit = max(200, min(int(max_chars), 8000))
+    snippet = text[:limit]
+    html = ""
+    if not file_path.lower().endswith(".txt"):
+        # Render only the snippet; partial input is fine for a preview, the
+        # frontend clips visually anyway.
+        html = _MdRenderer(collect_toc=False).render(snippet)
+    return {
+        "text": snippet,
+        "html": html,
+        "truncated": len(text) > len(snippet),
+    }
+
+
 def sanitize_djvu_path(path: str) -> str:
     """Ensure path is within BOOKS_DIR and exists."""
     if not path:

@@ -50,7 +50,9 @@ const messages = {
       author: 'Author',
       annotation: 'Annotation',
       immersive_enter: 'Reading mode',
-      immersive_exit: 'Exit reading mode'
+      immersive_exit: 'Exit reading mode',
+      view_raw: 'Show raw source',
+      view_rendered: 'Show rendered'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -156,7 +158,9 @@ const messages = {
       author: 'Автор',
       annotation: 'Аннотация',
       immersive_enter: 'Режим чтения',
-      immersive_exit: 'Выйти из режима чтения'
+      immersive_exit: 'Выйти из режима чтения',
+      view_raw: 'Показать исходный текст',
+      view_rendered: 'Показать отрисованный'
     },
     auth: {
       signInTitle: 'Вход',

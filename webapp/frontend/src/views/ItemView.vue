@@ -9,6 +9,7 @@ import DjvuViewer from '../components/DjvuViewer.vue'
 import EpubViewer from '../components/EpubViewer.vue'
 import ImageViewer from '../components/ImageViewer.vue'
 import Fb2Viewer from '../components/Fb2Viewer.vue'
+import MdViewer from '../components/MdViewer.vue'
 // pdfjs-dist is ~1MB; keep it out of the main bundle by lazy-loading.
 const PdfViewer = defineAsyncComponent(() => import('../components/PdfViewer.vue'))
 
@@ -132,9 +133,12 @@ const isFb2 = computed(() => {
   const n = (item.value?.name || '').toLowerCase()
   return n.endsWith('.fb2') || n.endsWith('.fb2.zip')
 })
+const isMd = computed(() => ['md', 'markdown'].includes(fileExtension.value))
+const isTxt = computed(() => fileExtension.value === 'txt')
 
 const displayFormat = computed(() => {
   if (isFb2.value) return 'FB2'
+  if (isMd.value) return 'Markdown'
   return fileExtension.value
 })
 
@@ -153,6 +157,27 @@ const loadFb2Meta = async (path: string) => {
 watch(
   () => item.value && isFb2.value ? item.value.path : null,
   (p) => { if (p) loadFb2Meta(p); else fb2Meta.value = null },
+  { immediate: true }
+)
+
+const textPreview = ref<{ text: string; html: string }>({ text: '', html: '' })
+
+const loadTextPreview = async (path: string) => {
+  textPreview.value = { text: '', html: '' }
+  try {
+    const res = await api.get('/text-preview', { params: { path, max_chars: 1500 } })
+    textPreview.value = {
+      text: res.data.text || '',
+      html: res.data.html || '',
+    }
+  } catch (e) {
+    console.error('Failed to load text preview', e)
+  }
+}
+
+watch(
+  () => item.value && (isMd.value || isTxt.value) ? item.value.path : null,
+  (p) => { if (p) loadTextPreview(p); else textPreview.value = { text: '', html: '' } },
   { immediate: true }
 )
 </script>
@@ -174,8 +199,20 @@ watch(
         
         <!-- Left Column: Cover Image -->
         <div class="md:col-span-1 flex flex-col items-center">
-          <div class="w-full max-w-sm aspect-[3/4] rounded-lg shadow-xl overflow-hidden bg-white dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700">
+          <div class="w-full max-w-sm aspect-[3/4] rounded-lg shadow-xl overflow-hidden bg-white dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700 relative">
             <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain" />
+            <template v-else-if="(isMd || isTxt) && (textPreview.html || textPreview.text)">
+              <div
+                v-if="textPreview.html"
+                class="md-content md-content--preview absolute inset-0 m-0 px-3 py-3 text-[10px] leading-snug overflow-hidden text-gray-700 dark:text-gray-300"
+                v-html="textPreview.html"
+              ></div>
+              <pre
+                v-else
+                class="absolute inset-0 m-0 px-3 py-3 text-[10px] leading-snug whitespace-pre-wrap break-words overflow-hidden text-gray-700 dark:text-gray-300 font-serif"
+              >{{ textPreview.text }}</pre>
+              <div class="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white dark:from-gray-800 to-transparent pointer-events-none"></div>
+            </template>
             <DocumentIcon v-else class="w-32 h-32 text-gray-300 dark:text-gray-600" />
           </div>
         </div>
@@ -286,6 +323,9 @@ watch(
 
           <!-- FB2 Viewer (also handles .fb2.zip) -->
           <Fb2Viewer v-else-if="isFb2" :path="item.path" :hash-id="item.hash_id" />
+
+          <!-- Markdown / plain text viewer -->
+          <MdViewer v-else-if="isMd || isTxt" :path="item.path" :hash-id="item.hash_id" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">
