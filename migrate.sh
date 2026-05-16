@@ -1,11 +1,11 @@
 #!/bin/bash
 
-rm -rf .data
+rm -rf /Books/.data
 
-./urantia-library/migrate_library.py --dir /Books --db /Books/urantia-library/webapp/backend/auth.db
+/Books/urantia-library/webapp/backend/initdb.sh
+/Books/urantia-library/migrate_library.py --src /Books-full --target /Books --db /Books/urantia-library/webapp/backend/auth.db --exclude-file=/Books-full/exclude.txt
 
-find -name '.htaccess' -exec rm {} \;
-find -name '000-browse.php' -exec rm {} \;
-find -name '.covers' -exec rm -rf {} \;
-find -type l -lname "*/default-cover.jpg" -exec rm {} \;
-
+#find /Books -name '.htaccess' -exec rm {} \;
+#find /Books -name '000-browse.php' -exec rm {} \;
+#find /Books -name '.covers' -exec rm -rf {} \;
+#find /Books -type l -lname "*/default-cover.jpg" -exec rm {} \;
