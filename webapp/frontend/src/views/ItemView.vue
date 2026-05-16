@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch, onUnmounted } from 'vue'
+import { ref, onMounted, computed, watch, onUnmounted, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
@@ -9,6 +9,8 @@ import DjvuViewer from '../components/DjvuViewer.vue'
 import EpubViewer from '../components/EpubViewer.vue'
 import ImageViewer from '../components/ImageViewer.vue'
 import Fb2Viewer from '../components/Fb2Viewer.vue'
+// pdfjs-dist is ~1MB; keep it out of the main bundle by lazy-loading.
+const PdfViewer = defineAsyncComponent(() => import('../components/PdfViewer.vue'))
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
@@ -273,8 +275,8 @@ watch(
           <!-- Image Viewer -->
           <ImageViewer v-else-if="isImage" :src="getDownloadUrl()" />
           
-          <!-- PDF Viewer (iframe fallback) -->
-          <iframe v-else-if="isPdf" :src="getDownloadUrl()" class="w-full h-[80vh] bg-white"></iframe>
+          <!-- PDF Viewer (pdfjs-dist) -->
+          <PdfViewer v-else-if="isPdf" :path="item.path" :hash-id="item.hash_id" />
 
           <!-- DjVu Viewer -->
           <DjvuViewer v-else-if="isDjvu" :path="item.path" :hash-id="item.hash_id" />
