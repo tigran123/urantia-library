@@ -52,7 +52,9 @@ const messages = {
       immersive_enter: 'Reading mode',
       immersive_exit: 'Exit reading mode',
       view_raw: 'Show raw source',
-      view_rendered: 'Show rendered'
+      view_rendered: 'Show rendered',
+      grid_view: 'Grid view',
+      list_view: 'List view'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -160,7 +162,9 @@ const messages = {
       immersive_enter: 'Режим чтения',
       immersive_exit: 'Выйти из режима чтения',
       view_raw: 'Показать исходный текст',
-      view_rendered: 'Показать отрисованный'
+      view_rendered: 'Показать отрисованный',
+      grid_view: 'Сетка',
+      list_view: 'Список'
     },
     auth: {
       signInTitle: 'Вход',

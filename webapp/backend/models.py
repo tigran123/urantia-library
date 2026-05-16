@@ -30,6 +30,16 @@ class Favorite(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
 
+class DirectoryFavorite(Base):
+    """Bookmarked directories. Keyed by `path` (relative to BOOKS_DIR) rather
+    than a hash — directories aren't content-addressed."""
+    __tablename__ = "directory_favorites"
+    __table_args__ = (UniqueConstraint("user_id", "path"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    path = Column(String, nullable=False)
+
 class ReadingProgress(Base):
     __tablename__ = "reading_progress"
     __table_args__ = (UniqueConstraint("user_id", "hash_id"),)

@@ -63,9 +63,19 @@ CREATE TABLE favorites (
 );
 
 CREATE TABLE reading_progress (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, 
-    user_id INTEGER NOT NULL REFERENCES users(id), 
-    hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE, 
-    location VARCHAR NOT NULL, 
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    location VARCHAR NOT NULL,
     UNIQUE(user_id, hash_id)
 );
+
+CREATE TABLE directory_favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    path VARCHAR NOT NULL,
+    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, path)
+);
+
+CREATE INDEX idx_directory_favorites_user ON directory_favorites(user_id);

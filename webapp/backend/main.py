@@ -80,6 +80,25 @@ async def strip_charset_for_websites(request: Request, call_next):
     return response
 
 BOOKS_DIR = os.environ.get("BOOKS_DIR", "/Books")
+DATA_DIR = os.path.join(BOOKS_DIR, ".data")
+
+
+def _resolve_vault_hash(symlink_path: str) -> str | None:
+    """Return the BLAKE2b hash if `symlink_path` resolves into the CAS vault
+    (i.e. /Books/.data/<hash>); None for unrelated symlinks like
+    /Books/GEMINI.md -> CLAUDE.md."""
+    try:
+        target = os.path.realpath(symlink_path)
+    except OSError:
+        return None
+    data_root = os.path.realpath(DATA_DIR)
+    if not target.startswith(data_root + os.sep):
+        return None
+    name = os.path.basename(target)
+    # Vault entries are flat under .data/ — reject anything nested (e.g. covers/).
+    if os.path.dirname(target) != data_root:
+        return None
+    return name or None
 
 async def get_current_user(access_token: str = Cookie(None), db: Session = Depends(get_db)):
     if not access_token:
@@ -207,8 +226,8 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         }
 
         if os.path.islink(entry_path):
-            try:
-                file_hash = os.path.basename(os.readlink(entry_path))
+            file_hash = _resolve_vault_hash(entry_path)
+            if file_hash:
                 item_data["hash_id"] = file_hash
                 cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{file_hash}.jpg")
                 if os.path.exists(cover_fs_path):
@@ -221,8 +240,6 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                         item_data["author"] = book.author
                     if book.description:
                         item_data["description"] = book.description
-            except OSError:
-                pass
 
         items.append(item_data)
 
@@ -1242,6 +1259,79 @@ async def remove_favorite(hash_id: str, current_user: models.User = Depends(get_
     ).first()
     if fav:
         db.delete(fav)
+        db.commit()
+    return {"message": "Removed"}
+
+
+def _normalize_dir_path(path: str) -> str:
+    """Validate a directory path: must be inside BOOKS_DIR, must exist, must
+    actually be a directory. Returns the canonical relative path (forward
+    slashes, no trailing slash)."""
+    if path is None:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    rel = path.strip().lstrip("/").rstrip("/")
+    target = os.path.abspath(os.path.join(BOOKS_DIR, rel))
+    if not target.startswith(os.path.abspath(BOOKS_DIR)):
+        raise HTTPException(status_code=403, detail="Directory traversal detected")
+    if not os.path.isdir(target):
+        raise HTTPException(status_code=404, detail="Directory not found")
+    return rel
+
+
+@app.get("/api/dir-favorites")
+async def get_dir_favorites(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = db.query(models.DirectoryFavorite).filter(
+        models.DirectoryFavorite.user_id == current_user.id
+    ).order_by(models.DirectoryFavorite.path).all()
+    items = []
+    for row in rows:
+        full = os.path.abspath(os.path.join(BOOKS_DIR, row.path))
+        items.append({
+            "id": row.id,
+            "path": row.path,
+            "name": os.path.basename(row.path) or row.path,
+            "exists": full.startswith(os.path.abspath(BOOKS_DIR)) and os.path.isdir(full),
+        })
+    return {"items": items}
+
+
+@app.post("/api/dir-favorites", response_model=schemas.DirectoryFavoriteResponse)
+async def add_dir_favorite(
+    fav: schemas.DirectoryFavoriteCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rel = _normalize_dir_path(fav.path)
+    existing = db.query(models.DirectoryFavorite).filter(
+        models.DirectoryFavorite.user_id == current_user.id,
+        models.DirectoryFavorite.path == rel,
+    ).first()
+    if existing:
+        return existing
+    new_fav = models.DirectoryFavorite(user_id=current_user.id, path=rel)
+    db.add(new_fav)
+    db.commit()
+    db.refresh(new_fav)
+    return new_fav
+
+
+@app.delete("/api/dir-favorites")
+async def remove_dir_favorite(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # No existence check — let users remove a stale bookmark for a deleted dir.
+    rel = path.strip().lstrip("/").rstrip("/")
+    row = db.query(models.DirectoryFavorite).filter(
+        models.DirectoryFavorite.user_id == current_user.id,
+        models.DirectoryFavorite.path == rel,
+    ).first()
+    if row:
+        db.delete(row)
         db.commit()
     return {"message": "Removed"}
 

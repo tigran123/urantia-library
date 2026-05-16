@@ -36,6 +36,17 @@ class FavoriteResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class DirectoryFavoriteCreate(BaseModel):
+    path: str
+
+class DirectoryFavoriteResponse(BaseModel):
+    id: int
+    user_id: int
+    path: str
+
+    class Config:
+        from_attributes = True
+
 class ReadingProgressCreate(BaseModel):
     hash_id: str
     location: str

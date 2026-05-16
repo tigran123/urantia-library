@@ -13,6 +13,7 @@ const currentPath = ref('')
 const savedViewMode = localStorage.getItem('viewMode')
 const viewMode = ref<'grid' | 'list'>(savedViewMode === 'list' ? 'list' : 'grid')
 const favoriteIds = ref<Set<string>>(new Set())
+const dirFavorites = ref<Set<string>>(new Set())
 
 const loadFavorites = async () => {
   try {
@@ -21,6 +22,15 @@ const loadFavorites = async () => {
     favoriteIds.value = new Set(ids)
   } catch (err) {
     console.error('Failed to load favorites', err)
+  }
+}
+
+const loadDirFavorites = async () => {
+  try {
+    const res = await api.get('/dir-favorites')
+    dirFavorites.value = new Set((res.data.items || []).map((f: any) => f.path))
+  } catch (err) {
+    console.error('Failed to load directory favorites', err)
   }
 }
 
@@ -41,6 +51,27 @@ const toggleFavorite = async (item: any, event: Event) => {
     favoriteIds.value = newIds
   } catch (err) {
     console.error('Failed to toggle favorite', err)
+  }
+}
+
+const toggleDirFavorite = async (path: string, event?: Event) => {
+  if (event) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  if (!path) return
+  try {
+    const newSet = new Set(dirFavorites.value)
+    if (dirFavorites.value.has(path)) {
+      await api.delete('/dir-favorites', { params: { path } })
+      newSet.delete(path)
+    } else {
+      await api.post('/dir-favorites', { path })
+      newSet.add(path)
+    }
+    dirFavorites.value = newSet
+  } catch (err) {
+    console.error('Failed to toggle directory favorite', err)
   }
 }
 
@@ -74,6 +105,7 @@ const loadPath = async (path: string) => {
 
 onMounted(() => {
   loadFavorites()
+  loadDirFavorites()
   loadPath(route.params.path as string)
 })
 
@@ -136,22 +168,38 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         </ol>
       </nav>
 
-      <!-- View Toggle -->
-      <div class="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-1 self-start sm:self-auto border border-transparent dark:border-gray-700">
+      <div class="flex items-center gap-2 self-start sm:self-auto">
+        <!-- Bookmark the current directory -->
         <button
-          @click="viewMode = 'grid'"
-          :class="['p-1.5 rounded-md transition-colors', viewMode === 'grid' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
-          title="Grid View"
+          v-if="currentPath"
+          @click="toggleDirFavorite(currentPath)"
+          class="p-1.5 rounded-md transition-colors border"
+          :class="dirFavorites.has(currentPath)
+            ? 'text-blue-500 border-blue-200 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50'
+            : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-blue-500 hover:bg-gray-100 dark:hover:bg-gray-700'"
+          :title="dirFavorites.has(currentPath) ? $t('app.remove_favorite') : $t('app.add_favorite')"
         >
-          <Squares2X2Icon class="h-5 w-5" />
+          <BookmarkIconSolid v-if="dirFavorites.has(currentPath)" class="h-5 w-5" />
+          <BookmarkIcon v-else class="h-5 w-5" />
         </button>
-        <button
-          @click="viewMode = 'list'"
-          :class="['p-1.5 rounded-md transition-colors', viewMode === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
-          title="List View"
-        >
-          <ListBulletIcon class="h-5 w-5" />
-        </button>
+
+        <!-- View Toggle -->
+        <div class="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-1 border border-transparent dark:border-gray-700">
+          <button
+            @click="viewMode = 'grid'"
+            :class="['p-1.5 rounded-md transition-colors', viewMode === 'grid' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+            :title="$t('app.grid_view')"
+          >
+            <Squares2X2Icon class="h-5 w-5" />
+          </button>
+          <button
+            @click="viewMode = 'list'"
+            :class="['p-1.5 rounded-md transition-colors', viewMode === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+            :title="$t('app.list_view')"
+          >
+            <ListBulletIcon class="h-5 w-5" />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -176,6 +224,10 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <div class="relative group">
             <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
               <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
+              <BookmarkIcon v-else class="h-5 w-5" />
+            </button>
+            <button v-else-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+              <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
               <BookmarkIcon v-else class="h-5 w-5" />
             </button>
             <template v-if="item.is_dir">
@@ -246,6 +298,10 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               </router-link>
               <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
                 <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
+                <BookmarkIcon v-else class="h-5 w-5" />
+              </button>
+              <button v-else-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+                <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
                 <BookmarkIcon v-else class="h-5 w-5" />
               </button>
             </div>
