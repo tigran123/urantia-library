@@ -9,6 +9,8 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, nullable=False, default=False)
+    clearance = Column(Integer, nullable=False, default=0)
     avatar_url = Column(String, nullable=True)
     search_per_page = Column(Integer, nullable=True)
 
@@ -64,6 +66,7 @@ class Book(Base):
     identifiers = Column(String)
     original_filename = Column(String, nullable=False)
     needs_review = Column(Boolean, default=False)
+    clearance = Column(Integer, nullable=False, default=100)
 
 class BookLocation(Base):
     __tablename__ = "book_locations"

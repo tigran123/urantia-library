@@ -171,6 +171,14 @@ const nextPage = () => { if (rendition) rendition.next() }
 
 const toggleImmersive = () => { immersive.value = !immersive.value }
 
+const onKeyDown = (e: KeyboardEvent) => {
+  if (!immersive.value) return
+  const target = e.target as HTMLElement | null
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+  if (e.key === 'PageDown') { e.preventDefault(); nextPage() }
+  else if (e.key === 'PageUp') { e.preventDefault(); prevPage() }
+}
+
 // When entering immersive: lock body scroll so accidental swipes near the
 // page edges don't drift the underlying app. When leaving: restore.
 // The ResizeObserver picks up the dimensional change and handles
@@ -283,6 +291,7 @@ onMounted(() => {
   initEpub()
   themeObs = new MutationObserver(() => applyTheme())
   themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+  window.addEventListener('keydown', onKeyDown)
 })
 
 watch(() => props.path, () => {
@@ -291,6 +300,7 @@ watch(() => props.path, () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeyDown)
   clearTimeout(saveTimeout)
   themeObs?.disconnect()
   themeObs = null

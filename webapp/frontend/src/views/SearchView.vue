@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../api'
+
+const { t } = useI18n({ useScope: 'global' })
 import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon } from '@heroicons/vue/24/solid'
 
@@ -14,10 +17,30 @@ const error = ref('')
 const favoriteIds = ref<Set<string>>(new Set())
 
 const DEFAULT_PER_PAGE = 50
-const currentUser = inject<Ref<{ search_per_page?: number | null } | null>>(
+const currentUser = inject<Ref<{ search_per_page?: number | null, is_admin?: boolean } | null>>(
   'currentUser',
   ref(null)
 )
+
+const editBookClearance = async (match: any, event: Event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!match.hash_id) return
+  const current = match.clearance ?? 0
+  const raw = window.prompt(t('admin.clearance_prompt', { title: match.title || match.name }), String(current))
+  if (raw === null) return
+  const next = Number(raw)
+  if (!Number.isFinite(next) || next < 0 || !Number.isInteger(next)) {
+    alert(t('admin.clearance_invalid'))
+    return
+  }
+  try {
+    await api.put(`/admin/books/${encodeURIComponent(match.hash_id)}/clearance`, { clearance: next })
+    match.clearance = next
+  } catch (err: any) {
+    alert(err.response?.data?.detail || err.message)
+  }
+}
 const perPage = computed(() => currentUser.value?.search_per_page ?? DEFAULT_PER_PAGE)
 const total = ref(0)
 const totalPages = ref(0)
@@ -278,6 +301,12 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" class="h-5 w-5" />
               <BookmarkIcon v-else class="h-5 w-5" />
             </button>
+            <button
+              v-if="currentUser?.is_admin && match.hash_id"
+              @click.prevent="editBookClearance(match, $event)"
+              class="absolute right-10 top-1 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
+              :title="t('admin.edit_clearance_tooltip')"
+            >🔒 {{ match.clearance ?? 0 }}</button>
           </div>
         </li>
       </ul>

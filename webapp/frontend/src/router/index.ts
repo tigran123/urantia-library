@@ -7,6 +7,8 @@ import RegisterView from '../views/RegisterView.vue'
 import SetPasswordView from '../views/SetPasswordView.vue'
 
 import ItemView from '../views/ItemView.vue'
+import AdminUsersView from '../views/AdminUsersView.vue'
+import AdminBooksView from '../views/AdminBooksView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -49,6 +51,20 @@ const router = createRouter({
       path: '/set-password',
       name: 'set-password',
       component: SetPasswordView
+    },
+    {
+      path: '/admin',
+      redirect: '/admin/users'
+    },
+    {
+      path: '/admin/users',
+      name: 'admin-users',
+      component: AdminUsersView
+    },
+    {
+      path: '/admin/books',
+      name: 'admin-books',
+      component: AdminBooksView
     }
   ]
 })

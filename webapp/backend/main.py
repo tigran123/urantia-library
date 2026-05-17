@@ -116,6 +116,35 @@ async def get_current_user(access_token: str = Cookie(None), db: Session = Depen
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     return user
 
+
+def require_admin(current_user: models.User = Depends(get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin required")
+    return current_user
+
+
+def _book_clearance(file_hash: str | None, db: Session) -> int:
+    """Return the clearance required to read `file_hash`. 0 (public) if the
+    hash is unknown or has no row in `books` — matches the design decision
+    that ancillary, unregistered files are unrestricted."""
+    if not file_hash:
+        return 0
+    book = db.query(models.Book).filter(models.Book.id == file_hash).first()
+    return book.clearance if book else 0
+
+
+def assert_can_read_path(symlink_fs_path: str, user: models.User, db: Session) -> None:
+    """Resolve `symlink_fs_path` through the CAS vault, look up the book's
+    clearance, and 403 if `user.clearance` is below it. Admins bypass.
+    Non-CAS files (symlinks pointing outside .data) are treated as public."""
+    if user.is_admin:
+        return
+    file_hash = _resolve_vault_hash(symlink_fs_path)
+    required = _book_clearance(file_hash, db)
+    if required > (user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Insufficient clearance")
+
+
 @app.post("/api/login")
 async def login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == login_data.email).first()
@@ -148,6 +177,8 @@ async def get_me(current_user: models.User = Depends(get_current_user)):
         "email": current_user.email,
         "avatar_url": current_user.avatar_url,
         "search_per_page": current_user.search_per_page,
+        "is_admin": bool(current_user.is_admin),
+        "clearance": int(current_user.clearance or 0),
     }
 
 @app.put("/api/users/me/settings", response_model=schemas.UserResponse)
@@ -234,12 +265,15 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                     item_data["cover_url"] = f"/api/covers/{file_hash}"
                 book = db.query(models.Book).filter(models.Book.id == file_hash).first()
                 if book:
+                    if not current_user.is_admin and (book.clearance or 0) > (current_user.clearance or 0):
+                        continue
                     if book.title:
                         item_data["title"] = book.title
                     if book.author:
                         item_data["author"] = book.author
                     if book.description:
                         item_data["description"] = book.description
+                    item_data["clearance"] = int(book.clearance or 0)
 
         items.append(item_data)
 
@@ -289,6 +323,9 @@ async def search(
         models.BookLocation, models.Book.id == models.BookLocation.hash_id
     )
 
+    if not current_user.is_admin:
+        query = query.filter(models.Book.clearance <= (current_user.clearance or 0))
+
     if query_lower:
         like = f"%{query_lower}%"
         query = query.filter(or_(
@@ -333,6 +370,7 @@ async def search(
             "title": book.title,
             "author": book.author,
             "description": book.description,
+            "clearance": int(book.clearance or 0),
         })
 
     return {
@@ -426,13 +464,195 @@ async def reject_user(token: str, db: Session = Depends(get_db)):
 
     return JSONResponse(status_code=200, content={"message": "User rejected successfully."})
 
+
+# ---------------- Admin: clearance management ----------------
+
+@app.get("/api/admin/users", response_model=List[schemas.AdminUserSummary])
+async def admin_list_users(
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return db.query(models.User).order_by(models.User.email).all()
+
+
+@app.put("/api/admin/users/{user_id}/clearance", response_model=schemas.AdminUserSummary)
+async def admin_set_user_clearance(
+    user_id: int,
+    payload: schemas.UserClearanceUpdate,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if payload.clearance is not None:
+        if payload.clearance < 0:
+            raise HTTPException(status_code=400, detail="Clearance must be non-negative")
+        user.clearance = payload.clearance
+    if payload.is_admin is not None:
+        # Guard: don't let an admin demote themselves into having zero admins.
+        if user.id == admin.id and payload.is_admin is False:
+            raise HTTPException(status_code=400, detail="Refusing to demote the current admin")
+        user.is_admin = payload.is_admin
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.put("/api/admin/books/{hash_id}/clearance")
+async def admin_set_book_clearance(
+    hash_id: str,
+    payload: schemas.BookClearanceUpdate,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if payload.clearance < 0:
+        raise HTTPException(status_code=400, detail="Clearance must be non-negative")
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    book.clearance = payload.clearance
+    db.commit()
+    return {"hash_id": hash_id, "clearance": book.clearance}
+
+
+@app.post("/api/admin/books/clearance")
+async def admin_bulk_set_book_clearance(
+    payload: schemas.BulkBookClearanceUpdate,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if payload.clearance < 0:
+        raise HTTPException(status_code=400, detail="Clearance must be non-negative")
+    if not payload.hash_ids:
+        return {"updated": 0, "clearance": payload.clearance}
+    updated = db.query(models.Book).filter(models.Book.id.in_(payload.hash_ids)).update(
+        {models.Book.clearance: payload.clearance},
+        synchronize_session=False,
+    )
+    db.commit()
+    return {"updated": updated, "clearance": payload.clearance}
+
+
+def _book_to_admin_detail(book: models.Book, db: Session) -> dict:
+    locs = db.query(models.BookLocation.symlink_path).filter(
+        models.BookLocation.hash_id == book.id
+    ).all()
+    return {
+        "id": book.id,
+        "title": book.title,
+        "author": book.author,
+        "publisher": book.publisher,
+        "published": book.published,
+        "description": book.description,
+        "tags": book.tags,
+        "series": book.series,
+        "languages": book.languages,
+        "identifiers": book.identifiers,
+        "original_filename": book.original_filename,
+        "clearance": int(book.clearance or 0),
+        "needs_review": bool(book.needs_review),
+        "locations": [r[0] for r in locs],
+    }
+
+
+@app.get("/api/admin/books/{hash_id}", response_model=schemas.AdminBookDetail)
+async def admin_get_book(
+    hash_id: str,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return _book_to_admin_detail(book, db)
+
+
+@app.put("/api/admin/books/{hash_id}", response_model=schemas.AdminBookDetail)
+async def admin_update_book(
+    hash_id: str,
+    payload: schemas.BookUpdate,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    updates = payload.model_dump(exclude_unset=True)
+    if "clearance" in updates and updates["clearance"] is not None and updates["clearance"] < 0:
+        raise HTTPException(status_code=400, detail="Clearance must be non-negative")
+    for field, val in updates.items():
+        setattr(book, field, val)
+    db.commit()
+    db.refresh(book)
+    return _book_to_admin_detail(book, db)
+
+
+@app.delete("/api/admin/books/{hash_id}")
+async def admin_delete_book(
+    hash_id: str,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    locations = [r[0] for r in db.query(models.BookLocation.symlink_path).filter(
+        models.BookLocation.hash_id == hash_id
+    ).all()]
+
+    # Filesystem cleanup. Tolerate missing files — best-effort.
+    errors = []
+    books_root = os.path.abspath(BOOKS_DIR)
+    for sp in locations:
+        full = os.path.abspath(os.path.join(BOOKS_DIR, sp))
+        # Refuse to touch anything that escapes BOOKS_DIR or that isn't a symlink.
+        if not full.startswith(books_root + os.sep):
+            errors.append(f"refused traversal: {sp}")
+            continue
+        if os.path.islink(full):
+            try:
+                os.remove(full)
+            except OSError as e:
+                errors.append(f"symlink {sp}: {e}")
+
+    vault_file = os.path.join(BOOKS_DIR, ".data", hash_id)
+    if os.path.exists(vault_file):
+        try:
+            os.remove(vault_file)
+        except OSError as e:
+            errors.append(f"vault: {e}")
+    cover_file = os.path.join(BOOKS_DIR, ".data", "covers", f"{hash_id}.jpg")
+    if os.path.exists(cover_file):
+        try:
+            os.remove(cover_file)
+        except OSError as e:
+            errors.append(f"cover: {e}")
+
+    # Foreign keys in SQLite aren't enforced unless PRAGMA foreign_keys=ON,
+    # which we don't set — explicitly clear referencing rows so we don't leave
+    # orphans in favorites / reading_progress / book_locations.
+    db.query(models.BookLocation).filter(models.BookLocation.hash_id == hash_id).delete()
+    db.query(models.Favorite).filter(models.Favorite.hash_id == hash_id).delete()
+    db.query(models.ReadingProgress).filter(models.ReadingProgress.hash_id == hash_id).delete()
+    db.delete(book)
+    db.commit()
+    return {"deleted": hash_id, "locations": locations, "errors": errors}
+
+
 @app.get("/api/files/{path:path}")
-async def get_file(path: str, current_user: models.User = Depends(get_current_user)):
+async def get_file(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     file_path = os.path.join(BOOKS_DIR, path)
     if not os.path.abspath(file_path).startswith(os.path.abspath(BOOKS_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
+    assert_can_read_path(file_path, current_user, db)
     return FileResponse(file_path)
 
 def sanitize_fb2_path(path: str) -> str:
@@ -763,8 +983,13 @@ def _extract_annotation_html(root) -> str:
 
 
 @app.get("/api/fb2-content")
-async def fb2_content(path: str, current_user: models.User = Depends(get_current_user)):
+async def fb2_content(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     file_path = sanitize_fb2_path(path)
+    assert_can_read_path(file_path, current_user, db)
     try:
         xml_bytes = _read_fb2_bytes(file_path)
     except zipfile.BadZipFile:
@@ -773,8 +998,13 @@ async def fb2_content(path: str, current_user: models.User = Depends(get_current
 
 
 @app.get("/api/fb2-metadata")
-async def fb2_metadata(path: str, current_user: models.User = Depends(get_current_user)):
+async def fb2_metadata(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     file_path = sanitize_fb2_path(path)
+    assert_can_read_path(file_path, current_user, db)
     try:
         xml_bytes = _read_fb2_bytes(file_path)
     except zipfile.BadZipFile:
@@ -1110,8 +1340,13 @@ def _convert_txt(text: str) -> Dict[str, Any]:
 
 
 @app.get("/api/md-content")
-async def md_content(path: str, current_user: models.User = Depends(get_current_user)):
+async def md_content(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     file_path = sanitize_text_path(path)
+    assert_can_read_path(file_path, current_user, db)
     text = _read_text_file(file_path)
     if file_path.lower().endswith(".txt"):
         return _convert_txt(text)
@@ -1123,12 +1358,14 @@ async def text_preview(
     path: str,
     max_chars: int = 2000,
     current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Return up to max_chars of text from a .md/.txt file for use as a
     cover-slot placeholder preview. For .md the snippet is also rendered to
     HTML so the preview can mirror the in-viewer formatting. Clamp the limit
     to keep responses tiny."""
     file_path = sanitize_text_path(path)
+    assert_can_read_path(file_path, current_user, db)
     text = _read_text_file(file_path)
     limit = max(200, min(int(max_chars), 8000))
     snippet = text[:limit]
@@ -1158,8 +1395,13 @@ def sanitize_djvu_path(path: str) -> str:
     return target_path
 
 @app.get("/api/djvu-metadata")
-async def djvu_metadata(path: str, current_user: models.User = Depends(get_current_user)):
+async def djvu_metadata(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     file_path = sanitize_djvu_path(path)
+    assert_can_read_path(file_path, current_user, db)
     try:
         ctx = djvu.decode.Context()
         doc = ctx.new_document(djvu.decode.FileURI(file_path))
@@ -1170,8 +1412,14 @@ async def djvu_metadata(path: str, current_user: models.User = Depends(get_curre
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/djvu-page")
-async def djvu_page(path: str, page: int, current_user: models.User = Depends(get_current_user)):
+async def djvu_page(
+    path: str,
+    page: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     file_path = sanitize_djvu_path(path)
+    assert_can_read_path(file_path, current_user, db)
     if page < 1:
         raise HTTPException(status_code=400, detail="Invalid page number")
 
@@ -1207,19 +1455,30 @@ async def djvu_page(path: str, page: int, current_user: models.User = Depends(ge
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/covers/{hash_id}")
-async def get_cover(hash_id: str, current_user: models.User = Depends(get_current_user)):
+async def get_cover(
+    hash_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     cover_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{hash_id}.jpg")
     if not os.path.exists(cover_path) or not os.path.isfile(cover_path):
         raise HTTPException(status_code=404, detail="Cover not found")
+    if not current_user.is_admin:
+        required = _book_clearance(hash_id, db)
+        if required > (current_user.clearance or 0):
+            raise HTTPException(status_code=403, detail="Insufficient clearance")
     return FileResponse(cover_path)
 
 @app.get("/api/favorites")
 async def get_favorites(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    results = db.query(models.Favorite, models.Book, models.BookLocation).join(
+    q = db.query(models.Favorite, models.Book, models.BookLocation).join(
         models.Book, models.Favorite.hash_id == models.Book.id
     ).outerjoin(
         models.BookLocation, models.Book.id == models.BookLocation.hash_id
-    ).filter(models.Favorite.user_id == current_user.id).all()
+    ).filter(models.Favorite.user_id == current_user.id)
+    if not current_user.is_admin:
+        q = q.filter(models.Book.clearance <= (current_user.clearance or 0))
+    results = q.all()
 
     fav_dict = {}
     for fav, book, loc in results:
@@ -1238,6 +1497,8 @@ async def get_favorites(current_user: models.User = Depends(get_current_user), d
 
 @app.post("/api/favorites", response_model=schemas.FavoriteResponse)
 async def add_favorite(fav: schemas.FavoriteCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin and _book_clearance(fav.hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Insufficient clearance")
     existing = db.query(models.Favorite).filter(
         models.Favorite.user_id == current_user.id,
         models.Favorite.hash_id == fav.hash_id
@@ -1337,6 +1598,8 @@ async def remove_dir_favorite(
 
 @app.get("/api/progress/{hash_id}", response_model=schemas.ReadingProgressResponse)
 async def get_progress(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Insufficient clearance")
     progress = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
         models.ReadingProgress.hash_id == hash_id
@@ -1347,6 +1610,8 @@ async def get_progress(hash_id: str, current_user: models.User = Depends(get_cur
 
 @app.post("/api/progress", response_model=schemas.ReadingProgressResponse)
 async def update_progress(prog: schemas.ReadingProgressCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin and _book_clearance(prog.hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Insufficient clearance")
     existing = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
         models.ReadingProgress.hash_id == prog.hash_id

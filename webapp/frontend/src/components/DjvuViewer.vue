@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import {
@@ -28,6 +28,7 @@ const imageUrl = ref('')
 const imageUrl2 = ref('')
 const isDoublePage = ref(false)
 const immersive = ref(false)
+const container = ref<HTMLElement | null>(null)
 
 const toggleImmersive = () => { immersive.value = !immersive.value }
 
@@ -39,7 +40,46 @@ watch(immersive, (v) => {
   document.documentElement.style.overflow = v ? 'hidden' : ''
 })
 
+// PgDn/PgUp scroll the viewport within the current page; only when already
+// at the bottom/top does the keypress flip to the next/prev page. Today the
+// image is fit-to-container so there is nothing to scroll and we always
+// turn the page — once Fit Width is added, this handler will start
+// scrolling first.
+const onKeyDown = (e: KeyboardEvent) => {
+  if (!immersive.value) return
+  const target = e.target as HTMLElement | null
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+  if (e.key === 'PageDown') {
+    e.preventDefault()
+    const c = container.value
+    if (c && c.scrollTop + c.clientHeight < c.scrollHeight - 1) {
+      c.scrollBy({ top: c.clientHeight - 40 })
+    } else {
+      nextPage()
+    }
+  } else if (e.key === 'PageUp') {
+    e.preventDefault()
+    const c = container.value
+    if (c && c.scrollTop > 0) {
+      c.scrollBy({ top: -(c.clientHeight - 40) })
+    } else {
+      prevPage()
+    }
+  } else if (e.key === 'Home') {
+    e.preventDefault()
+    if (container.value) container.value.scrollTop = 0
+  } else if (e.key === 'End') {
+    e.preventDefault()
+    if (container.value) container.value.scrollTop = container.value.scrollHeight
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+})
+
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeyDown)
   document.body.style.overflow = ''
   document.documentElement.style.overflow = ''
 })
@@ -128,21 +168,27 @@ const fetchPage = async (page: number) => {
   }
 }
 
-const nextPage = () => {
+// Turning the page resets the viewport: Next lands at the top of the new
+// page, Prev at the bottom — so the reader's eye position carries over.
+const nextPage = async () => {
   const step = isDoublePage.value ? 2 : 1
   if (currentPage.value < totalPages.value) {
     let next = currentPage.value + step
     if (next > totalPages.value) next = totalPages.value
-    fetchPage(next)
+    await fetchPage(next)
+    await nextTick()
+    if (container.value) container.value.scrollTop = 0
   }
 }
 
-const prevPage = () => {
+const prevPage = async () => {
   const step = isDoublePage.value ? 2 : 1
   if (currentPage.value > 1) {
     let prev = currentPage.value - step
     if (prev < 1) prev = 1
-    fetchPage(prev)
+    await fetchPage(prev)
+    await nextTick()
+    if (container.value) container.value.scrollTop = container.value.scrollHeight
   }
 }
 
@@ -250,7 +296,7 @@ watch(() => props.path, (newPath) => {
       </div>
       
       <!-- Viewer area -->
-      <div class="relative w-full flex-grow overflow-auto flex items-center justify-center bg-gray-200 dark:bg-gray-900 p-2 lg:p-4">
+      <div ref="container" class="relative w-full flex-grow overflow-auto flex items-center justify-center bg-gray-200 dark:bg-gray-900 p-2 lg:p-4">
         <div v-if="loadingPage" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
           <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
         </div>
@@ -268,37 +314,39 @@ watch(() => props.path, (newPath) => {
             alt="DjVu Page 2"
           />
         </div>
-
-        <!-- Immersive floating controls -->
-        <template v-if="immersive">
-          <button
-            @click="toggleImmersive"
-            :title="t('app.immersive_exit')"
-            class="absolute top-2 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
-          >
-            <ArrowsPointingInIcon class="h-5 w-5" />
-          </button>
-          <button
-            @click="prevPage"
-            :disabled="currentPage === 1 || loadingPage"
-            :title="t('djvu.previous')"
-            class="absolute bottom-3 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <ChevronLeftIcon class="h-6 w-6" />
-          </button>
-          <button
-            @click="nextPage"
-            :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
-            :title="t('djvu.next')"
-            class="absolute bottom-3 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <ChevronRightIcon class="h-6 w-6" />
-          </button>
-          <div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-black/15 text-white/80 text-sm select-none pointer-events-none">
-            {{ currentPage }}<span v-if="isDoublePage && currentPage < totalPages">–{{ currentPage + 1 }}</span> / {{ totalPages }}
-          </div>
-        </template>
       </div>
+
+      <!-- Immersive floating controls. Sit outside the scrolling viewer area
+           so they stay pinned to the viewport when zoom modes (fit-width)
+           later cause the page to overflow vertically. -->
+      <template v-if="immersive">
+        <button
+          @click="toggleImmersive"
+          :title="t('app.immersive_exit')"
+          class="absolute top-2 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
+        >
+          <ArrowsPointingInIcon class="h-5 w-5" />
+        </button>
+        <button
+          @click="prevPage"
+          :disabled="currentPage === 1 || loadingPage"
+          :title="t('djvu.previous')"
+          class="absolute bottom-3 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ChevronLeftIcon class="h-6 w-6" />
+        </button>
+        <button
+          @click="nextPage"
+          :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
+          :title="t('djvu.next')"
+          class="absolute bottom-3 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ChevronRightIcon class="h-6 w-6" />
+        </button>
+        <div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-black/15 text-white/80 text-sm select-none pointer-events-none">
+          {{ currentPage }}<span v-if="isDoublePage && currentPage < totalPages">–{{ currentPage + 1 }}</span> / {{ totalPages }}
+        </div>
+      </template>
     </template>
   </div>
 </template>

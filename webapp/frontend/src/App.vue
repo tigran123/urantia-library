@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
+import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon } from '@heroicons/vue/24/outline'
 import api from './api'
 import { useI18n } from 'vue-i18n'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
@@ -15,7 +15,7 @@ const showSearchTips = ref(false)
 const router = useRouter()
 const route = useRoute()
 
-const currentUser = ref<{ email: string, avatar_url?: string, search_per_page?: number | null } | null>(null)
+const currentUser = ref<{ email: string, avatar_url?: string, search_per_page?: number | null, is_admin?: boolean, clearance?: number } | null>(null)
 provide('currentUser', currentUser)
 const isProfileMenuOpen = ref(false)
 const isSettingsModalOpen = ref(false)
@@ -153,6 +153,16 @@ const handleLogout = async () => {
                   <Cog6ToothIcon class="h-4 w-4" />
                   {{ t('app.settings') }}
                 </button>
+
+                <router-link
+                  v-if="currentUser?.is_admin"
+                  to="/admin/users"
+                  @click="isProfileMenuOpen = false"
+                  class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 focus:outline-none"
+                >
+                  <ShieldCheckIcon class="h-4 w-4" />
+                  {{ t('admin.title') }}
+                </router-link>
 
                 <button @click="handleLogout" class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 focus:outline-none">
                   <ArrowRightOnRectangleIcon class="h-4 w-4" />

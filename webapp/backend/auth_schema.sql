@@ -9,6 +9,8 @@ CREATE TABLE users (
     email VARCHAR UNIQUE NOT NULL,
     hashed_password VARCHAR NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    clearance INTEGER NOT NULL DEFAULT 0,
     avatar_url VARCHAR,
     search_per_page INTEGER DEFAULT 50
 );
@@ -38,8 +40,11 @@ CREATE TABLE books (
     identifiers VARCHAR,                -- e.g., 'isbn:5-271-05460-8'
     original_filename VARCHAR NOT NULL, -- Fallback for unparseable files
     needs_review BOOLEAN DEFAULT FALSE, -- Flag for manual librarian intervention
+    clearance INTEGER NOT NULL DEFAULT 100, -- Minimum user clearance required to read; high by default so only admins see new books until classified down
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_books_clearance ON books(clearance);
 
 -- ==============================================================================
 -- 3. The Spatial Search Index

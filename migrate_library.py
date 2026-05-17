@@ -13,6 +13,10 @@ from argparse import ArgumentParser
 
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB
 
+# Newly ingested books start at the highest clearance so they are only visible
+# to admins until a librarian has reviewed their metadata and lowered the gate.
+DEFAULT_BOOK_CLEARANCE = 100
+
 # Hardcoded safety net applied in addition to (or in absence of) exclude.txt.
 # .data and urantia-library MUST always be skipped to avoid migrating the
 # vault or the webapp source back into itself.
@@ -106,6 +110,11 @@ def extract_ebook_meta(filepath):
                     raw_key, val = match.groups()
                     key = raw_key.strip().lower()
                     val = val.strip()
+                    # ebook-meta prints "Unknown" as a sentinel when it can't
+                    # read the field (e.g. when given a file with no extension
+                    # so it can't dispatch a format reader). Treat it as empty.
+                    if val == 'Unknown':
+                        val = ''
                     if key == 'title' and val: meta['title'] = val
                     elif key == 'author(s)' and val: meta['author'] = re.sub(r'\[.*?\]', '', val).strip()
                     elif key == 'publisher' and val: meta['publisher'] = val
@@ -304,6 +313,40 @@ def main():
 
             print(f"\nProcessing: {rel_path}")
 
+            # --- Metadata: Hierarchy of Truth ---
+            # Extract from src_filepath *before* the ingest, while the file
+            # still has its extension. ebook-meta dispatches on extension and
+            # returns "Unknown" if given a bare hex-named vault path.
+            final_meta = {
+                'title': None, 'author': None, 'publisher': None, 'tags': None,
+                'series': None, 'languages': None, 'published': None,
+                'identifiers': None, 'annotation': None, 'needs_review': False,
+            }
+            if filename in htaccess_data and htaccess_data[filename].get('title'):
+                print("      -> Tier 1: .htaccess")
+                final_meta.update(htaccess_data[filename])
+            else:
+                lower = filename.lower()
+                if lower.endswith('.pdf'):
+                    extracted = extract_pdfinfo(src_filepath)
+                    if extracted.get('title'):
+                        print("      -> Tier 2: pdfinfo")
+                        final_meta.update(extracted)
+                elif lower.endswith('.djvu'):
+                    extracted = extract_djvu_meta(src_filepath)
+                    if extracted.get('title'):
+                        print("      -> Tier 2: djvused")
+                        final_meta.update(extracted)
+                else:
+                    extracted = extract_ebook_meta(src_filepath)
+                    if extracted.get('title'):
+                        print("      -> Tier 2: ebook-meta")
+                        final_meta.update(extracted)
+                if not final_meta['title']:
+                    print("      -> Tier 3: filename fallback (needs review)")
+                    final_meta['title'] = os.path.splitext(filename)[0].replace('-', ' ').replace('_', ' ')
+                    final_meta['needs_review'] = True
+
             # --- Ingest content into the vault ---
             try:
                 if in_place:
@@ -323,49 +366,18 @@ def main():
 
             n_processed += 1
 
-            # --- Metadata: Hierarchy of Truth ---
-            final_meta = {
-                'title': None, 'author': None, 'publisher': None, 'tags': None,
-                'series': None, 'languages': None, 'published': None,
-                'identifiers': None, 'annotation': None, 'needs_review': False,
-            }
-            if filename in htaccess_data and htaccess_data[filename].get('title'):
-                print("      -> Tier 1: .htaccess")
-                final_meta.update(htaccess_data[filename])
-            else:
-                lower = filename.lower()
-                if lower.endswith('.pdf'):
-                    extracted = extract_pdfinfo(vault_filepath)
-                    if extracted.get('title'):
-                        print("      -> Tier 2: pdfinfo")
-                        final_meta.update(extracted)
-                elif lower.endswith('.djvu'):
-                    extracted = extract_djvu_meta(vault_filepath)
-                    if extracted.get('title'):
-                        print("      -> Tier 2: djvused")
-                        final_meta.update(extracted)
-                else:
-                    extracted = extract_ebook_meta(vault_filepath)
-                    if extracted.get('title'):
-                        print("      -> Tier 2: ebook-meta")
-                        final_meta.update(extracted)
-                if not final_meta['title']:
-                    print("      -> Tier 3: filename fallback (needs review)")
-                    final_meta['title'] = os.path.splitext(filename)[0].replace('-', ' ').replace('_', ' ')
-                    final_meta['needs_review'] = True
-
             # --- DB ---
             try:
                 cursor.execute("""
                     INSERT OR IGNORE INTO books
                     (id, title, author, publisher, tags, series, languages,
-                     published, identifiers, description, original_filename, needs_review)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     published, identifiers, description, original_filename, needs_review, clearance)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     file_hash, final_meta['title'], final_meta['author'], final_meta['publisher'],
                     final_meta['tags'], final_meta['series'], final_meta['languages'],
                     final_meta['published'], final_meta['identifiers'], final_meta['annotation'],
-                    filename, final_meta['needs_review'],
+                    filename, final_meta['needs_review'], DEFAULT_BOOK_CLEARANCE,
                 ))
                 cursor.execute("""
                     INSERT OR IGNORE INTO book_locations (hash_id, symlink_path)

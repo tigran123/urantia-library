@@ -1,7 +1,31 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, inject } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../api'
+
+const { t } = useI18n({ useScope: 'global' })
+const currentUser = inject<{ value: { is_admin?: boolean } | null } | null>('currentUser', null)
+
+const editBookClearance = async (item: any, event: Event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!item.hash_id) return
+  const current = item.clearance ?? 0
+  const raw = window.prompt(t('admin.clearance_prompt', { title: item.title || item.name }), String(current))
+  if (raw === null) return
+  const next = Number(raw)
+  if (!Number.isFinite(next) || next < 0 || !Number.isInteger(next)) {
+    alert(t('admin.clearance_invalid'))
+    return
+  }
+  try {
+    await api.put(`/admin/books/${encodeURIComponent(item.hash_id)}/clearance`, { clearance: next })
+    item.clearance = next
+  } catch (err: any) {
+    alert(err.response?.data?.detail || err.message)
+  }
+}
 import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 
@@ -226,6 +250,12 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
               <BookmarkIcon v-else class="h-5 w-5" />
             </button>
+            <button
+              v-if="currentUser?.value?.is_admin && item.hash_id"
+              @click.prevent="editBookClearance(item, $event)"
+              class="absolute top-2 left-2 z-10 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
+              :title="t('admin.edit_clearance_tooltip')"
+            >🔒 {{ item.clearance ?? 0 }}</button>
             <button v-else-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
               <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
               <BookmarkIcon v-else class="h-5 w-5" />
@@ -296,6 +326,12 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   {{ formatBytes(item.size) }}
                 </div>
               </router-link>
+              <button
+                v-if="currentUser?.value?.is_admin && item.hash_id"
+                @click.prevent="editBookClearance(item, $event)"
+                class="absolute right-14 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
+                :title="t('admin.edit_clearance_tooltip')"
+              >🔒 {{ item.clearance ?? 0 }}</button>
               <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
                 <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
                 <BookmarkIcon v-else class="h-5 w-5" />
