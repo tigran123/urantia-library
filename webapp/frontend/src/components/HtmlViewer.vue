@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
-import { Bars3Icon, ChevronDoubleLeftIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
-import Fb2TocNode from './Fb2TocNode.vue'
+import { Bars3Icon, ChevronDoubleLeftIcon, CodeBracketIcon, DocumentTextIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
+import MdTocNode from './MdTocNode.vue'
 
 interface TocEntry {
   title: string
@@ -18,11 +18,11 @@ const props = defineProps<{ path: string; hashId: string }>()
 const loading = ref(true)
 const error = ref('')
 const html = ref('')
+const raw = ref('')
 const title = ref('')
-const authors = ref<string[]>([])
-const notes = ref<Record<string, string>>({})
 const toc = ref<TocEntry[]>([])
 const tocOpen = ref(true)
+const rawMode = ref(false)
 const immersive = ref(false)
 
 const toggleImmersive = () => { immersive.value = !immersive.value }
@@ -42,8 +42,8 @@ const onKeyDown = (e: KeyboardEvent) => {
 
 const FONT_SCALE_KEY = 'reader-font-scale'
 const loadFontScale = (): number => {
-  const raw = localStorage.getItem(FONT_SCALE_KEY)
-  const n = raw ? parseFloat(raw) : NaN
+  const r = localStorage.getItem(FONT_SCALE_KEY)
+  const n = r ? parseFloat(r) : NaN
   return Number.isFinite(n) && n >= 0.6 && n <= 2 ? n : 1
 }
 const fontScale = ref(loadFontScale())
@@ -58,8 +58,8 @@ const FONT_OPTIONS = [
   { id: 'mono',  label: 'Mono',  stack: '"SF Mono", Menlo, Consolas, "Liberation Mono", monospace' },
 ]
 const loadFontFamilyId = (): string => {
-  const raw = localStorage.getItem(FONT_FAMILY_KEY) || ''
-  return FONT_OPTIONS.find(o => o.id === raw)?.id || 'sans'
+  const r = localStorage.getItem(FONT_FAMILY_KEY) || ''
+  return FONT_OPTIONS.find(o => o.id === r)?.id || 'serif'
 }
 const fontFamilyId = ref(loadFontFamilyId())
 watch(fontFamilyId, (v) => {
@@ -71,12 +71,7 @@ const fontFamily = computed(
 
 const scrollEl = ref<HTMLElement | null>(null)
 
-const tooltip = ref<{ show: boolean; x: number; y: number; html: string }>({
-  show: false, x: 0, y: 0, html: ''
-})
-
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
-let hideTooltipTimer: ReturnType<typeof setTimeout> | null = null
 let restoring = false
 let lastSavedAnchor = -1
 
@@ -90,7 +85,7 @@ const saveProgress = async (anchor: number) => {
       location: JSON.stringify({ anchor })
     })
   } catch (e) {
-    console.error('Failed to save FB2 progress', e)
+    console.error('Failed to save HTML progress', e)
   }
 }
 
@@ -106,7 +101,7 @@ const loadProgress = async (): Promise<number | null> => {
       return null
     }
   } catch (e: any) {
-    if (e.response?.status !== 404) console.error('Failed to load FB2 progress', e)
+    if (e.response?.status !== 404) console.error('Failed to load HTML progress', e)
     return null
   }
 }
@@ -120,7 +115,6 @@ const findTopAnchor = (): number | null => {
   let bestDelta = Infinity
   for (const el of anchored) {
     const top = el.getBoundingClientRect().top - containerTop
-    // Topmost element whose top is at or just above the viewport top edge
     if (top <= 4) {
       const delta = Math.abs(top)
       if (delta < bestDelta) {
@@ -135,10 +129,8 @@ const findTopAnchor = (): number | null => {
 }
 
 const onScroll = () => {
-  // Tooltip is positioned in viewport coords; dismiss it when content scrolls
-  // out from under it rather than letting it drift.
-  if (tooltip.value.show) tooltip.value.show = false
   if (restoring) return
+  if (rawMode.value) return
   if (saveTimeout) clearTimeout(saveTimeout)
   saveTimeout = setTimeout(() => {
     const a = findTopAnchor()
@@ -146,10 +138,23 @@ const onScroll = () => {
   }, 600)
 }
 
+const toggleRaw = async () => {
+  const container = scrollEl.value
+  const ratio = container && container.scrollHeight > 0
+    ? container.scrollTop / container.scrollHeight
+    : 0
+  rawMode.value = !rawMode.value
+  await nextTick()
+  if (!container) return
+  restoring = true
+  container.scrollTop = ratio * container.scrollHeight
+  setTimeout(() => { restoring = false }, 250)
+}
+
 const scrollToAnchor = (anchor: number) => {
   const container = scrollEl.value
   if (!container) return
-  const el = container.querySelector<HTMLElement>(`#fb2-a-${anchor}`)
+  const el = container.querySelector<HTMLElement>(`#md-a-${anchor}`)
   if (!el) return
   const containerTop = container.getBoundingClientRect().top
   const elTop = el.getBoundingClientRect().top
@@ -157,9 +162,6 @@ const scrollToAnchor = (anchor: number) => {
 }
 
 const adjustFont = async (mutate: () => void) => {
-  // Capture the reading position *before* mutating, then restore it after the
-  // reflow. Without this, scrollTop stays put while content height changes,
-  // so the user lands on different text after a font-size change.
   const anchor = findTopAnchor()
   mutate()
   await nextTick()
@@ -184,76 +186,27 @@ const onTocNavigate = (anchor: number) => {
   if (immersive.value) tocOpen.value = false
 }
 
-const TOOLTIP_W = 380
-const TOOLTIP_MARGIN = 8
-
-const showTooltipFor = (link: HTMLElement, noteHtml: string) => {
-  if (hideTooltipTimer) { clearTimeout(hideTooltipTimer); hideTooltipTimer = null }
-  const linkRect = link.getBoundingClientRect()
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  let x = linkRect.left
-  if (x + TOOLTIP_W + TOOLTIP_MARGIN > vw) x = vw - TOOLTIP_W - TOOLTIP_MARGIN
-  if (x < TOOLTIP_MARGIN) x = TOOLTIP_MARGIN
-  // Place below by default; flip above if it would overflow the viewport
-  let y = linkRect.bottom + 6
-  if (y + 200 > vh && linkRect.top > 200) y = linkRect.top - 6 - 200
-  tooltip.value = { show: true, x, y, html: noteHtml }
-}
-
-const scheduleHideTooltip = () => {
-  if (hideTooltipTimer) clearTimeout(hideTooltipTimer)
-  hideTooltipTimer = setTimeout(() => {
-    tooltip.value.show = false
-  }, 150)
-}
-
-const cancelHideTooltip = () => {
-  if (hideTooltipTimer) { clearTimeout(hideTooltipTimer); hideTooltipTimer = null }
-}
-
 const onContentClick = (e: MouseEvent) => {
-  // Block all internal-anchor clicks inside the FB2 content. The app's router
-  // treats `#fragment` URL changes as navigation, which blanks the page.
+  // In-document fragment links would otherwise let the SPA hash router blank
+  // the page (mirroring MdViewer's behavior).
   const target = (e.target as HTMLElement | null)?.closest?.('a[href^="#"]') as HTMLAnchorElement | null
   if (!target) return
   e.preventDefault()
-  const noteId = (target.getAttribute('href') || '').slice(1)
-  const noteHtml = notes.value[noteId]
-  if (noteHtml) showTooltipFor(target, noteHtml)
 }
 
-const onContentMouseOver = (e: MouseEvent) => {
-  const target = (e.target as HTMLElement | null)?.closest?.('a.fb2-note') as HTMLAnchorElement | null
-  if (!target) return
-  const noteId = (target.getAttribute('href') || '').slice(1)
-  const noteHtml = notes.value[noteId]
-  if (noteHtml) showTooltipFor(target, noteHtml)
-}
-
-const onContentMouseOut = (e: MouseEvent) => {
-  const target = (e.target as HTMLElement | null)?.closest?.('a.fb2-note')
-  if (!target) return
-  // Don't dismiss when the cursor crosses into the tooltip itself
-  const related = e.relatedTarget as HTMLElement | null
-  if (related?.closest?.('.fb2-tooltip')) return
-  scheduleHideTooltip()
-}
-
-const initFb2 = async () => {
+const initHtml = async () => {
   if (!props.path) return
   loading.value = true
   error.value = ''
   html.value = ''
-  notes.value = {}
-  tooltip.value.show = false
+  raw.value = ''
+  toc.value = []
   lastSavedAnchor = -1
   try {
-    const res = await api.get('/fb2-content', { params: { path: props.path } })
+    const res = await api.get('/html-content', { params: { path: props.path } })
     title.value = res.data.title || ''
-    authors.value = res.data.authors || []
     html.value = res.data.html || ''
-    notes.value = res.data.notes || {}
+    raw.value = res.data.raw || ''
     toc.value = res.data.toc || []
     const saved = await loadProgress()
     await nextTick()
@@ -261,12 +214,10 @@ const initFb2 = async () => {
       restoring = true
       scrollToAnchor(saved)
       lastSavedAnchor = saved
-      // Release the restore guard after the scroll settles so we don't re-save
-      // the same anchor we just restored to.
       setTimeout(() => { restoring = false }, 250)
     }
   } catch (e: any) {
-    error.value = e.response?.data?.detail || e.message || 'Failed to load FB2'
+    error.value = e.response?.data?.detail || e.message || 'Failed to load file'
   } finally {
     loading.value = false
   }
@@ -274,11 +225,11 @@ const initFb2 = async () => {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
-  initFb2()
+  initHtml()
 })
 
 watch(() => props.path, () => {
-  initFb2()
+  initHtml()
 })
 
 onBeforeUnmount(() => {
@@ -290,14 +241,13 @@ onBeforeUnmount(() => {
     const a = findTopAnchor()
     if (a !== null) saveProgress(a)
   }
-  if (hideTooltipTimer) clearTimeout(hideTooltipTimer)
 })
 </script>
 
 <template>
   <div
     :class="[
-      'fb2-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full',
+      'html-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full',
       immersive
         ? 'fixed inset-0 z-50 h-dvh rounded-none'
         : 'relative rounded-lg shadow h-[80vh]'
@@ -310,13 +260,23 @@ onBeforeUnmount(() => {
       {{ error }}
     </div>
 
-    <!-- Toolbar (hidden in immersive) -->
     <div v-if="!immersive" class="w-full flex items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2 z-20">
       <div class="text-sm text-gray-700 dark:text-gray-300 truncate">
         <span v-if="title" class="font-semibold">{{ title }}</span>
-        <span v-if="authors.length" class="ml-2 text-gray-500 dark:text-gray-400">— {{ authors.join(', ') }}</span>
       </div>
       <div class="flex items-center gap-2 shrink-0">
+        <button
+          @click="toggleRaw"
+          :title="rawMode ? t('app.view_rendered') : t('app.view_raw')"
+          :aria-label="rawMode ? t('app.view_rendered') : t('app.view_raw')"
+          class="p-1.5 text-gray-800 dark:text-gray-200 rounded"
+          :class="rawMode
+            ? 'bg-blue-100 hover:bg-blue-200 dark:bg-blue-900 dark:hover:bg-blue-800'
+            : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600'"
+        >
+          <DocumentTextIcon v-if="rawMode" class="w-5 h-5" />
+          <CodeBracketIcon v-else class="w-5 h-5" />
+        </button>
         <select
           :value="fontFamilyId"
           @change="onFontFamilyChange"
@@ -333,15 +293,14 @@ onBeforeUnmount(() => {
           :title="t('app.immersive_enter')"
           class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded"
         >
-          <ArrowsPointingOutIcon class="h-5 w-5" />
+          <ArrowsPointingOutIcon class="w-5 h-5" />
         </button>
       </div>
     </div>
 
-    <!-- TOC sidebar + Scrollable text area -->
     <div class="flex flex-row flex-grow min-h-0 overflow-hidden" :class="immersive ? '' : 'rounded-b-lg'">
       <aside
-        v-if="!immersive"
+        v-if="!rawMode && !immersive"
         class="shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 transition-[width] duration-200"
         :class="tocOpen ? 'w-64' : 'w-9'"
       >
@@ -358,7 +317,7 @@ onBeforeUnmount(() => {
         </div>
         <nav v-if="tocOpen" class="flex-grow overflow-auto p-1 text-gray-800 dark:text-gray-200">
           <p v-if="!toc.length" class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">{{ t('app.toc_empty') }}</p>
-          <Fb2TocNode
+          <MdTocNode
             v-for="(entry, i) in toc"
             :key="i"
             :entry="entry"
@@ -371,24 +330,27 @@ onBeforeUnmount(() => {
       <div
         ref="scrollEl"
         @scroll.passive="onScroll"
-        class="fb2-scroll flex-grow min-w-0 overflow-y-auto bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        class="html-scroll flex-grow min-w-0 overflow-y-auto bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
       >
         <div
-          class="fb2-content w-full px-6 py-8 leading-relaxed"
+          v-if="!rawMode"
+          class="html-content w-full max-w-4xl mx-auto px-6 py-8 leading-relaxed"
           :style="{ fontSize: `${fontScale}rem`, fontFamily }"
           v-html="html"
           @click="onContentClick"
-          @mouseover="onContentMouseOver"
-          @mouseout="onContentMouseOut"
         ></div>
+        <pre
+          v-else
+          class="html-raw w-full max-w-4xl mx-auto px-6 py-8 whitespace-pre-wrap break-words"
+          :style="{ fontSize: `${fontScale}rem`, fontFamily }"
+        >{{ raw }}</pre>
       </div>
     </div>
 
-    <!-- Floating controls in Reading Mode -->
     <template v-if="immersive">
       <!-- TOC overlay drawer -->
       <aside
-        v-if="tocOpen"
+        v-if="!rawMode && tocOpen"
         class="absolute inset-y-0 left-0 z-40 w-64 max-w-[80%] bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-xl flex flex-col"
       >
         <div class="flex items-center justify-between p-1.5 border-b border-gray-200 dark:border-gray-700">
@@ -403,7 +365,7 @@ onBeforeUnmount(() => {
         </div>
         <nav class="flex-grow overflow-auto p-1 text-gray-800 dark:text-gray-200">
           <p v-if="!toc.length" class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">{{ t('app.toc_empty') }}</p>
-          <Fb2TocNode
+          <MdTocNode
             v-for="(entry, i) in toc"
             :key="i"
             :entry="entry"
@@ -414,7 +376,7 @@ onBeforeUnmount(() => {
       </aside>
 
       <button
-        v-if="!tocOpen"
+        v-if="!rawMode && !tocOpen"
         @click="tocOpen = true"
         :title="t('app.toc_expand')"
         class="absolute top-2 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
@@ -430,51 +392,87 @@ onBeforeUnmount(() => {
         <ArrowsPointingInIcon class="h-5 w-5" />
       </button>
     </template>
-
-    <Teleport to="body">
-      <div
-        v-if="tooltip.show"
-        class="fb2-tooltip fixed z-50 max-h-80 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-xl px-3 py-2 text-sm leading-snug"
-        :style="{ left: `${tooltip.x}px`, top: `${tooltip.y}px`, width: `${TOOLTIP_W}px` }"
-        @mouseenter="cancelHideTooltip"
-        @mouseleave="scheduleHideTooltip"
-        v-html="tooltip.html"
-      ></div>
-    </Teleport>
   </div>
 </template>
 
 <style>
-.fb2-content .fb2-section-title { font-weight: 600; margin: 1.5em 0 0.75em; }
-.fb2-content h2.fb2-section-title { font-size: 1.5em; }
-.fb2-content h3.fb2-section-title { font-size: 1.3em; }
-.fb2-content h4.fb2-section-title,
-.fb2-content h5.fb2-section-title,
-.fb2-content h6.fb2-section-title { font-size: 1.1em; }
-.fb2-content .fb2-body-title { font-size: 1.75em; font-weight: 700; margin: 0 0 1em; text-align: center; }
-.fb2-content .fb2-subtitle { font-size: 1.1em; font-weight: 600; margin: 1em 0 0.5em; }
-.fb2-content .fb2-p { margin: 0 0 0.75em; text-indent: 1.5em; text-align: justify; }
-.fb2-content .fb2-section > .fb2-p:first-of-type { text-indent: 0; }
-.fb2-content .fb2-empty-line { height: 1em; }
-.fb2-content .fb2-image-wrap { margin: 1em 0; text-align: center; }
-.fb2-content .fb2-image { max-width: 100%; height: auto; }
-.fb2-content .fb2-inline-img { max-height: 1.2em; vertical-align: middle; }
-.fb2-content .fb2-epigraph,
-.fb2-content .fb2-cite { margin: 1em 2em; font-style: italic; border-left: 3px solid rgba(127,127,127,0.3); padding-left: 1em; }
-.fb2-content .fb2-text-author { margin-top: 0.5em; font-style: italic; text-align: right; }
-.fb2-content .fb2-poem { margin: 1em 0; }
-.fb2-content .fb2-poem-title { font-weight: 600; margin-bottom: 0.5em; }
-.fb2-content .fb2-stanza { margin: 0.5em 0; }
-.fb2-content .fb2-v { margin-left: 2em; }
-.fb2-content .fb2-link { color: #2563eb; text-decoration: underline; }
-.dark .fb2-content .fb2-link { color: #60a5fa; }
-.fb2-content .fb2-note {
-  cursor: help;
-  text-decoration: none;
-  font-size: 0.75em;
-  vertical-align: super;
-  padding: 0 0.15em;
+.html-content h1 { font-size: 1.9em; font-weight: 700; margin: 0.4em 0 0.6em; }
+.html-content h2 { font-size: 1.55em; font-weight: 700; margin: 1.2em 0 0.5em; }
+.html-content h3 { font-size: 1.3em; font-weight: 600; margin: 1em 0 0.4em; }
+.html-content h4, .html-content h5, .html-content h6 { font-size: 1.1em; font-weight: 600; margin: 1em 0 0.3em; }
+.html-content p { margin: 0 0 0.85em; }
+.html-content a { color: #2563eb; text-decoration: underline; }
+.dark .html-content a { color: #60a5fa; }
+.html-content img { max-width: 100%; height: auto; margin: 1em 0; }
+.html-content blockquote {
+  margin: 1em 0;
+  padding: 0.25em 0 0.25em 1em;
+  border-left: 4px solid rgba(127, 127, 127, 0.35);
+  color: inherit;
+  font-style: italic;
 }
-.fb2-tooltip p { margin: 0 0 0.5em; }
-.fb2-tooltip p:last-child { margin-bottom: 0; }
+.html-content ul, .html-content ol { margin: 0 0 0.85em 1.5em; padding: 0; }
+.html-content ul { list-style: disc; }
+.html-content ol { list-style: decimal; }
+.html-content li { margin: 0.15em 0; }
+.html-content hr {
+  border: 0;
+  border-top: 1px solid rgba(127, 127, 127, 0.4);
+  margin: 1.5em 0;
+}
+.html-content code {
+  background: rgba(127, 127, 127, 0.15);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+.html-content pre {
+  background: rgba(127, 127, 127, 0.12);
+  padding: 0.75em 1em;
+  border-radius: 6px;
+  margin: 1em 0;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+.html-content pre code { background: transparent; padding: 0; border-radius: 0; font-size: inherit; }
+.html-content table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: auto;
+  max-width: 100%;
+}
+.html-content th, .html-content td {
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  padding: 0.35em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.html-content th { background: rgba(127, 127, 127, 0.12); font-weight: 600; }
+
+/* Compact rendering for the ItemView cover-slot preview. */
+.html-content--preview h1 { font-size: 1.25em; margin: 0 0 0.3em; }
+.html-content--preview h2 { font-size: 1.15em; margin: 0.4em 0 0.25em; }
+.html-content--preview h3,
+.html-content--preview h4,
+.html-content--preview h5,
+.html-content--preview h6 { font-size: 1.05em; margin: 0.3em 0 0.2em; }
+.html-content--preview p { margin: 0 0 0.4em; }
+.html-content--preview ul, .html-content--preview ol { margin: 0 0 0.4em 1.1em; }
+.html-content--preview li { margin: 0; }
+.html-content--preview img { display: none; }
+.html-content--preview pre {
+  padding: 0.25em 0.5em;
+  margin: 0.35em 0;
+  font-size: 0.9em;
+  line-height: 1.3;
+}
+.html-content--preview blockquote { margin: 0.35em 0; padding-left: 0.5em; }
+.html-content--preview hr { margin: 0.4em 0; }
+.html-content--preview a { color: inherit; text-decoration: none; }
+.html-content--preview table { font-size: 0.85em; }
+.html-content--preview th, .html-content--preview td { padding: 0.15em 0.3em; }
 </style>

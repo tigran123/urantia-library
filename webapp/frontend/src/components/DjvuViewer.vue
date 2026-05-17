@@ -49,7 +49,10 @@ const onKeyDown = (e: KeyboardEvent) => {
   if (!immersive.value) return
   const target = e.target as HTMLElement | null
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
-  if (e.key === 'PageDown') {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    immersive.value = false
+  } else if (e.key === 'PageDown') {
     e.preventDefault()
     const c = container.value
     if (c && c.scrollTop + c.clientHeight < c.scrollHeight - 1) {

@@ -175,7 +175,8 @@ const onKeyDown = (e: KeyboardEvent) => {
   if (!immersive.value) return
   const target = e.target as HTMLElement | null
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
-  if (e.key === 'PageDown') { e.preventDefault(); nextPage() }
+  if (e.key === 'Escape') { e.preventDefault(); immersive.value = false }
+  else if (e.key === 'PageDown') { e.preventDefault(); nextPage() }
   else if (e.key === 'PageUp') { e.preventDefault(); prevPage() }
 }
 
