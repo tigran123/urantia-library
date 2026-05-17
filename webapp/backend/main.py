@@ -286,6 +286,7 @@ def parse_search_query(q: str):
     filters = {
         "path": None,
         "ext": None,
+        "needs_review": None,
     }
 
     path_match = re.search(r'path:([^\s]+)', q)
@@ -299,6 +300,15 @@ def parse_search_query(q: str):
         if not filters["ext"].startswith('.'):
             filters["ext"] = '.' + filters["ext"]
         q = q.replace(ext_match.group(0), '')
+
+    nr_match = re.search(r'needs_review:(\S+)', q)
+    if nr_match:
+        val = nr_match.group(1).strip('"\'').lower()
+        if val in ('1', 'true', 'yes'):
+            filters["needs_review"] = True
+        elif val in ('0', 'false', 'no'):
+            filters["needs_review"] = False
+        q = q.replace(nr_match.group(0), '')
 
     q = q.strip().lower()
     return q, filters
@@ -344,6 +354,9 @@ async def search(
         query = query.filter(
             func.lower(models.BookLocation.symlink_path).like(f"%{filters['ext']}")
         )
+
+    if filters["needs_review"] is not None and current_user.is_admin:
+        query = query.filter(models.Book.needs_review == filters["needs_review"])
 
     total = query.order_by(None).count()
     total_pages = (total + per_page - 1) // per_page

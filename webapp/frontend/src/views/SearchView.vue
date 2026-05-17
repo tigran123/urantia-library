@@ -70,6 +70,14 @@ const parsedSearch = computed(() => {
     text = text.replace(extMatch[0], '')
   }
 
+  if (currentUser.value?.is_admin) {
+    const nrMatch = text.match(/needs_review:(\S+)/)
+    if (nrMatch) {
+      filters.push({ key: 'Needs review', value: nrMatch[1].replace(/['"]/g, ''), fullMatch: nrMatch[0] })
+      text = text.replace(nrMatch[0], '')
+    }
+  }
+
   return {
     text: text.trim(),
     filters
