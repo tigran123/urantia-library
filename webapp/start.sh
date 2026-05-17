@@ -25,4 +25,12 @@ fi
 echo "Starting Urantia Library Web Server..."
 cd backend
 . .venv/bin/activate
-exec uvicorn main:app --host 127.0.0.1 --port 8000 --no-access-log --reload
+
+# Launch based on explicit environment state
+if [ "$APP_ENV" = "development" ]; then
+    echo "INFO: Development environment detected. Enabling hot-reload."
+    exec uvicorn main:app --host 127.0.0.1 --port 8000 --no-access-log --reload
+else
+    echo "INFO: Production environment detected. Running optimized server."
+    exec uvicorn main:app --host 127.0.0.1 --port 8000 --no-access-log
+fi
