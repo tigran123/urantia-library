@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch, onUnmounted, defineAsyncComponent } from 'vue'
+import { ref, onMounted, computed, watch, onUnmounted, defineAsyncComponent, inject, type Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../api'
-import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
@@ -10,17 +10,34 @@ import EpubViewer from '../components/EpubViewer.vue'
 import ImageViewer from '../components/ImageViewer.vue'
 import Fb2Viewer from '../components/Fb2Viewer.vue'
 import MdViewer from '../components/MdViewer.vue'
+import HtmlViewer from '../components/HtmlViewer.vue'
+import BookMetadataEditor from '../components/BookMetadataEditor.vue'
 // pdfjs-dist is ~1MB; keep it out of the main bundle by lazy-loading.
 const PdfViewer = defineAsyncComponent(() => import('../components/PdfViewer.vue'))
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
+const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
 const item = ref<any>(null)
 const loading = ref(true)
 const error = ref('')
 const currentPath = ref('')
 const originalTitle = ref(document.title)
 const favoriteIds = ref<Set<string>>(new Set())
+const editingId = ref<string | null>(null)
+
+const openEditor = () => {
+  if (item.value?.hash_id) editingId.value = item.value.hash_id
+}
+
+const onEditorSaved = (updated: any) => {
+  if (!item.value || item.value.hash_id !== updated.id) return
+  item.value.title = updated.title
+  item.value.author = updated.author
+  item.value.description = updated.description
+  item.value.clearance = updated.clearance
+  if (updated.title) document.title = updated.title
+}
 
 const loadFavorites = async () => {
   try {
@@ -135,10 +152,16 @@ const isFb2 = computed(() => {
 })
 const isMd = computed(() => ['md', 'markdown'].includes(fileExtension.value))
 const isTxt = computed(() => fileExtension.value === 'txt')
+const isHtml = computed(() => {
+  const n = (item.value?.name || '').toLowerCase()
+  return n.endsWith('.html') || n.endsWith('.htm')
+      || n.endsWith('.html.zip') || n.endsWith('.htm.zip')
+})
 
 const displayFormat = computed(() => {
   if (isFb2.value) return 'FB2'
   if (isMd.value) return 'Markdown'
+  if (isHtml.value) return 'HTML'
   return fileExtension.value
 })
 
@@ -180,6 +203,24 @@ watch(
   (p) => { if (p) loadTextPreview(p); else textPreview.value = { text: '', html: '' } },
   { immediate: true }
 )
+
+const htmlPreview = ref<{ html: string }>({ html: '' })
+
+const loadHtmlPreview = async (path: string) => {
+  htmlPreview.value = { html: '' }
+  try {
+    const res = await api.get('/html-preview', { params: { path, max_chars: 1500 } })
+    htmlPreview.value = { html: res.data.html || '' }
+  } catch (e) {
+    console.error('Failed to load HTML preview', e)
+  }
+}
+
+watch(
+  () => item.value && isHtml.value ? item.value.path : null,
+  (p) => { if (p) loadHtmlPreview(p); else htmlPreview.value = { html: '' } },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -213,6 +254,13 @@ watch(
               >{{ textPreview.text }}</pre>
               <div class="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white dark:from-gray-800 to-transparent pointer-events-none"></div>
             </template>
+            <template v-else-if="isHtml && htmlPreview.html">
+              <div
+                class="html-content html-content--preview absolute inset-0 m-0 px-3 py-3 text-[10px] leading-snug overflow-hidden text-gray-700 dark:text-gray-300"
+                v-html="htmlPreview.html"
+              ></div>
+              <div class="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white dark:from-gray-800 to-transparent pointer-events-none"></div>
+            </template>
             <DocumentIcon v-else class="w-32 h-32 text-gray-300 dark:text-gray-600" />
           </div>
         </div>
@@ -224,10 +272,20 @@ watch(
               <h1 class="text-2xl md:text-4xl font-serif font-bold text-gray-900 dark:text-gray-100 break-words leading-tight">
                 {{ item.title || item.name.replace(/\.[^/.]+$/, "") }}
               </h1>
-              <button v-if="item.hash_id" @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex-shrink-0 mt-1" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? t('app.remove_favorite') : t('app.add_favorite')">
-                <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-7 w-7" />
-                <BookmarkIcon v-else class="h-7 w-7" />
-              </button>
+              <div class="flex items-center gap-1 flex-shrink-0 mt-1">
+                <button
+                  v-if="currentUser?.is_admin && item.hash_id"
+                  @click.prevent="openEditor()"
+                  class="p-2 rounded-full text-gray-400 hover:text-blue-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  :title="t('admin.edit_book')"
+                >
+                  <PencilSquareIcon class="h-7 w-7" />
+                </button>
+                <button v-if="item.hash_id" @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? t('app.remove_favorite') : t('app.add_favorite')">
+                  <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-7 w-7" />
+                  <BookmarkIcon v-else class="h-7 w-7" />
+                </button>
+              </div>
             </div>
             <h2 v-if="item.author" class="mt-2 text-xl md:text-2xl text-gray-700 dark:text-gray-300 font-medium">
               {{ item.author }}
@@ -327,6 +385,9 @@ watch(
           <!-- Markdown / plain text viewer -->
           <MdViewer v-else-if="isMd || isTxt" :path="item.path" :hash-id="item.hash_id" />
 
+          <!-- HTML Viewer (also handles .html.zip) -->
+          <HtmlViewer v-else-if="isHtml" :path="item.path" :hash-id="item.hash_id" />
+
           <!-- Unsupported -->
           <div v-else class="text-center p-8">
             <DocumentIcon class="mx-auto h-16 w-16 text-gray-400 mb-4" />
@@ -338,5 +399,7 @@ watch(
       </div>
 
     </div>
+
+    <BookMetadataEditor :hash-id="editingId" @close="editingId = null" @saved="onEditorSaved" />
   </div>
 </template>

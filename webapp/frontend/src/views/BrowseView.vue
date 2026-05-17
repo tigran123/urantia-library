@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, inject } from 'vue'
+import { ref, onMounted, watch, inject, type Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
-const currentUser = inject<{ value: { is_admin?: boolean } | null } | null>('currentUser', null)
+const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
 
 const editBookClearance = async (item: any, event: Event) => {
   event.preventDefault()
@@ -26,7 +26,7 @@ const editBookClearance = async (item: any, event: Event) => {
     alert(err.response?.data?.detail || err.message)
   }
 }
-import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
+import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
@@ -153,6 +153,42 @@ const getFullUrl = (url: string) => {
   return api.defaults.baseURL?.replace('/api', '') + url
 }
 
+const fileTypeLabel = (name: string): string | null => {
+  if (!name) return null
+  const n = name.toLowerCase()
+  if (n.endsWith('.fb2.zip') || n.endsWith('.fb2')) return 'FB2'
+  if (n.endsWith('.html.zip') || n.endsWith('.htm.zip')) return 'HTML'
+  const m = n.match(/\.([^.]+)$/)
+  if (!m) return null
+  const labels: Record<string, string> = {
+    pdf: 'PDF',
+    djvu: 'DjVu',
+    epub: 'ePub',
+    txt: 'TXT',
+    md: 'MD',
+    markdown: 'MD',
+    mobi: 'MOBI',
+    azw: 'AZW',
+    azw3: 'AZW3',
+    html: 'HTML',
+    htm: 'HTML',
+  }
+  return labels[m[1]] || null
+}
+
+const downloadItem = (item: any, event: Event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!item || item.is_dir) return
+  const url = getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = item.name
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
 const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) => {
   if (isDir || name.length <= maxLength) return name;
   const extIndex = name.lastIndexOf('.');
@@ -251,7 +287,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <BookmarkIcon v-else class="h-5 w-5" />
             </button>
             <button
-              v-if="currentUser?.value?.is_admin && item.hash_id"
+              v-if="currentUser?.is_admin && item.hash_id"
               @click.prevent="editBookClearance(item, $event)"
               class="absolute top-2 left-2 z-10 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
               :title="t('admin.edit_clearance_tooltip')"
@@ -278,12 +314,23 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             </template>
 
             <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500">
-              <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+              <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900 relative">
                 <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
                 <DocumentIcon v-else class="h-16 w-16 text-gray-300 dark:text-gray-600" />
+                <button
+                  @click.prevent.stop="downloadItem(item, $event)"
+                  class="absolute bottom-2 left-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm border border-gray-100 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:text-blue-500"
+                  :title="$t('app.download')"
+                >
+                  <ArrowDownTrayIcon class="h-5 w-5" />
+                </button>
+                <span
+                  v-if="fileTypeLabel(item.name)"
+                  class="absolute bottom-2 right-2 z-10 px-1.5 py-0.5 rounded text-xs font-mono font-semibold bg-gray-800/80 text-white backdrop-blur-sm"
+                >{{ fileTypeLabel(item.name) }}</span>
               </div>
               <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words line-clamp-2" :title="item.title || item.name">{{ item.title || formatFilename(item.name, item.is_dir) }}</h3>
-              <p v-if="item.author" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate" :title="item.author">{{ item.author }}</p>
+              <p v-if="item.author" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate font-bold italic" :title="item.author">{{ item.author }}</p>
               <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
             </router-link>
           </div>
@@ -294,52 +341,57 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       <div v-else class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
         <ul class="divide-y divide-gray-100 dark:divide-gray-700">
           <li v-for="item in items" :key="item.name" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group">
-            <div class="relative flex items-center">
+            <div class="flex items-center p-4 gap-3">
               <template v-if="item.is_dir">
-                <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex-1 flex items-center p-4 pr-16 min-w-0">
+                <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex-1 flex items-center min-w-0">
                   <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
-                  <div class="flex-1 min-w-0 pr-8">
+                  <div class="flex-1 min-w-0">
                     <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
                     <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
                   </div>
                 </a>
-                <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center p-4 pr-16 min-w-0">
+                <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center min-w-0">
                   <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
-                  <div class="flex-1 min-w-0 pr-8">
+                  <div class="flex-1 min-w-0">
                     <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
                     <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
                   </div>
                 </router-link>
               </template>
 
-              <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center p-4 pr-16 min-w-0">
+              <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center min-w-0">
                 <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
                   <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-contain" />
                   <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
                 </div>
-                <div class="flex-1 min-w-0 pr-8">
+                <div class="flex-1 min-w-0">
                   <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="item.title || item.name">{{ item.title || formatFilename(item.name, item.is_dir) }}</p>
-                  <p v-if="item.author" class="text-xs text-gray-600 dark:text-gray-300 truncate mt-0.5" :title="item.author">{{ item.author }}</p>
+                  <p v-if="item.author" class="text-xs text-gray-600 dark:text-gray-300 truncate mt-0.5 font-bold italic" :title="item.author">{{ item.author }}</p>
                   <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
                 </div>
-                <div class="ml-4 flex-shrink-0 text-sm text-gray-500 dark:text-gray-400">
-                  {{ formatBytes(item.size) }}
-                </div>
               </router-link>
-              <button
-                v-if="currentUser?.value?.is_admin && item.hash_id"
-                @click.prevent="editBookClearance(item, $event)"
-                class="absolute right-14 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
-                :title="t('admin.edit_clearance_tooltip')"
-              >🔒 {{ item.clearance ?? 0 }}</button>
-              <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-                <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
-                <BookmarkIcon v-else class="h-5 w-5" />
-              </button>
-              <button v-else-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-                <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
-                <BookmarkIcon v-else class="h-5 w-5" />
-              </button>
+
+              <div class="flex-shrink-0 flex flex-col items-end gap-1">
+                <div class="flex items-center gap-1">
+                  <button
+                    v-if="currentUser?.is_admin && item.hash_id"
+                    @click.prevent="editBookClearance(item, $event)"
+                    class="px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
+                    :title="t('admin.edit_clearance_tooltip')"
+                  >🔒 {{ item.clearance ?? 0 }}</button>
+                  <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+                    <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
+                    <BookmarkIcon v-else class="h-5 w-5" />
+                  </button>
+                  <button v-else-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+                    <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
+                    <BookmarkIcon v-else class="h-5 w-5" />
+                  </button>
+                </div>
+                <div v-if="!item.is_dir" class="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  <span v-if="fileTypeLabel(item.name)" class="font-semibold">{{ fileTypeLabel(item.name) }}</span><span v-if="fileTypeLabel(item.name)"> · </span>{{ formatBytes(item.size) }}
+                </div>
+              </div>
             </div>
           </li>
         </ul>

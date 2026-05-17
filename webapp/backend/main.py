@@ -1422,6 +1422,295 @@ async def text_preview(
     }
 
 
+# ---------------- HTML viewer ----------------
+
+def sanitize_html_path(path: str) -> str:
+    """Ensure path is within BOOKS_DIR, exists, and is an .html/.htm/.html.zip file."""
+    if not path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
+    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
+        raise HTTPException(status_code=403, detail="Directory traversal detected")
+    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    lower = target_path.lower()
+    if not (lower.endswith(".html") or lower.endswith(".htm")
+            or lower.endswith(".html.zip") or lower.endswith(".htm.zip")):
+        raise HTTPException(status_code=400, detail="Not an HTML file")
+    return target_path
+
+
+def _read_html_bytes(file_path: str) -> bytes:
+    if file_path.lower().endswith(".zip"):
+        with zipfile.ZipFile(file_path) as zf:
+            html_entries = [n for n in zf.namelist()
+                            if n.lower().endswith((".html", ".htm"))
+                            and not n.endswith("/")]
+            if not html_entries:
+                raise HTTPException(status_code=422, detail="No .html entry inside zip")
+            # Prefer the shortest path (typically the document root, not assets/x.html).
+            html_entries.sort(key=len)
+            return zf.read(html_entries[0])
+    with open(file_path, "rb") as f:
+        return f.read()
+
+
+_HTML_CHARSET_RE = re.compile(
+    rb'<meta[^>]+charset\s*=\s*["\']?\s*([A-Za-z0-9_\-]+)', re.IGNORECASE
+)
+
+
+def _decode_html_bytes(data: bytes) -> str:
+    """Decode HTML bytes using a charset declared via <meta charset>, falling
+    back to utf-8 then latin-1. Only the first ~2KB is scanned for the meta
+    tag, matching how browsers sniff."""
+    m = _HTML_CHARSET_RE.search(data[:2048])
+    if m:
+        try:
+            return data.decode(m.group(1).decode("ascii", errors="replace"))
+        except (LookupError, UnicodeDecodeError):
+            pass
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+_HTML_VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+    "meta", "param", "source", "track", "wbr",
+}
+
+_HTML_DROP_TAGS = {
+    "script", "style", "iframe", "object", "embed", "form", "input", "button",
+    "select", "textarea", "link", "meta", "svg", "math", "frame", "frameset",
+    "applet", "noscript",
+}
+
+_HTML_UNWRAP_TAGS = {"html", "body"}
+
+_HTML_ALLOWED_TAGS = {
+    "a", "abbr", "address", "article", "aside", "b", "bdi", "bdo",
+    "blockquote", "br", "caption", "cite", "code", "col", "colgroup",
+    "dd", "del", "details", "dfn", "div", "dl", "dt", "em", "figcaption",
+    "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header",
+    "hr", "i", "img", "ins", "kbd", "li", "main", "mark", "nav", "ol",
+    "p", "pre", "q", "rp", "rt", "ruby", "s", "samp", "section", "small",
+    "span", "strong", "sub", "summary", "sup", "table", "tbody", "td",
+    "tfoot", "th", "thead", "time", "tr", "u", "ul", "var", "wbr",
+}
+
+_HTML_ALLOWED_ATTRS = {
+    "a": {"href", "title"},
+    "img": {"src", "alt", "title", "width", "height"},
+    "th": {"colspan", "rowspan", "scope"},
+    "td": {"colspan", "rowspan"},
+    "col": {"span"},
+    "colgroup": {"span"},
+    "ol": {"start", "reversed", "type"},
+    "li": {"value"},
+    "time": {"datetime"},
+    "q": {"cite"},
+    "blockquote": {"cite"},
+}
+
+_HTML_ANCHORED_TAGS = {"p", "div", "section", "article", "pre", "blockquote",
+                       "h1", "h2", "h3", "h4", "h5", "h6"}
+_HTML_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+
+_HTML_SAFE_HREF_RE = re.compile(
+    r"^(https?:|mailto:|tel:|#|/|\.\.?/)", re.IGNORECASE
+)
+_HTML_SAFE_IMG_RE = re.compile(
+    r"^(https?:|data:image/|/|\.\.?/)", re.IGNORECASE
+)
+
+
+import html.parser as _hp  # avoid clashing with the html.escape import at top
+
+
+class _HtmlSanitizer(_hp.HTMLParser):
+    """Streaming HTML sanitizer that drops scripts/styles/forms, strips event
+    handlers and dangerous URLs, anchors block elements for progress tracking,
+    and collects a flat TOC from h1–h6."""
+
+    def __init__(self, collect_toc: bool = True, max_chars: int | None = None):
+        super().__init__(convert_charrefs=True)
+        self.out: List[str] = []
+        self.collect_toc = collect_toc
+        self.toc_flat: List[Dict[str, Any]] = []
+        self.title: str = ""
+        self.anchor: int = 0
+        self._suppress_depth = 0
+        self._head_depth = 0
+        self._title_depth = 0
+        self._heading_stack: List[tuple] = []  # (level, anchor, [text parts])
+        self._max_chars = max_chars
+        self.truncated = False
+        self._len = 0
+
+    def _emit(self, s: str) -> None:
+        if self._max_chars is not None and self._len >= self._max_chars:
+            self.truncated = True
+            return
+        self.out.append(s)
+        self._len += len(s)
+
+    def _format_attrs(self, tag: str, attrs):
+        allowed = _HTML_ALLOWED_ATTRS.get(tag, set())
+        parts = []
+        for k, v in attrs:
+            k = (k or "").lower()
+            if not k or k.startswith("on") or k not in allowed:
+                continue
+            if v is None:
+                parts.append(f" {k}")
+                continue
+            v = v.strip()
+            if tag == "a" and k == "href":
+                if not _HTML_SAFE_HREF_RE.match(v):
+                    v = "#"
+            elif tag == "img" and k == "src":
+                if not _HTML_SAFE_IMG_RE.match(v):
+                    continue
+            parts.append(f' {k}="{_html_escape(v, quote=True)}"')
+        return "".join(parts)
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "head":
+            self._head_depth += 1
+            self._suppress_depth += 1
+            return
+        if self._head_depth > 0:
+            if tag == "title":
+                self._title_depth += 1
+            return
+        if tag in _HTML_DROP_TAGS:
+            self._suppress_depth += 1
+            return
+        if self._suppress_depth:
+            return
+        if tag in _HTML_UNWRAP_TAGS or tag not in _HTML_ALLOWED_TAGS:
+            return
+        attr_str = self._format_attrs(tag, attrs)
+        if tag in _HTML_ANCHORED_TAGS:
+            n = self.anchor
+            self.anchor += 1
+            attr_str = f' id="md-a-{n}" data-anchor="{n}"' + attr_str
+            if tag in _HTML_HEADING_TAGS:
+                self._heading_stack.append((int(tag[1]), n, []))
+        slash = "/" if tag in _HTML_VOID_TAGS else ""
+        self._emit(f"<{tag}{attr_str}{slash}>")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag == "head":
+            self._head_depth = max(0, self._head_depth - 1)
+            self._suppress_depth = max(0, self._suppress_depth - 1)
+            return
+        if self._head_depth > 0:
+            if tag == "title":
+                self._title_depth = max(0, self._title_depth - 1)
+            return
+        if tag in _HTML_DROP_TAGS:
+            self._suppress_depth = max(0, self._suppress_depth - 1)
+            return
+        if self._suppress_depth:
+            return
+        if tag in _HTML_UNWRAP_TAGS or tag not in _HTML_ALLOWED_TAGS:
+            return
+        if tag in _HTML_HEADING_TAGS and self._heading_stack:
+            level, n, buf = self._heading_stack.pop()
+            text = "".join(buf).strip()
+            if self.collect_toc and text:
+                self.toc_flat.append({"title": text, "level": level, "anchor": n})
+        if tag in _HTML_VOID_TAGS:
+            return
+        self._emit(f"</{tag}>")
+
+    def handle_startendtag(self, tag, attrs):
+        # XHTML-style self-closing. Treat as a start tag; void tags already
+        # render as self-closing, non-void inputs were authored as a single
+        # element so we still don't want a separate end emit.
+        self.handle_starttag(tag, attrs)
+
+    def handle_data(self, data):
+        if self._title_depth > 0 and not self.title:
+            t = data.strip()
+            if t:
+                self.title = t
+            return
+        if self._head_depth > 0 or self._suppress_depth:
+            return
+        if self._heading_stack:
+            self._heading_stack[-1][2].append(data)
+        self._emit(_html_escape(data, quote=False))
+
+
+def _convert_html(html_bytes: bytes, max_chars: int | None = None) -> Dict[str, Any]:
+    raw = _decode_html_bytes(html_bytes)
+    sanitizer = _HtmlSanitizer(collect_toc=True, max_chars=max_chars)
+    sanitizer.feed(raw)
+    sanitizer.close()
+    title = sanitizer.title
+    if not title:
+        for item in sanitizer.toc_flat:
+            if item["level"] == 1 and item["title"].strip():
+                title = item["title"].strip()
+                break
+    return {
+        "title": title,
+        "html": "".join(sanitizer.out),
+        "raw": raw,
+        "toc": _nest_toc(sanitizer.toc_flat),
+        "anchor_count": sanitizer.anchor,
+        "truncated": sanitizer.truncated,
+    }
+
+
+@app.get("/api/html-content")
+async def html_content(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    file_path = sanitize_html_path(path)
+    assert_can_read_path(file_path, current_user, db)
+    try:
+        data = _read_html_bytes(file_path)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    return _convert_html(data)
+
+
+@app.get("/api/html-preview")
+async def html_preview(
+    path: str,
+    max_chars: int = 2000,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Sanitized HTML snippet for the ItemView cover-slot placeholder. The
+    sanitizer stops appending after max_chars of output, so the response stays
+    small even for large books."""
+    file_path = sanitize_html_path(path)
+    assert_can_read_path(file_path, current_user, db)
+    limit = max(200, min(int(max_chars), 8000))
+    try:
+        data = _read_html_bytes(file_path)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    result = _convert_html(data, max_chars=limit)
+    return {
+        "title": result["title"],
+        "html": result["html"],
+        "truncated": result["truncated"],
+    }
+
+
 def sanitize_djvu_path(path: str) -> str:
     """Ensure path is within BOOKS_DIR and exists."""
     if not path:
