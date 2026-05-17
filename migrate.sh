@@ -3,7 +3,7 @@
 rm -rf /Books/.data
 
 /Books/urantia-library/webapp/backend/initdb.sh
-/Books/urantia-library/migrate_library.py --src /Books-full --target /Books --db /Books/urantia-library/webapp/backend/auth.db --exclude-file=/Books-full/exclude.txt
+/Books/urantia-library/migrate_library.py --src /Books-test --target /Books --db /Books/urantia-library/webapp/backend/auth.db --exclude-file=/Books-full/exclude.txt
 
 #find /Books -name '.htaccess' -exec rm {} \;
 #find /Books -name '000-browse.php' -exec rm {} \;
