@@ -142,7 +142,19 @@ def assert_can_read_path(symlink_fs_path: str, user: models.User, db: Session) -
     file_hash = _resolve_vault_hash(symlink_fs_path)
     required = _book_clearance(file_hash, db)
     if required > (user.clearance or 0):
-        raise HTTPException(status_code=403, detail="Insufficient clearance")
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _accessible_locations_query(db: Session, prefix: str, user: models.User):
+    """Query for `book_locations.symlink_path` values under `prefix` that point
+    to books readable by `user`. `prefix` should already end with '/' (or be ''
+    for the library root). Relies on the PK index on symlink_path."""
+    return (
+        db.query(models.BookLocation.symlink_path)
+        .join(models.Book, models.Book.id == models.BookLocation.hash_id)
+        .filter(models.Book.clearance <= (user.clearance or 0))
+        .filter(models.BookLocation.symlink_path.like(f"{prefix}%"))
+    )
 
 
 @app.post("/api/login")
@@ -223,6 +235,20 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
     if not os.path.exists(target_dir) or not os.path.isdir(target_dir):
         raise HTTPException(status_code=404, detail="Directory not found")
 
+    # For non-admins, hide subdirectories whose subtree contains no readable book
+    # (and 403 on direct access to such a directory) so the topic structure of
+    # the library isn't leaked via directory names.
+    accessible_subdirs: set[str] = set()
+    if not current_user.is_admin:
+        prefix = f"{path.rstrip('/')}/" if path else ""
+        rows = _accessible_locations_query(db, prefix, current_user).all()
+        if path and not rows:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        for (sp,) in rows:
+            rest = sp[len(prefix):]
+            if "/" in rest:
+                accessible_subdirs.add(rest.split("/", 1)[0])
+
     items = []
 
     try:
@@ -238,6 +264,8 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         if not os.path.exists(entry_path):
             continue
         is_dir = os.path.isdir(entry_path)
+        if is_dir and not current_user.is_admin and entry not in accessible_subdirs:
+            continue
 
         try:
             size = os.path.getsize(entry_path) if not is_dir else 0
@@ -1479,7 +1507,7 @@ async def get_cover(
     if not current_user.is_admin:
         required = _book_clearance(hash_id, db)
         if required > (current_user.clearance or 0):
-            raise HTTPException(status_code=403, detail="Insufficient clearance")
+            raise HTTPException(status_code=403, detail="Forbidden")
     return FileResponse(cover_path)
 
 @app.get("/api/favorites")
@@ -1511,7 +1539,7 @@ async def get_favorites(current_user: models.User = Depends(get_current_user), d
 @app.post("/api/favorites", response_model=schemas.FavoriteResponse)
 async def add_favorite(fav: schemas.FavoriteCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.is_admin and _book_clearance(fav.hash_id, db) > (current_user.clearance or 0):
-        raise HTTPException(status_code=403, detail="Insufficient clearance")
+        raise HTTPException(status_code=403, detail="Forbidden")
     existing = db.query(models.Favorite).filter(
         models.Favorite.user_id == current_user.id,
         models.Favorite.hash_id == fav.hash_id
@@ -1612,7 +1640,7 @@ async def remove_dir_favorite(
 @app.get("/api/progress/{hash_id}", response_model=schemas.ReadingProgressResponse)
 async def get_progress(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
-        raise HTTPException(status_code=403, detail="Insufficient clearance")
+        raise HTTPException(status_code=403, detail="Forbidden")
     progress = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
         models.ReadingProgress.hash_id == hash_id
@@ -1624,7 +1652,7 @@ async def get_progress(hash_id: str, current_user: models.User = Depends(get_cur
 @app.post("/api/progress", response_model=schemas.ReadingProgressResponse)
 async def update_progress(prog: schemas.ReadingProgressCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.is_admin and _book_clearance(prog.hash_id, db) > (current_user.clearance or 0):
-        raise HTTPException(status_code=403, detail="Insufficient clearance")
+        raise HTTPException(status_code=403, detail="Forbidden")
     existing = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
         models.ReadingProgress.hash_id == prog.hash_id
