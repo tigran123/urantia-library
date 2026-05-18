@@ -329,7 +329,7 @@ watch(
                 </tr>
                 <tr v-if="item.description" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">Description</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400 prose dark:prose-invert max-w-none text-sm" v-html="item.description"></td>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400 prose dark:prose-invert max-w-none text-sm whitespace-pre-wrap" v-html="item.description"></td>
                 </tr>
               </tbody>
             </table>
