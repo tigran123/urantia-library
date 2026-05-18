@@ -220,6 +220,7 @@ const fileTypeLabel = (name: string): string | null => {
   if (n.endsWith('.html.zip') || n.endsWith('.htm.zip')) return 'HTML'
   const m = n.match(/\.([^.]+)$/)
   if (!m) return null
+  const ext = m[1]
   const labels: Record<string, string> = {
     pdf: 'PDF',
     djvu: 'DjVu',
@@ -232,8 +233,16 @@ const fileTypeLabel = (name: string): string | null => {
     azw3: 'AZW3',
     html: 'HTML',
     htm: 'HTML',
+    cpp: 'C++',
   }
-  return labels[m[1]] || null
+  if (labels[ext]) return labels[ext]
+
+  const codeExts = ['c', 'h', 'hpp', 'py', 'js', 'ts', 'jsx', 'tsx', 'lua', 'sh', 'bash', 'rs', 'go', 'java', 'css', 'scss', 'json', 'xml', 'yaml', 'yml', 'sql', 'ini']
+  if (codeExts.includes(ext)) {
+    return ext.toUpperCase()
+  }
+
+  return null
 }
 
 const downloadItem = (item: any, event: Event) => {

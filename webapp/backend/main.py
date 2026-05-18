@@ -1437,8 +1437,14 @@ async def fb2_metadata(
 
 # ---------------- Markdown / plain-text viewer ----------------
 
+CODE_EXTENSIONS = {
+    ".py", ".c", ".cpp", ".h", ".hpp", ".js", ".ts", ".jsx", ".tsx",
+    ".lua", ".sh", ".bash", ".rs", ".go", ".java", ".css", ".scss",
+    ".json", ".xml", ".yaml", ".yml", ".sql", ".ini"
+}
+
 def sanitize_text_path(path: str) -> str:
-    """Ensure path is within BOOKS_DIR, exists, and is a .md/.markdown/.txt file."""
+    """Ensure path is within BOOKS_DIR, exists, and is a .md/.markdown/.txt or code file."""
     if not path:
         raise HTTPException(status_code=400, detail="Invalid path")
     target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
@@ -1447,8 +1453,9 @@ def sanitize_text_path(path: str) -> str:
     if not os.path.exists(target_path) or not os.path.isfile(target_path):
         raise HTTPException(status_code=404, detail="File not found")
     lower = target_path.lower()
-    if not (lower.endswith(".md") or lower.endswith(".markdown") or lower.endswith(".txt")):
-        raise HTTPException(status_code=400, detail="Not a Markdown or text file")
+    ext = os.path.splitext(lower)[1]
+    if not (lower.endswith(".md") or lower.endswith(".markdown") or lower.endswith(".txt") or ext in CODE_EXTENSIONS):
+        raise HTTPException(status_code=400, detail="Not a Markdown, text, or supported code file")
     return target_path
 
 
@@ -1736,6 +1743,27 @@ def _convert_md(text: str) -> Dict[str, Any]:
     }
 
 
+def _convert_code(text: str, lang: str) -> Dict[str, Any]:
+    """Source-code viewer: emit a single <pre class="md-codeblock"><code> with
+    the file contents HTML-escaped. Bypasses the markdown parser so that lines
+    starting with ``` (e.g. embedded in docstrings) don't terminate the block."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lang_class = f' class="language-{_html_escape(lang)}"' if lang else ""
+    html = (
+        f'<pre id="md-a-0" data-anchor="0" class="md-codeblock">'
+        f'<code{lang_class}>{_html_escape(normalized)}</code></pre>'
+    )
+    return {"title": "", "html": html, "raw": normalized, "toc": [], "anchor_count": 1}
+
+
+def _render_code_snippet_html(text: str, lang: str) -> str:
+    lang_class = f' class="language-{_html_escape(lang)}"' if lang else ""
+    return (
+        f'<pre class="md-codeblock"><code{lang_class}>'
+        f'{_html_escape(text)}</code></pre>'
+    )
+
+
 def _convert_txt(text: str) -> Dict[str, Any]:
     """Plain-text viewer: each blank-line-separated block becomes one anchored
     <pre>, preserving the author's line wrapping and any ASCII layout."""
@@ -1762,8 +1790,12 @@ async def md_content(
     file_path = sanitize_text_path(path)
     assert_can_read_path(file_path, current_user, db)
     text = _read_text_file(file_path)
-    if file_path.lower().endswith(".txt"):
+    lower = file_path.lower()
+    ext = os.path.splitext(lower)[1]
+    if lower.endswith(".txt"):
         return _convert_txt(text)
+    elif ext in CODE_EXTENSIONS:
+        return _convert_code(text, ext[1:])
     return _convert_md(text)
 
 
@@ -1784,10 +1816,13 @@ async def text_preview(
     limit = max(200, min(int(max_chars), 8000))
     snippet = text[:limit]
     html = ""
-    if not file_path.lower().endswith(".txt"):
-        # Render only the snippet; partial input is fine for a preview, the
-        # frontend clips visually anyway.
-        html = _MdRenderer(collect_toc=False).render(snippet)
+    lower = file_path.lower()
+    ext = os.path.splitext(lower)[1]
+    if not lower.endswith(".txt"):
+        if ext in CODE_EXTENSIONS:
+            html = _render_code_snippet_html(snippet, ext[1:])
+        else:
+            html = _MdRenderer(collect_toc=False).render(snippet)
     return {
         "text": snippet,
         "html": html,

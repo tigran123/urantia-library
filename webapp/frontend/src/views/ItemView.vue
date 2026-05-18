@@ -219,6 +219,7 @@ const isFb2 = computed(() => {
 })
 const isMd = computed(() => ['md', 'markdown'].includes(fileExtension.value))
 const isTxt = computed(() => fileExtension.value === 'txt')
+const isCode = computed(() => ['py', 'c', 'cpp', 'h', 'hpp', 'js', 'ts', 'jsx', 'tsx', 'lua', 'sh', 'bash', 'rs', 'go', 'java', 'css', 'scss', 'json', 'xml', 'yaml', 'yml', 'sql', 'ini'].includes(fileExtension.value))
 const isHtml = computed(() => {
   const n = (item.value?.name || '').toLowerCase()
   return n.endsWith('.html') || n.endsWith('.htm')
@@ -229,6 +230,7 @@ const displayFormat = computed(() => {
   if (isFb2.value) return 'FB2'
   if (isMd.value) return 'Markdown'
   if (isHtml.value) return 'HTML'
+  if (isCode.value) return t('app.source_code')
   return fileExtension.value
 })
 
@@ -266,7 +268,7 @@ const loadTextPreview = async (path: string) => {
 }
 
 watch(
-  () => item.value && (isMd.value || isTxt.value) ? item.value.path : null,
+  () => item.value && (isMd.value || isTxt.value || isCode.value) ? item.value.path : null,
   (p) => { if (p) loadTextPreview(p); else textPreview.value = { text: '', html: '' } },
   { immediate: true }
 )
@@ -309,7 +311,7 @@ watch(
         <div class="md:col-span-1 flex flex-col items-center">
           <div class="w-full max-w-sm aspect-[3/4] rounded-lg shadow-xl overflow-hidden bg-white dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700 relative">
             <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain" />
-            <template v-else-if="(isMd || isTxt) && (textPreview.html || textPreview.text)">
+            <template v-else-if="(isMd || isTxt || isCode) && (textPreview.html || textPreview.text)">
               <div
                 v-if="textPreview.html"
                 class="md-content md-content--preview absolute inset-0 m-0 px-3 py-3 text-[10px] leading-snug overflow-hidden text-gray-700 dark:text-gray-300"
@@ -478,8 +480,8 @@ watch(
           <!-- FB2 Viewer (also handles .fb2.zip) -->
           <Fb2Viewer v-else-if="isFb2" :path="item.path" :hash-id="item.hash_id" />
 
-          <!-- Markdown / plain text viewer -->
-          <MdViewer v-else-if="isMd || isTxt" :path="item.path" :hash-id="item.hash_id" />
+          <!-- Markdown / plain text / code viewer -->
+          <MdViewer v-else-if="isMd || isTxt || isCode" :path="item.path" :hash-id="item.hash_id" />
 
           <!-- HTML Viewer (also handles .html.zip) -->
           <HtmlViewer v-else-if="isHtml" :path="item.path" :hash-id="item.hash_id" />

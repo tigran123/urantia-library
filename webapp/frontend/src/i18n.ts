@@ -54,7 +54,8 @@ const messages = {
       view_raw: 'Show raw source',
       view_rendered: 'Show rendered',
       grid_view: 'Grid view',
-      list_view: 'List view'
+      list_view: 'List view',
+      source_code: 'Source Code'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -266,7 +267,8 @@ const messages = {
       view_raw: 'Показать исходный текст',
       view_rendered: 'Показать отрисованный',
       grid_view: 'Сетка',
-      list_view: 'Список'
+      list_view: 'Список',
+      source_code: 'Исходный код'
     },
     auth: {
       signInTitle: 'Вход',

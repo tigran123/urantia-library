@@ -4,6 +4,8 @@ import api from '../api'
 import { useI18n } from 'vue-i18n'
 import { Bars3Icon, ChevronDoubleLeftIcon, CodeBracketIcon, DocumentTextIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
 import MdTocNode from './MdTocNode.vue'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github.css'
 
 interface TocEntry {
   title: string
@@ -141,6 +143,14 @@ const onScroll = () => {
   }, 600)
 }
 
+const applyHighlighting = () => {
+  const container = scrollEl.value
+  if (!container) return
+  container.querySelectorAll('pre code').forEach((block) => {
+    hljs.highlightElement(block as HTMLElement)
+  })
+}
+
 const toggleRaw = async () => {
   const container = scrollEl.value
   // Preserve approximate position across the mode switch by ratio. Anchors
@@ -151,6 +161,7 @@ const toggleRaw = async () => {
     : 0
   rawMode.value = !rawMode.value
   await nextTick()
+  if (!rawMode.value) applyHighlighting()
   if (!container) return
   restoring = true
   container.scrollTop = ratio * container.scrollHeight
@@ -216,6 +227,7 @@ const initMd = async () => {
     toc.value = res.data.toc || []
     const saved = await loadProgress()
     await nextTick()
+    applyHighlighting()
     if (saved !== null) {
       restoring = true
       scrollToAnchor(saved)
@@ -492,4 +504,10 @@ onBeforeUnmount(() => {
 .md-content--preview .md-blockquote { margin: 0.35em 0; padding-left: 0.5em; }
 .md-content--preview .md-hr { margin: 0.4em 0; }
 .md-content--preview .md-link { color: inherit; text-decoration: none; }
+
+/* Override highlight.js background to use our theme-aware backgrounds */
+.md-content .hljs {
+  background: transparent !important;
+  padding: 0 !important;
+}
 </style>
