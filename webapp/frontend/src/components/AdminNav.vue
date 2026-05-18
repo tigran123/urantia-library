@@ -16,5 +16,10 @@ const { t } = useI18n({ useScope: 'global' })
       class="px-3 py-1.5 rounded-md text-sm font-medium"
       :class="$route.path.startsWith('/admin/books') ? 'bg-blue-600 text-white' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
     >{{ t('admin.books') }}</router-link>
+    <router-link
+      to="/admin/integrity"
+      class="px-3 py-1.5 rounded-md text-sm font-medium"
+      :class="$route.path.startsWith('/admin/integrity') ? 'bg-blue-600 text-white' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+    >{{ t('admin.integrity.tab') }}</router-link>
   </div>
 </template>

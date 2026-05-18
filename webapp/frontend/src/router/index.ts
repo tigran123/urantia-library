@@ -9,6 +9,7 @@ import SetPasswordView from '../views/SetPasswordView.vue'
 import ItemView from '../views/ItemView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminBooksView from '../views/AdminBooksView.vue'
+import AdminIntegrityView from '../views/AdminIntegrityView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -65,6 +66,11 @@ const router = createRouter({
       path: '/admin/books',
       name: 'admin-books',
       component: AdminBooksView
+    },
+    {
+      path: '/admin/integrity',
+      name: 'admin-integrity',
+      component: AdminIntegrityView
     }
   ]
 })

@@ -65,9 +65,50 @@ class AdminBookDetail(BaseModel):
     clearance: int
     needs_review: bool = False
     locations: List[str] = []
+    last_verified_at: Optional[str] = None
+    last_verified_ok: Optional[bool] = None
+    last_verified_mode: Optional[str] = None
+    last_verified_error: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class IntegrityCheckResult(BaseModel):
+    hash_id: str
+    mode: str
+    ok: bool
+    error: Optional[str] = None
+    checks: List[dict] = []
+    verified_at: str
+    title: Optional[str] = None
+    original_filename: Optional[str] = None
+    db_update_failed: bool = False
+
+
+class IntegrityJobCreate(BaseModel):
+    scope: str  # 'all' | 'hash_ids'
+    hash_ids: Optional[List[str]] = None
+    mode: str = 'quick'  # 'quick' | 'full'
+
+
+class IntegrityJobSummary(BaseModel):
+    job_id: str
+    status: str
+    mode: str
+    total: int
+    processed: int
+    ok_count: int
+    fail_count: int
+    started_at: str
+    finished_at: Optional[str] = None
+    error: Optional[str] = None
+
+
+class IntegrityJobDetail(IntegrityJobSummary):
+    failures: List[IntegrityCheckResult] = []
+    all_results: Optional[List[IntegrityCheckResult]] = None
+    all_results_truncated: bool = False
 
 class Message(BaseModel):
     message: str

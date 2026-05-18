@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch, onUnmounted, defineAsyncComponent, inject, type Ref } from 'vue'
 import { useRoute } from 'vue-router'
-import api from '../api'
-import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon } from '@heroicons/vue/24/outline'
+import api, { verifyBook, type IntegrityCheckResult, type IntegrityMode } from '../api'
+import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
@@ -28,6 +28,73 @@ const editingId = ref<string | null>(null)
 
 const openEditor = () => {
   if (item.value?.hash_id) editingId.value = item.value.hash_id
+}
+
+const verifyOpen = ref(false)
+const verifying = ref(false)
+const verifyResult = ref<IntegrityCheckResult | null>(null)
+const verifyError = ref('')
+
+const openVerify = () => {
+  verifyResult.value = null
+  verifyError.value = ''
+  verifyOpen.value = true
+}
+
+const closeVerify = () => {
+  verifyOpen.value = false
+}
+
+const runVerify = async (mode: IntegrityMode) => {
+  if (!item.value?.hash_id) return
+  verifying.value = true
+  verifyError.value = ''
+  try {
+    const res = await verifyBook(item.value.hash_id, mode)
+    verifyResult.value = res.data
+    // Reflect the new last_verified_* on the item so the metadata row updates.
+    item.value.last_verified_at = res.data.verified_at
+    item.value.last_verified_ok = res.data.ok
+    item.value.last_verified_mode = res.data.mode
+    item.value.last_verified_error = res.data.error
+  } catch (e: any) {
+    verifyError.value = e?.response?.data?.detail || e?.message || 'verification failed'
+  } finally {
+    verifying.value = false
+  }
+}
+
+const verifyErrorLabel = (key: string | null | undefined): string => {
+  if (!key) return ''
+  const msg = t(`admin.integrity.error.${key}`)
+  // i18n returns the key itself when no translation; fall back to the raw key.
+  return msg.startsWith('admin.integrity.error.') ? key : msg
+}
+
+const checkLabel = (name: string): string => {
+  const known: Record<string, string> = {
+    db_row: 'check_db_row',
+    data_file_exists: 'check_data_file_exists',
+    data_file_size: 'check_data_file_size',
+    locations_present: 'check_locations_present',
+    symlinks_resolve: 'check_symlinks_resolve',
+    hash_match: 'check_hash_match',
+  }
+  return known[name] ? t(`admin.integrity.${known[name]}`) : name
+}
+
+const formatScalarDetail = (name: string, detail: any): string => {
+  if (detail === null || detail === undefined) return ''
+  if (typeof detail === 'string') return detail
+  if (typeof detail === 'object') {
+    if (name === 'data_file_size' && typeof detail.bytes === 'number') {
+      return t('admin.integrity.detail_bytes', { count: detail.bytes })
+    }
+    if (name === 'locations_present' && typeof detail.count === 'number') {
+      return t('admin.integrity.detail_locations', { count: detail.count })
+    }
+  }
+  return ''
 }
 
 const onEditorSaved = (updated: any) => {
@@ -281,6 +348,14 @@ watch(
                 >
                   <PencilSquareIcon class="h-7 w-7" />
                 </button>
+                <button
+                  v-if="currentUser?.is_admin && item.hash_id"
+                  @click.prevent="openVerify()"
+                  class="p-2 rounded-full text-gray-400 hover:text-emerald-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  :title="t('admin.integrity.verify_tooltip')"
+                >
+                  <ShieldCheckIcon class="h-7 w-7" />
+                </button>
                 <button v-if="item.hash_id" @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? t('app.remove_favorite') : t('app.add_favorite')">
                   <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-7 w-7" />
                   <BookmarkIcon v-else class="h-7 w-7" />
@@ -325,6 +400,27 @@ watch(
                     <router-link :to="`/browse/${currentPath.split('/').slice(0, -1).join('/')}`" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline">
                       /{{ currentPath.split('/').slice(0, -1).join('/') || 'Root' }}
                     </router-link>
+                  </td>
+                </tr>
+                <tr v-if="currentUser?.is_admin && item.hash_id" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('admin.integrity.last_verified') }}</th>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                    <template v-if="item.last_verified_at">
+                      {{ formatDate(item.last_verified_at) }}
+                      <span
+                        class="ml-2 inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
+                        :class="item.last_verified_ok
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                          : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'"
+                      >
+                        {{ item.last_verified_ok ? t('admin.integrity.ok') : t('admin.integrity.failed') }}
+                        ({{ item.last_verified_mode }})
+                      </span>
+                      <span v-if="!item.last_verified_ok && item.last_verified_error" class="ml-2 text-xs text-red-500">
+                        — {{ verifyErrorLabel(item.last_verified_error) }}
+                      </span>
+                    </template>
+                    <template v-else>{{ t('admin.integrity.never') }}</template>
                   </td>
                 </tr>
                 <tr v-if="item.description" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
@@ -401,5 +497,98 @@ watch(
     </div>
 
     <BookMetadataEditor :hash-id="editingId" @close="editingId = null" @saved="onEditorSaved" />
+
+    <!-- Integrity verification modal -->
+    <div
+      v-if="verifyOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      @click.self="closeVerify()"
+    >
+      <div class="w-full max-w-2xl bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 max-h-[90vh] flex flex-col">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+            <ShieldCheckIcon class="h-5 w-5 text-emerald-500" />
+            {{ t('admin.integrity.title') }}
+          </h3>
+          <button @click="closeVerify()" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700">
+            <XMarkIcon class="h-5 w-5 text-gray-500" />
+          </button>
+        </div>
+        <div class="px-6 py-4 overflow-y-auto space-y-4">
+          <div class="flex flex-wrap gap-2">
+            <button
+              :disabled="verifying"
+              @click="runVerify('quick')"
+              class="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-wait"
+            >
+              {{ t('admin.integrity.quick') }}
+            </button>
+            <button
+              :disabled="verifying"
+              @click="runVerify('full')"
+              class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-wait"
+            >
+              {{ t('admin.integrity.full') }}
+            </button>
+            <div v-if="verifying" class="ml-2 self-center text-sm text-gray-500 flex items-center gap-2">
+              <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+              {{ t('admin.integrity.running') }}
+            </div>
+          </div>
+
+          <div v-if="verifyError" class="rounded-lg bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-4 py-3 text-sm">
+            {{ verifyError }}
+          </div>
+
+          <div v-if="verifyResult" class="space-y-3">
+            <div
+              class="rounded-lg px-4 py-3 flex items-center gap-3"
+              :class="verifyResult.ok
+                ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200'
+                : 'bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-200'"
+            >
+              <CheckCircleIcon v-if="verifyResult.ok" class="h-6 w-6 flex-shrink-0" />
+              <XCircleIcon v-else class="h-6 w-6 flex-shrink-0" />
+              <div>
+                <div class="font-semibold">
+                  {{ verifyResult.ok ? t('admin.integrity.ok') : t('admin.integrity.failed') }}
+                  <span class="ml-1 text-xs opacity-75">({{ verifyResult.mode }})</span>
+                </div>
+                <div v-if="!verifyResult.ok && verifyResult.error" class="text-sm">
+                  {{ verifyErrorLabel(verifyResult.error) }}
+                </div>
+                <div class="text-xs opacity-75 mt-0.5">
+                  {{ t('admin.integrity.verified_at') }}: {{ formatDate(verifyResult.verified_at) }}
+                </div>
+              </div>
+            </div>
+
+            <div v-if="verifyResult.db_update_failed" class="rounded-lg bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200 px-4 py-2 text-sm">
+              {{ t('admin.integrity.db_update_failed') }}
+            </div>
+
+            <div class="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <table class="w-full text-sm">
+                <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                  <tr v-for="c in verifyResult.checks" :key="c.name" class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td class="px-4 py-2 w-8">
+                      <CheckCircleIcon v-if="c.ok" class="h-5 w-5 text-emerald-500" />
+                      <XCircleIcon v-else class="h-5 w-5 text-red-500" />
+                    </td>
+                    <td class="px-2 py-2 text-gray-900 dark:text-gray-100">{{ checkLabel(c.name) }}</td>
+                    <td class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400 break-all">
+                      <template v-if="Array.isArray(c.detail)">
+                        <div v-for="(d, i) in c.detail" :key="i">{{ d.symlink_path }}: {{ d.reason }}</div>
+                      </template>
+                      <template v-else>{{ formatScalarDetail(c.name, c.detail) }}</template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

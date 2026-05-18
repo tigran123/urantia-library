@@ -10,6 +10,7 @@ import subprocess
 import fnmatch
 import ast
 from argparse import ArgumentParser
+from datetime import datetime, timezone
 
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB
 
@@ -368,16 +369,21 @@ def main():
 
             # --- DB ---
             try:
+                # Migration just hashed the file and laid it into .data, so this row
+                # is a full verify by construction; seed last_verified_* accordingly.
+                verified_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                 cursor.execute("""
                     INSERT OR IGNORE INTO books
                     (id, title, author, publisher, tags, series, languages,
-                     published, identifiers, description, original_filename, needs_review, clearance)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     published, identifiers, description, original_filename, needs_review, clearance,
+                     last_verified_at, last_verified_ok, last_verified_mode, last_verified_error)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     file_hash, final_meta['title'], final_meta['author'], final_meta['publisher'],
                     final_meta['tags'], final_meta['series'], final_meta['languages'],
                     final_meta['published'], final_meta['identifiers'], final_meta['annotation'],
                     filename, final_meta['needs_review'], DEFAULT_BOOK_CLEARANCE,
+                    verified_at, 1, 'full', None,
                 ))
                 cursor.execute("""
                     INSERT OR IGNORE INTO book_locations (hash_id, symlink_path)

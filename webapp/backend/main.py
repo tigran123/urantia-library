@@ -12,19 +12,21 @@ import zipfile
 import base64
 import shutil
 import uuid
+import asyncio
+import threading
 import xml.etree.ElementTree as ET
 from html import escape as _html_escape
 from PIL import Image
 import djvu.decode
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi.middleware.cors import CORSMiddleware
 import models
 import schemas
-from database import engine, get_db
+from database import engine, get_db, SessionLocal
 from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 import email_utils
 import jwt
@@ -99,6 +101,134 @@ def _resolve_vault_hash(symlink_path: str) -> str | None:
     if os.path.dirname(target) != data_root:
         return None
     return name or None
+
+
+# ---------- Integrity verification ----------
+
+_VERIFY_CHUNK = 8 * 1024 * 1024  # match migrate_library.py
+
+
+def _blake2b_of_file(path: str) -> str:
+    # Vault files are immutable post-migration, so concurrent reads from
+    # downloads + this hash are safe on Linux (POSIX reads don't conflict).
+    h = hashlib.blake2b()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_VERIFY_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _verify_book_sync(hash_id: str, mode: str, db: Session) -> dict:
+    """Run integrity checks for a single book and persist the result.
+
+    Returns a JSON-serialisable dict (see plan §B). Caller is responsible for
+    running this inside a worker thread (asyncio.to_thread) because the
+    full-mode hash recompute is CPU/IO-bound.
+    """
+    if mode not in ("quick", "full"):
+        mode = "quick"
+
+    checks: list[dict] = []
+    error: Optional[str] = None
+    db_update_failed = False
+
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    checks.append({"name": "db_row", "ok": book is not None,
+                   "detail": None if book else "no books row for this hash_id"})
+    if not book:
+        return {
+            "hash_id": hash_id, "mode": mode, "ok": False, "error": "book_missing",
+            "checks": checks, "verified_at": _now_iso(),
+            "title": None, "original_filename": None, "db_update_failed": False,
+        }
+
+    title = book.title
+    original_filename = book.original_filename
+
+    data_path = os.path.join(DATA_DIR, hash_id)
+    data_exists = os.path.isfile(data_path)
+    checks.append({"name": "data_file_exists", "ok": data_exists,
+                   "detail": None if data_exists else data_path})
+    if not data_exists:
+        error = "data_missing"
+
+    size = 0
+    if data_exists:
+        try:
+            size = os.path.getsize(data_path)
+        except OSError as e:
+            size = 0
+            checks.append({"name": "data_file_size", "ok": False, "detail": f"stat failed: {e}"})
+            error = error or "data_missing"
+        else:
+            size_ok = size > 0
+            checks.append({"name": "data_file_size", "ok": size_ok,
+                           "detail": {"bytes": size}})
+            if not size_ok:
+                error = error or "empty_file"
+
+    locs = db.query(models.BookLocation.symlink_path).filter(
+        models.BookLocation.hash_id == hash_id
+    ).all()
+    loc_paths = [r[0] for r in locs]
+    checks.append({"name": "locations_present", "ok": len(loc_paths) > 0,
+                   "detail": {"count": len(loc_paths)}})
+    if not loc_paths:
+        error = error or "locations_missing"
+
+    bad_symlinks: list[dict] = []
+    for sp in loc_paths:
+        full = os.path.join(BOOKS_DIR, sp)
+        if not os.path.islink(full):
+            bad_symlinks.append({"symlink_path": sp, "reason": "not a symlink or missing"})
+            continue
+        resolved = _resolve_vault_hash(full)
+        if resolved != hash_id:
+            bad_symlinks.append({"symlink_path": sp,
+                                 "reason": f"resolves to {resolved!r}, expected {hash_id}"})
+    checks.append({"name": "symlinks_resolve",
+                   "ok": not bad_symlinks,
+                   "detail": bad_symlinks if bad_symlinks else None})
+    if bad_symlinks:
+        error = error or "symlink_broken"
+
+    if mode == "full" and data_exists and size > 0:
+        try:
+            computed = _blake2b_of_file(data_path)
+        except OSError as e:
+            checks.append({"name": "hash_match", "ok": False, "detail": f"read failed: {e}"})
+            error = error or "data_missing"
+        else:
+            match = computed == hash_id
+            checks.append({"name": "hash_match", "ok": match,
+                           "detail": None if match else f"computed {computed}"})
+            if not match:
+                error = error or "hash_mismatch"
+
+    ok = error is None
+    verified_at = _now_iso()
+
+    try:
+        book.last_verified_at = verified_at
+        book.last_verified_ok = ok
+        book.last_verified_mode = mode
+        book.last_verified_error = None if ok else error
+        db.commit()
+    except Exception as e:
+        logging.warning("failed to persist last_verified_* for %s: %s", hash_id, e)
+        db.rollback()
+        db_update_failed = True
+
+    return {
+        "hash_id": hash_id, "mode": mode, "ok": ok, "error": error,
+        "checks": checks, "verified_at": verified_at,
+        "title": title, "original_filename": original_filename,
+        "db_update_failed": db_update_failed,
+    }
 
 async def get_current_user(access_token: str = Cookie(None), db: Session = Depends(get_db)):
     if not access_token:
@@ -302,6 +432,11 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                     if book.description:
                         item_data["description"] = book.description
                     item_data["clearance"] = int(book.clearance or 0)
+                    if current_user.is_admin:
+                        item_data["last_verified_at"] = book.last_verified_at
+                        item_data["last_verified_ok"] = book.last_verified_ok
+                        item_data["last_verified_mode"] = book.last_verified_mode
+                        item_data["last_verified_error"] = book.last_verified_error
 
         items.append(item_data)
 
@@ -341,20 +476,9 @@ def parse_search_query(q: str):
     q = q.strip().lower()
     return q, filters
 
-@app.get("/api/search")
-async def search(
-    q: str = "",
-    page: int = 1,
-    per_page: int = 50,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    page = max(page, 1)
-    per_page = max(1, min(per_page, 200))
-
-    if not q:
-        return {"matches": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0}
-
+def _build_search_query(q: str, current_user: models.User, db: Session):
+    """Shared query builder for /api/search and /api/search/hash_ids.
+    Returns the joined Book+BookLocation query with all filters applied."""
     query_lower, filters = parse_search_query(q)
 
     query = db.query(models.Book, models.BookLocation).join(
@@ -385,6 +509,25 @@ async def search(
 
     if filters["needs_review"] is not None and current_user.is_admin:
         query = query.filter(models.Book.needs_review == filters["needs_review"])
+
+    return query
+
+
+@app.get("/api/search")
+async def search(
+    q: str = "",
+    page: int = 1,
+    per_page: int = 50,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    page = max(page, 1)
+    per_page = max(1, min(per_page, 200))
+
+    if not q:
+        return {"matches": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0}
+
+    query = _build_search_query(q, current_user, db)
 
     total = query.order_by(None).count()
     total_pages = (total + per_page - 1) // per_page
@@ -421,6 +564,23 @@ async def search(
         "total": total,
         "total_pages": total_pages,
     }
+
+
+@app.get("/api/search/hash_ids")
+async def search_hash_ids(
+    q: str = "",
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return all distinct hash_ids matching the search query, across all pages.
+    Used by the admin bulk-verify 'Select All' action."""
+    if not q:
+        return {"hash_ids": [], "total": 0}
+    query = _build_search_query(q, current_user, db)
+    rows = query.with_entities(models.Book.id).distinct().all()
+    ids = [r[0] for r in rows]
+    return {"hash_ids": ids, "total": len(ids)}
+
 
 @app.post("/api/register", response_model=schemas.Message)
 async def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -594,6 +754,10 @@ def _book_to_admin_detail(book: models.Book, db: Session) -> dict:
         "clearance": int(book.clearance or 0),
         "needs_review": bool(book.needs_review),
         "locations": [r[0] for r in locs],
+        "last_verified_at": book.last_verified_at,
+        "last_verified_ok": book.last_verified_ok,
+        "last_verified_mode": book.last_verified_mode,
+        "last_verified_error": book.last_verified_error,
     }
 
 
@@ -680,6 +844,215 @@ async def admin_delete_book(
     db.delete(book)
     db.commit()
     return {"deleted": hash_id, "locations": locations, "errors": errors}
+
+
+@app.post("/api/admin/integrity/verify/{hash_id}", response_model=schemas.IntegrityCheckResult)
+async def admin_verify_book(
+    hash_id: str,
+    mode: str = "quick",
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if mode not in ("quick", "full"):
+        raise HTTPException(status_code=400, detail="mode must be 'quick' or 'full'")
+    return await asyncio.to_thread(_verify_book_sync, hash_id, mode, db)
+
+
+# ---------- Bulk integrity jobs ----------
+
+INTEGRITY_JOBS: dict[str, dict] = {}
+INTEGRITY_JOBS_LOCK = threading.Lock()
+INTEGRITY_JOB_TTL_SECONDS = 3600
+INTEGRITY_ALL_RESULTS_CAP = 5000
+
+
+def _sweep_expired_jobs() -> None:
+    now = datetime.now(timezone.utc)
+    with INTEGRITY_JOBS_LOCK:
+        for jid in list(INTEGRITY_JOBS.keys()):
+            job = INTEGRITY_JOBS[jid]
+            fin = job.get("finished_at")
+            if not fin or job["status"] == "running":
+                continue
+            try:
+                finished = datetime.strptime(fin, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if (now - finished).total_seconds() > INTEGRITY_JOB_TTL_SECONDS:
+                del INTEGRITY_JOBS[jid]
+
+
+def _running_job_id() -> Optional[str]:
+    with INTEGRITY_JOBS_LOCK:
+        for jid, job in INTEGRITY_JOBS.items():
+            if job["status"] == "running":
+                return jid
+    return None
+
+
+def _job_summary(job: dict) -> dict:
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "mode": job["mode"],
+        "total": job["total"],
+        "processed": job["processed"],
+        "ok_count": job["ok_count"],
+        "fail_count": job["fail_count"],
+        "started_at": job["started_at"],
+        "finished_at": job.get("finished_at"),
+        "error": job.get("error"),
+    }
+
+
+async def _run_integrity_job(job_id: str) -> None:
+    """Background worker. One book at a time, each in its own thread + session."""
+    with INTEGRITY_JOBS_LOCK:
+        job = INTEGRITY_JOBS.get(job_id)
+    if job is None:
+        return
+    hash_ids = job["hash_ids"]
+    mode = job["mode"]
+
+    def _verify_one(hid: str) -> dict:
+        session = SessionLocal()
+        try:
+            return _verify_book_sync(hid, mode, session)
+        finally:
+            session.close()
+
+    try:
+        for hid in hash_ids:
+            if job.get("cancel_requested"):
+                with INTEGRITY_JOBS_LOCK:
+                    job["status"] = "cancelled"
+                    job["finished_at"] = _now_iso()
+                return
+            try:
+                result = await asyncio.to_thread(_verify_one, hid)
+            except Exception as e:
+                logging.exception("verify failed for %s", hid)
+                result = {
+                    "hash_id": hid, "mode": mode, "ok": False, "error": "exception",
+                    "checks": [{"name": "worker", "ok": False, "detail": str(e)}],
+                    "verified_at": _now_iso(),
+                    "title": None, "original_filename": None, "db_update_failed": True,
+                }
+            with INTEGRITY_JOBS_LOCK:
+                job["processed"] += 1
+                if result["ok"]:
+                    job["ok_count"] += 1
+                else:
+                    job["fail_count"] += 1
+                    job["failures"].append(result)
+                if len(job["all_results"]) < INTEGRITY_ALL_RESULTS_CAP:
+                    job["all_results"].append(result)
+                else:
+                    job["all_results_truncated"] = True
+        with INTEGRITY_JOBS_LOCK:
+            if job["status"] == "running":
+                job["status"] = "done"
+                job["finished_at"] = _now_iso()
+    except Exception as e:
+        logging.exception("integrity job %s crashed", job_id)
+        with INTEGRITY_JOBS_LOCK:
+            job["status"] = "error"
+            job["error"] = str(e)
+            job["finished_at"] = _now_iso()
+
+
+@app.post("/api/admin/integrity/jobs", response_model=schemas.IntegrityJobSummary)
+async def admin_start_integrity_job(
+    payload: schemas.IntegrityJobCreate,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _sweep_expired_jobs()
+    if payload.scope not in ("all", "hash_ids"):
+        raise HTTPException(status_code=400, detail="scope must be 'all' or 'hash_ids'")
+    if payload.mode not in ("quick", "full"):
+        raise HTTPException(status_code=400, detail="mode must be 'quick' or 'full'")
+
+    if payload.scope == "all":
+        hash_ids = [r[0] for r in db.query(models.Book.id).all()]
+    else:
+        hash_ids = list(dict.fromkeys(payload.hash_ids or []))  # de-dup, preserve order
+        if not hash_ids:
+            raise HTTPException(status_code=400, detail="hash_ids must be non-empty")
+
+    running = _running_job_id()
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "job_running", "running_job_id": running},
+        )
+
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "status": "running",
+        "mode": payload.mode,
+        "total": len(hash_ids),
+        "processed": 0,
+        "ok_count": 0,
+        "fail_count": 0,
+        "started_at": _now_iso(),
+        "finished_at": None,
+        "cancel_requested": False,
+        "error": None,
+        "hash_ids": hash_ids,
+        "failures": [],
+        "all_results": [],
+        "all_results_truncated": False,
+    }
+    with INTEGRITY_JOBS_LOCK:
+        INTEGRITY_JOBS[job_id] = job
+
+    asyncio.create_task(_run_integrity_job(job_id))
+    return _job_summary(job)
+
+
+@app.get("/api/admin/integrity/jobs")
+async def admin_list_integrity_jobs(_admin: models.User = Depends(require_admin)):
+    _sweep_expired_jobs()
+    with INTEGRITY_JOBS_LOCK:
+        jobs = [_job_summary(j) for j in INTEGRITY_JOBS.values()]
+    jobs.sort(key=lambda j: j["started_at"], reverse=True)
+    return {"jobs": jobs}
+
+
+@app.get("/api/admin/integrity/jobs/{job_id}", response_model=schemas.IntegrityJobDetail)
+async def admin_get_integrity_job(
+    job_id: str,
+    include: str = "failures",
+    _admin: models.User = Depends(require_admin),
+):
+    with INTEGRITY_JOBS_LOCK:
+        job = INTEGRITY_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        detail = _job_summary(job)
+        detail["failures"] = list(job["failures"])
+        if include == "all":
+            detail["all_results"] = list(job["all_results"])
+        else:
+            detail["all_results"] = None
+        detail["all_results_truncated"] = bool(job.get("all_results_truncated"))
+    return detail
+
+
+@app.delete("/api/admin/integrity/jobs/{job_id}", response_model=schemas.IntegrityJobSummary)
+async def admin_cancel_integrity_job(
+    job_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    with INTEGRITY_JOBS_LOCK:
+        job = INTEGRITY_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job["status"] == "running":
+            job["cancel_requested"] = True
+        return _job_summary(job)
 
 
 @app.get("/api/files/{path:path}")

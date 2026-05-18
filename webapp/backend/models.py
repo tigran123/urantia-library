@@ -67,6 +67,10 @@ class Book(Base):
     original_filename = Column(String, nullable=False)
     needs_review = Column(Boolean, default=False)
     clearance = Column(Integer, nullable=False, default=100)
+    last_verified_at = Column(String, nullable=True)
+    last_verified_ok = Column(Boolean, nullable=True)
+    last_verified_mode = Column(String, nullable=True)
+    last_verified_error = Column(String, nullable=True)
 
 class BookLocation(Base):
     __tablename__ = "book_locations"

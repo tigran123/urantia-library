@@ -2,11 +2,11 @@
 import { ref, onMounted, watch, computed, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api from '../api'
+import api, { startIntegrityJob, searchHashIds, type IntegrityMode } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
-import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon } from '@heroicons/vue/24/outline'
-import { BookmarkIcon as BookmarkIconSolid, XMarkIcon } from '@heroicons/vue/24/solid'
+import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline } from '@heroicons/vue/24/outline'
+import { BookmarkIcon as BookmarkIconSolid, XMarkIcon, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +21,68 @@ const currentUser = inject<Ref<{ search_per_page?: number | null, is_admin?: boo
   'currentUser',
   ref(null)
 )
+
+const selectMode = ref(false)
+const selected = ref<Set<string>>(new Set())
+const verifyStarting = ref(false)
+
+const toggleSelectMode = () => {
+  selectMode.value = !selectMode.value
+  if (!selectMode.value) selected.value = new Set()
+}
+
+const isSelected = (hashId: string) => selected.value.has(hashId)
+
+const toggleSelect = (hashId: string) => {
+  const next = new Set(selected.value)
+  if (next.has(hashId)) next.delete(hashId); else next.add(hashId)
+  selected.value = next
+}
+
+const onItemClickCapture = (hashId: string | undefined, ev: Event) => {
+  if (!selectMode.value || !hashId) return
+  ev.preventDefault()
+  ev.stopPropagation()
+  toggleSelect(hashId)
+}
+
+const clearSelection = () => {
+  selected.value = new Set()
+}
+
+const selectingAll = ref(false)
+const selectAllGlobal = async () => {
+  const q = (route.query.q as string) || ''
+  if (!q) return
+  selectingAll.value = true
+  try {
+    const res = await searchHashIds(q)
+    selected.value = new Set(res.data.hash_ids)
+  } catch (e: any) {
+    alert(e?.response?.data?.detail || e?.message || 'error')
+  } finally {
+    selectingAll.value = false
+  }
+}
+
+const startSelectionVerify = async (mode: IntegrityMode) => {
+  const ids = Array.from(selected.value)
+  if (!ids.length) return
+  verifyStarting.value = true
+  try {
+    const res = await startIntegrityJob({ scope: 'hash_ids', hash_ids: ids, mode })
+    router.push({ path: '/admin/integrity', query: { job: res.data.job_id } })
+  } catch (e: any) {
+    const detailMsg = e?.response?.data?.detail
+    if (detailMsg && typeof detailMsg === 'object' && detailMsg.reason === 'job_running') {
+      router.push({ path: '/admin/integrity', query: { job: detailMsg.running_job_id } })
+    } else {
+      alert(typeof detailMsg === 'string' ? detailMsg : (e?.message || 'error'))
+    }
+  } finally {
+    verifyStarting.value = false
+  }
+}
 
 const editBookClearance = async (match: any, event: Event) => {
   event.preventDefault()
@@ -154,6 +216,11 @@ watch(() => [route.query.q, route.query.page], () => {
   doSearch(route.query.q as string, currentPage.value)
 })
 
+// Reset selection whenever the query text changes (paging preserves it).
+watch(() => route.query.q, () => {
+  selected.value = new Set()
+})
+
 watch(perPage, () => {
   if (!searched.value) return
   if (currentPage.value !== 1) {
@@ -206,10 +273,24 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 <template>
   <div class="space-y-6">
     <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
-      <h1 class="text-2xl font-bold text-gray-900 mb-2 flex items-center gap-2">
-        <MagnifyingGlassIcon class="h-6 w-6 text-blue-600" />
-        {{ $t('search.title') }}
-      </h1>
+      <div class="flex items-center justify-between gap-2 mb-2">
+        <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <MagnifyingGlassIcon class="h-6 w-6 text-blue-600" />
+          {{ $t('search.title') }}
+        </h1>
+        <button
+          v-if="currentUser?.is_admin"
+          @click="toggleSelectMode()"
+          class="p-1.5 rounded-md transition-colors border text-sm font-medium flex items-center gap-1"
+          :class="selectMode
+            ? 'bg-emerald-100 text-emerald-700 border-emerald-300 hover:bg-emerald-200'
+            : 'text-gray-500 border-transparent hover:text-emerald-600 hover:bg-gray-100'"
+          :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
+        >
+          <ShieldCheckIcon class="h-5 w-5" />
+          <span class="hidden sm:inline">{{ t('admin.integrity.select_mode') }}</span>
+        </button>
+      </div>
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap">
         <p class="text-gray-500">
           <template v-if="searched">
@@ -273,8 +354,19 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         </button>
       </div>
       <ul class="divide-y divide-gray-100">
-        <li v-for="match in matches" :key="match.path" class="hover:bg-gray-50 transition-colors p-4 group">
+        <li
+          v-for="match in matches"
+          :key="match.path"
+          class="hover:bg-gray-50 transition-colors p-4 group"
+          :class="selectMode && match.hash_id && isSelected(match.hash_id) ? 'bg-emerald-50' : ''"
+          @click.capture="onItemClickCapture(match.hash_id, $event)"
+        >
           <div class="relative flex gap-4">
+            <!-- Selection indicator -->
+            <div v-if="selectMode && match.hash_id" class="flex-shrink-0 self-center pointer-events-none">
+              <CheckCircleIconSolid v-if="isSelected(match.hash_id)" class="h-6 w-6 text-emerald-500" />
+              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+            </div>
             <!-- Icon/Cover -->
             <div class="flex-shrink-0">
                <div class="h-16 w-12 flex items-center justify-center bg-gray-100 rounded shadow-sm overflow-hidden border border-gray-200">
@@ -335,6 +427,53 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           {{ $t('search.next') }} →
         </button>
       </div>
+    </div>
+
+    <!-- Bulk action bar for admin select mode -->
+    <div
+      v-if="selectMode"
+      class="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-40 flex flex-wrap items-center gap-3 bg-white border border-gray-200 rounded-xl shadow-lg px-4 py-3"
+    >
+      <span class="text-sm font-medium text-gray-700">
+        {{ t('admin.integrity.selected_count', { count: selected.size }) }}
+      </span>
+      <button
+        @click="startSelectionVerify('quick')"
+        :disabled="!selected.size || verifyStarting"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <ShieldCheckIcon class="h-4 w-4" />
+        {{ t('admin.integrity.verify_selected') }} — {{ t('admin.integrity.quick') }}
+      </button>
+      <button
+        @click="startSelectionVerify('full')"
+        :disabled="!selected.size || verifyStarting"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <ShieldCheckIcon class="h-4 w-4" />
+        {{ t('admin.integrity.verify_selected') }} — {{ t('admin.integrity.full') }}
+      </button>
+      <button
+        @click="clearSelection()"
+        :disabled="!selected.size"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+      >
+        {{ t('admin.integrity.clear_selection') }}
+      </button>
+      <button
+        @click="selectAllGlobal()"
+        :disabled="!total || selectingAll"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {{ t('admin.integrity.select_all_count', { count: total }) }}
+      </button>
+      <button
+        @click="toggleSelectMode()"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 flex items-center gap-1"
+      >
+        <XMarkIconOutline class="h-4 w-4" />
+        {{ t('admin.integrity.exit_select_mode') }}
+      </button>
     </div>
   </div>
 </template>

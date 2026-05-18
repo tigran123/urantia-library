@@ -1,11 +1,71 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, inject, type Ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, watch, inject, type Ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api from '../api'
+import api, { startIntegrityJob, type IntegrityMode } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
 const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
+const router = useRouter()
+
+const selectMode = ref(false)
+const selected = ref<Set<string>>(new Set())
+const verifyStarting = ref(false)
+
+const toggleSelectMode = () => {
+  selectMode.value = !selectMode.value
+  if (!selectMode.value) selected.value = new Set()
+}
+
+const isSelected = (hashId: string) => selected.value.has(hashId)
+
+const toggleSelect = (hashId: string, ev?: Event) => {
+  if (ev) {
+    ev.preventDefault()
+    ev.stopPropagation()
+  }
+  const next = new Set(selected.value)
+  if (next.has(hashId)) next.delete(hashId); else next.add(hashId)
+  selected.value = next
+}
+
+const onItemClickCapture = (hashId: string | undefined, ev: Event) => {
+  if (!selectMode.value || !hashId) return
+  ev.preventDefault()
+  ev.stopPropagation()
+  toggleSelect(hashId)
+}
+
+const clearSelection = () => {
+  selected.value = new Set()
+}
+
+const selectableHashIds = computed<string[]>(() =>
+  items.value.filter((i: any) => i.hash_id).map((i: any) => i.hash_id as string)
+)
+
+const selectAll = () => {
+  selected.value = new Set(selectableHashIds.value)
+}
+
+const startSelectionVerify = async (mode: IntegrityMode) => {
+  const ids = Array.from(selected.value)
+  if (!ids.length) return
+  verifyStarting.value = true
+  try {
+    const res = await startIntegrityJob({ scope: 'hash_ids', hash_ids: ids, mode })
+    router.push({ path: '/admin/integrity', query: { job: res.data.job_id } })
+  } catch (e: any) {
+    const detailMsg = e?.response?.data?.detail
+    if (detailMsg && typeof detailMsg === 'object' && detailMsg.reason === 'job_running') {
+      router.push({ path: '/admin/integrity', query: { job: detailMsg.running_job_id } })
+    } else {
+      alert(typeof detailMsg === 'string' ? detailMsg : (e?.message || 'error'))
+    }
+  } finally {
+    verifyStarting.value = false
+  }
+}
 
 const editBookClearance = async (item: any, event: Event) => {
   event.preventDefault()
@@ -26,8 +86,8 @@ const editBookClearance = async (item: any, event: Event) => {
     alert(err.response?.data?.detail || err.message)
   }
 }
-import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
-import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
+import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
 const items = ref<any[]>([])
@@ -243,6 +303,20 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <BookmarkIcon v-else class="h-5 w-5" />
         </button>
 
+        <!-- Admin: select mode toggle for bulk integrity verify -->
+        <button
+          v-if="currentUser?.is_admin"
+          @click="toggleSelectMode()"
+          class="p-1.5 rounded-md transition-colors border text-sm font-medium flex items-center gap-1"
+          :class="selectMode
+            ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-200 dark:hover:bg-emerald-900'
+            : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-emerald-600 hover:bg-gray-100 dark:hover:bg-gray-700'"
+          :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
+        >
+          <ShieldCheckIcon class="h-5 w-5" />
+          <span class="hidden sm:inline">{{ t('admin.integrity.select_mode') }}</span>
+        </button>
+
         <!-- View Toggle -->
         <div class="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-1 border border-transparent dark:border-gray-700">
           <button
@@ -281,7 +355,18 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       <!-- Grid View -->
       <div v-if="viewMode === 'grid'" class="grid gap-6 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
         <template v-for="item in items" :key="item.name">
-          <div class="relative group">
+          <div
+            class="relative group"
+            :class="selectMode && item.hash_id && isSelected(item.hash_id) ? 'ring-2 ring-emerald-500 rounded-xl' : ''"
+            @click.capture="onItemClickCapture(item.hash_id, $event)"
+          >
+            <div
+              v-if="selectMode && item.hash_id"
+              class="absolute top-2 left-1/2 -translate-x-1/2 z-20 p-1 rounded-full bg-white/90 dark:bg-gray-900/90 border border-gray-200 dark:border-gray-700 shadow-sm pointer-events-none"
+            >
+              <CheckCircleIconSolid v-if="isSelected(item.hash_id)" class="h-6 w-6 text-emerald-500" />
+              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+            </div>
             <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
               <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
               <BookmarkIcon v-else class="h-5 w-5" />
@@ -340,8 +425,18 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       <!-- List View -->
       <div v-else class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
         <ul class="divide-y divide-gray-100 dark:divide-gray-700">
-          <li v-for="item in items" :key="item.name" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group">
+          <li
+            v-for="item in items"
+            :key="item.name"
+            class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
+            :class="selectMode && item.hash_id && isSelected(item.hash_id) ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''"
+            @click.capture="onItemClickCapture(item.hash_id, $event)"
+          >
             <div class="flex items-center p-4 gap-3">
+              <div v-if="selectMode && item.hash_id" class="flex-shrink-0 pointer-events-none">
+                <CheckCircleIconSolid v-if="isSelected(item.hash_id)" class="h-6 w-6 text-emerald-500" />
+                <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+              </div>
               <template v-if="item.is_dir">
                 <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex-1 flex items-center min-w-0">
                   <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
@@ -397,5 +492,52 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         </ul>
       </div>
     </template>
+
+    <!-- Bulk action bar for admin select mode -->
+    <div
+      v-if="selectMode"
+      class="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-40 flex flex-wrap items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg px-4 py-3"
+    >
+      <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+        {{ t('admin.integrity.selected_count', { count: selected.size }) }}
+      </span>
+      <button
+        @click="startSelectionVerify('quick')"
+        :disabled="!selected.size || verifyStarting"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <ShieldCheckIcon class="h-4 w-4" />
+        {{ t('admin.integrity.verify_selected') }} — {{ t('admin.integrity.quick') }}
+      </button>
+      <button
+        @click="startSelectionVerify('full')"
+        :disabled="!selected.size || verifyStarting"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <ShieldCheckIcon class="h-4 w-4" />
+        {{ t('admin.integrity.verify_selected') }} — {{ t('admin.integrity.full') }}
+      </button>
+      <button
+        @click="clearSelection()"
+        :disabled="!selected.size"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+      >
+        {{ t('admin.integrity.clear_selection') }}
+      </button>
+      <button
+        @click="selectAll()"
+        :disabled="!selectableHashIds.length"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+      >
+        {{ t('admin.integrity.select_all_count', { count: selectableHashIds.length }) }}
+      </button>
+      <button
+        @click="toggleSelectMode()"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1"
+      >
+        <XMarkIcon class="h-4 w-4" />
+        {{ t('admin.integrity.exit_select_mode') }}
+      </button>
+    </div>
   </div>
 </template>

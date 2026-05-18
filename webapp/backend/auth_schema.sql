@@ -41,6 +41,10 @@ CREATE TABLE books (
     original_filename VARCHAR NOT NULL, -- Fallback for unparseable files
     needs_review BOOLEAN DEFAULT FALSE, -- Flag for manual librarian intervention
     clearance INTEGER NOT NULL DEFAULT 100, -- Minimum user clearance required to read; high by default so only admins see new books until classified down
+    last_verified_at TEXT,              -- ISO-8601 UTC of last integrity check
+    last_verified_ok BOOLEAN,           -- Result of last integrity check (NULL = never run)
+    last_verified_mode VARCHAR,         -- 'quick' or 'full'
+    last_verified_error VARCHAR,        -- Short failure key when last_verified_ok = FALSE
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
