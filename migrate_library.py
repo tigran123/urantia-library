@@ -64,7 +64,7 @@ def parse_htaccess_line(line):
     if not match:
         return None
     metadata_str, filename = match.groups()
-    filename = filename.strip()
+    filename = filename.strip().strip('"\'')
     metadata_str = metadata_str.strip()
     if metadata_str == filename:
         return None
@@ -156,7 +156,7 @@ def copy_and_hash(src_path, vault_dir):
     atomically only after the full content is written."""
     hasher = hashlib.blake2b()
     os.makedirs(vault_dir, exist_ok=True)
-    tmp = os.path.join(vault_dir, f".tmp.{os.getpid()}.{hashlib.sha1(src_path.encode()).hexdigest()[:16]}")
+    tmp = os.path.join(vault_dir, f".tmp.{os.getpid()}.{hashlib.sha1(os.fsencode(src_path)).hexdigest()[:16]}")
     try:
         with open(src_path, 'rb') as fin, open(tmp, 'wb') as fout:
             while chunk := fin.read(CHUNK_SIZE):
@@ -343,6 +343,12 @@ def main():
                     if extracted.get('title'):
                         print("      -> Tier 2: ebook-meta")
                         final_meta.update(extracted)
+
+                if filename in htaccess_data:
+                    for k, v in htaccess_data[filename].items():
+                        if v is not None:
+                            final_meta[k] = v
+
                 if not final_meta['title']:
                     print("      -> Tier 3: filename fallback (needs review)")
                     final_meta['title'] = os.path.splitext(filename)[0].replace('-', ' ').replace('_', ' ')
