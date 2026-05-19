@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, inject, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, inject, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
 import BookMetadataEditor from '../components/BookMetadataEditor.vue'
+import DirectoryTreePicker from '../components/upload/DirectoryTreePicker.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -47,11 +48,28 @@ type MoveResponse = {
 
 const moveOpen = ref(false)
 const moveSrc = ref('')
-const moveDst = ref('')
+const moveDestParent = ref('')
+const moveDestBasename = ref('')
 const movePreview = ref<MoveResponse | null>(null)
 const moveResult = ref<MoveResponse | null>(null)
 const movePending = ref(false)
 const moveError = ref('')
+
+const moveSrcBasename = computed(() => {
+  const s = (moveSrc.value || '').replace(/\/+$/, '')
+  return s.split('/').pop() || ''
+})
+
+// Default the destination basename to the source basename whenever the source
+// changes — admins usually want to keep the same name and just move the file.
+watch(moveSrc, () => { moveDestBasename.value = moveSrcBasename.value })
+
+const moveDst = computed(() => {
+  const parts = [moveDestParent.value, moveDestBasename.value]
+    .map((s) => (s || '').replace(/^\/+|\/+$/g, ''))
+    .filter(Boolean)
+  return parts.join('/')
+})
 
 const doSearch = async (resetPage = true) => {
   if (resetPage) page.value = 1
@@ -162,7 +180,8 @@ const moveCommit = async () => {
 
 const openMoveForRow = (m: Match) => {
   moveSrc.value = m.path
-  moveDst.value = ''
+  moveDestParent.value = ''
+  // basename auto-syncs via the watcher above
   moveOpen.value = true
   resetMoveResults()
   // Scroll the panel into view so the admin sees where the form is.
@@ -201,27 +220,41 @@ watch(() => route.query.hash, openFromQuery)
         <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.move.heading') }}</h2>
         <span class="text-sm text-gray-500 dark:text-gray-400">{{ moveOpen ? '▾' : '▸' }}</span>
       </button>
-      <div v-if="moveOpen" class="mt-4 space-y-3">
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label class="block">
-            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.move.from') }}</span>
-            <input
-              v-model="moveSrc"
-              type="text"
-              placeholder="Urantia/Law/Modern"
-              class="w-full mt-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
-            />
-          </label>
-          <label class="block">
-            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.move.to') }}</span>
-            <input
-              v-model="moveDst"
-              type="text"
-              placeholder="Law/Modern"
-              class="w-full mt-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
-            />
-          </label>
+      <div v-if="moveOpen" class="mt-4 space-y-4">
+        <div>
+          <span class="text-xs text-gray-500 dark:text-gray-400 block mb-1">{{ t('admin.move.from') }}</span>
+          <DirectoryTreePicker
+            v-model:selected-dir="moveSrc"
+            :show-subpath="false"
+            :show-final="false"
+          />
+          <p v-if="moveSrc" class="mt-1 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+            <span>{{ t('admin.move.from') }}:</span>
+            <code class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] break-all">/{{ moveSrc }}</code>
+          </p>
         </div>
+        <div>
+          <span class="text-xs text-gray-500 dark:text-gray-400 block mb-1">{{ t('admin.move.to') }}</span>
+          <DirectoryTreePicker
+            v-model:selected-dir="moveDestParent"
+            :show-subpath="false"
+            :show-final="false"
+          />
+        </div>
+        <label class="block">
+          <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.move.dest_basename') }}</span>
+          <input
+            v-model="moveDestBasename"
+            type="text"
+            :placeholder="moveSrcBasename"
+            class="w-full mt-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+          />
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.move.dest_basename_help') }}</p>
+        </label>
+        <p v-if="moveDst" class="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
+          <span>{{ t('admin.move.to') }}:</span>
+          <code class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] break-all">/{{ moveDst }}</code>
+        </p>
         <div class="flex items-center justify-end gap-2">
           <button
             type="button"

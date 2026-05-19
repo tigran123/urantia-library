@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import {
@@ -10,13 +10,12 @@ import {
   ArrowsPointingOutIcon,
   ArrowsPointingInIcon,
 } from '@heroicons/vue/24/outline'
+import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{
-  path: string
-  hashId: string
-}>()
+const props = defineProps<{ source: ViewerSource }>()
+const hashId = computed(() => sourceHashId(props.source))
 
 const totalPages = ref(0)
 const currentPage = ref(1)
@@ -88,10 +87,10 @@ onBeforeUnmount(() => {
 })
 
 const saveProgress = async (page: number) => {
-  if (!props.hashId) return
+  if (!hashId.value) return
   try {
     await api.post('/progress', {
-      hash_id: props.hashId,
+      hash_id: hashId.value,
       location: JSON.stringify({ page: page, isDoublePage: isDoublePage.value })
     })
   } catch (e) {
@@ -100,9 +99,9 @@ const saveProgress = async (page: number) => {
 }
 
 const loadProgress = async () => {
-  if (!props.hashId) return null
+  if (!hashId.value) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(hashId.value)}`)
     try {
       const data = JSON.parse(res.data.location)
       if (data.isDoublePage !== undefined) {
@@ -122,7 +121,8 @@ const fetchMetadata = async () => {
   loadingMetadata.value = true
   error.value = ''
   try {
-    const res = await api.get('/djvu-metadata', { params: { path: props.path } })
+    const urls = viewerUrls(props.source)
+    const res = await api.get(urls.djvuMeta, { params: viewerParams(props.source) })
     totalPages.value = res.data.total_pages
     if (totalPages.value > 0) {
       const savedPage = await loadProgress()
@@ -136,9 +136,10 @@ const fetchMetadata = async () => {
 }
 
 const fetchPageData = async (page: number) => {
-  const res = await api.get('/djvu-page', { 
-    params: { path: props.path, page },
-    responseType: 'blob' 
+  const urls = viewerUrls(props.source)
+  const res = await api.get(urls.djvuPage, {
+    params: viewerParams(props.source, { page }),
+    responseType: 'blob'
   })
   const blob = new Blob([res.data], { type: 'image/jpeg' })
   return URL.createObjectURL(blob)
@@ -211,16 +212,12 @@ const toggleViewMode = () => {
 }
 
 onMounted(() => {
-  if (props.path) {
-    fetchMetadata()
-  }
+  fetchMetadata()
 })
 
-watch(() => props.path, (newPath) => {
-  if (newPath) {
-    fetchMetadata()
-  }
-})
+watch(() => props.source, () => {
+  fetchMetadata()
+}, { deep: true })
 </script>
 
 <template>

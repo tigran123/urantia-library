@@ -6,6 +6,7 @@ import { Bars3Icon, ChevronDoubleLeftIcon, CodeBracketIcon, DocumentTextIcon, Ar
 import MdTocNode from './MdTocNode.vue'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
+import { viewerUrls, viewerParams, sourceHashId, sourceFilename, type ViewerSource } from './viewerSource'
 
 interface TocEntry {
   title: string
@@ -15,7 +16,8 @@ interface TocEntry {
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ path: string; hashId: string }>()
+const props = defineProps<{ source: ViewerSource }>()
+const hashId = computed(() => sourceHashId(props.source))
 
 const loading = ref(true)
 const error = ref('')
@@ -71,7 +73,7 @@ const fontFamily = computed(
   () => FONT_OPTIONS.find(o => o.id === fontFamilyId.value)?.stack || FONT_OPTIONS[0].stack
 )
 
-const isTxt = computed(() => (props.path || '').toLowerCase().endsWith('.txt'))
+const isTxt = computed(() => sourceFilename(props.source).toLowerCase().endsWith('.txt'))
 
 const scrollEl = ref<HTMLElement | null>(null)
 
@@ -81,11 +83,11 @@ let lastSavedAnchor = -1
 
 const saveProgress = async (anchor: number) => {
   if (anchor === lastSavedAnchor) return
-  if (!props.hashId) return
+  if (!hashId.value) return
   lastSavedAnchor = anchor
   try {
     await api.post('/progress', {
-      hash_id: props.hashId,
+      hash_id: hashId.value,
       location: JSON.stringify({ anchor })
     })
   } catch (e) {
@@ -94,9 +96,9 @@ const saveProgress = async (anchor: number) => {
 }
 
 const loadProgress = async (): Promise<number | null> => {
-  if (!props.hashId) return null
+  if (!hashId.value) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(hashId.value)}`)
     try {
       const data = JSON.parse(res.data.location)
       const a = parseInt(data.anchor)
@@ -212,7 +214,6 @@ const onContentClick = (e: MouseEvent) => {
 }
 
 const initMd = async () => {
-  if (!props.path) return
   loading.value = true
   error.value = ''
   html.value = ''
@@ -220,7 +221,8 @@ const initMd = async () => {
   toc.value = []
   lastSavedAnchor = -1
   try {
-    const res = await api.get('/md-content', { params: { path: props.path } })
+    const urls = viewerUrls(props.source)
+    const res = await api.get(urls.mdContent, { params: viewerParams(props.source) })
     title.value = res.data.title || ''
     html.value = res.data.html || ''
     raw.value = res.data.raw || ''
@@ -246,9 +248,9 @@ onMounted(() => {
   initMd()
 })
 
-watch(() => props.path, () => {
+watch(() => props.source, () => {
   initMd()
-})
+}, { deep: true })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)

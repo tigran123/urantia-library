@@ -4,6 +4,7 @@ import api from '../api'
 import { useI18n } from 'vue-i18n'
 import { Bars3Icon, ChevronDoubleLeftIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
 import Fb2TocNode from './Fb2TocNode.vue'
+import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
 
 interface TocEntry {
   title: string
@@ -13,7 +14,8 @@ interface TocEntry {
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ path: string; hashId: string }>()
+const props = defineProps<{ source: ViewerSource }>()
+const hashId = computed(() => sourceHashId(props.source))
 
 const loading = ref(true)
 const error = ref('')
@@ -82,11 +84,11 @@ let lastSavedAnchor = -1
 
 const saveProgress = async (anchor: number) => {
   if (anchor === lastSavedAnchor) return
-  if (!props.hashId) return
+  if (!hashId.value) return
   lastSavedAnchor = anchor
   try {
     await api.post('/progress', {
-      hash_id: props.hashId,
+      hash_id: hashId.value,
       location: JSON.stringify({ anchor })
     })
   } catch (e) {
@@ -95,9 +97,9 @@ const saveProgress = async (anchor: number) => {
 }
 
 const loadProgress = async (): Promise<number | null> => {
-  if (!props.hashId) return null
+  if (!hashId.value) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(hashId.value)}`)
     try {
       const data = JSON.parse(res.data.location)
       const a = parseInt(data.anchor)
@@ -241,7 +243,6 @@ const onContentMouseOut = (e: MouseEvent) => {
 }
 
 const initFb2 = async () => {
-  if (!props.path) return
   loading.value = true
   error.value = ''
   html.value = ''
@@ -249,7 +250,8 @@ const initFb2 = async () => {
   tooltip.value.show = false
   lastSavedAnchor = -1
   try {
-    const res = await api.get('/fb2-content', { params: { path: props.path } })
+    const urls = viewerUrls(props.source)
+    const res = await api.get(urls.fb2Content, { params: viewerParams(props.source) })
     title.value = res.data.title || ''
     authors.value = res.data.authors || []
     html.value = res.data.html || ''
@@ -277,9 +279,9 @@ onMounted(() => {
   initFb2()
 })
 
-watch(() => props.path, () => {
+watch(() => props.source, () => {
   initFb2()
-})
+}, { deep: true })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)

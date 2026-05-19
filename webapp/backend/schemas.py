@@ -91,6 +91,7 @@ class UploadCommitRequest(BaseModel):
     subpath: str = ""
     clearance: int = 100
     needs_review: bool = False
+    filename: Optional[str] = None
 
 
 class UploadDuplicateError(BaseModel):
@@ -98,12 +99,8 @@ class UploadDuplicateError(BaseModel):
 
 
 class DirListing(BaseModel):
-    top: str
+    path: str
     dirs: List[str]
-
-
-class TopDirsResponse(BaseModel):
-    tops: List[str]
 
 
 class CoverUpdateResponse(BaseModel):

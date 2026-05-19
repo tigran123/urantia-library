@@ -13,10 +13,12 @@ import {
   ArrowsPointingInIcon,
 } from '@heroicons/vue/24/outline'
 import EpubTocNode from './EpubTocNode.vue'
+import { viewerUrls, sourceHashId, type ViewerSource } from './viewerSource'
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ path: string; hashId: string }>()
+const props = defineProps<{ source: ViewerSource }>()
+const hashId = computed(() => sourceHashId(props.source))
 
 const viewer = ref<HTMLElement | null>(null)
 let book: Book | null = null
@@ -101,18 +103,18 @@ const onFontFamilyChange = (e: Event) => {
 }
 
 const saveProgress = async (cfi: string) => {
-  if (!cfi || !props.hashId) return
+  if (!cfi || !hashId.value) return
   try {
-    await api.post('/progress', { hash_id: props.hashId, location: cfi })
+    await api.post('/progress', { hash_id: hashId.value, location: cfi })
   } catch (e) {
     console.error('Failed to save progress', e)
   }
 }
 
 const loadProgress = async () => {
-  if (!props.hashId) return null
+  if (!hashId.value) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(hashId.value)}`)
     return res.data.location
   } catch (e: any) {
     if (e.response?.status !== 404) console.error('Failed to load progress', e)
@@ -192,7 +194,7 @@ watch(immersive, (v) => {
 })
 
 const initEpub = async () => {
-  if (!viewer.value || !props.path) return
+  if (!viewer.value) return
 
   loading.value = true
   error.value = ''
@@ -201,7 +203,7 @@ const initEpub = async () => {
   bookAuthors.value = []
 
   try {
-    const res = await api.get(`/files/${props.path.split('/').map(encodeURIComponent).join('/')}`, {
+    const res = await api.get(viewerUrls(props.source).file, {
       responseType: 'arraybuffer'
     })
 
@@ -295,10 +297,10 @@ onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
 })
 
-watch(() => props.path, () => {
+watch(() => props.source, () => {
   destroyBook()
   initEpub()
-})
+}, { deep: true })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)

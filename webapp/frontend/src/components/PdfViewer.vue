@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
@@ -20,12 +20,14 @@ import {
   MagnifyingGlassMinusIcon,
 } from '@heroicons/vue/24/outline'
 import PdfTocNode, { type PdfOutlineNode } from './PdfTocNode.vue'
+import { viewerUrls, sourceHashId, type ViewerSource } from './viewerSource'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ path: string; hashId: string }>()
+const props = defineProps<{ source: ViewerSource }>()
+const hashId = computed(() => sourceHashId(props.source))
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const canvas2 = ref<HTMLCanvasElement | null>(null)
@@ -55,12 +57,12 @@ const tocOpen = ref(false)
 const immersive = ref(false)
 
 const saveProgress = () => {
-  if (!props.hashId) return
+  if (!hashId.value) return
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(async () => {
     try {
       await api.post('/progress', {
-        hash_id: props.hashId,
+        hash_id: hashId.value,
         location: JSON.stringify({
           page: currentPage.value,
           fitMode: fitMode.value,
@@ -75,9 +77,9 @@ const saveProgress = () => {
 }
 
 const loadProgress = async (): Promise<{ page: number; fitMode?: 'width' | 'height' | 'custom'; scale?: number; isDoublePage?: boolean } | null> => {
-  if (!props.hashId) return null
+  if (!hashId.value) return null
   try {
-    const res = await api.get(`/progress/${encodeURIComponent(props.hashId)}`)
+    const res = await api.get(`/progress/${encodeURIComponent(hashId.value)}`)
     try {
       const data = JSON.parse(res.data.location)
       if (typeof data.page === 'number') return data
@@ -289,7 +291,7 @@ const initPdf = async () => {
   error.value = ''
   toc.value = []
   try {
-    const res = await api.get(`/files/${props.path.split('/').map(encodeURIComponent).join('/')}`, {
+    const res = await api.get(viewerUrls(props.source).file, {
       responseType: 'arraybuffer',
     })
     const data = new Uint8Array(res.data as ArrayBuffer)
@@ -361,10 +363,10 @@ onMounted(async () => {
   }
 })
 
-watch(() => props.path, async () => {
+watch(() => props.source, async () => {
   destroy()
   await initPdf()
-})
+}, { deep: true })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)

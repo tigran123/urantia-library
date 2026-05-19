@@ -7,6 +7,7 @@ import {
   ArrowPathIcon,
   ClipboardIcon,
   CheckIcon,
+  PencilSquareIcon,
 } from '@heroicons/vue/24/outline'
 import api from '../api'
 import MetadataFields from './MetadataFields.vue'
@@ -46,6 +47,49 @@ const reextracting = ref(false)
 const error = ref('')
 const coverFile = ref<File | null>(null)
 const hashCopied = ref(false)
+
+// Inline rename: track which location is being renamed and the draft value.
+const renamingLoc = ref<string | null>(null)
+const renameDraft = ref<string>('')
+const renaming = ref(false)
+const renameError = ref('')
+
+const startRename = (loc: string) => {
+  renamingLoc.value = loc
+  renameDraft.value = loc.split('/').pop() || ''
+  renameError.value = ''
+}
+
+const cancelRename = () => {
+  renamingLoc.value = null
+  renameDraft.value = ''
+  renameError.value = ''
+}
+
+const commitRename = async (loc: string) => {
+  const newBase = renameDraft.value.trim()
+  if (!editing.value || !newBase || newBase.includes('/')) {
+    renameError.value = newBase.includes('/') ? 'Filename may not contain "/"' : 'Empty filename'
+    return
+  }
+  const parent = loc.split('/').slice(0, -1).join('/')
+  const dst = parent ? `${parent}/${newBase}` : newBase
+  if (dst === loc) { cancelRename(); return }
+  renaming.value = true
+  renameError.value = ''
+  try {
+    await api.post('/admin/move', { src: loc, dst })
+    // Reload book detail so editing.locations reflects the new path.
+    const res = await api.get(`/admin/books/${encodeURIComponent(editing.value.id)}`)
+    editing.value = { ...res.data }
+    emit('saved', res.data)
+    cancelRename()
+  } catch (err: any) {
+    renameError.value = err.response?.data?.detail || err.message
+  } finally {
+    renaming.value = false
+  }
+}
 
 const titleMissing = computed(() => !(editing.value?.title || '').trim())
 
@@ -166,8 +210,46 @@ const reextractCover = async () => {
           </div>
           <div class="flex items-baseline gap-3 flex-wrap">
             <span class="text-gray-500 dark:text-gray-400 shrink-0">{{ t('admin.field_locations') }}</span>
-            <code v-for="loc in editing.locations" :key="loc" class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] break-all">/{{ loc }}</code>
+            <template v-for="loc in editing.locations" :key="loc">
+              <span v-if="renamingLoc === loc" class="inline-flex items-center gap-1.5">
+                <code class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] break-all">/{{ loc.split('/').slice(0, -1).join('/') }}/</code>
+                <input
+                  v-model="renameDraft"
+                  type="text"
+                  class="px-1.5 py-0.5 rounded border border-blue-400 dark:border-blue-600 bg-white dark:bg-gray-800 font-mono text-[11px] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500/40"
+                  @keydown.enter.prevent="commitRename(loc)"
+                  @keydown.escape.prevent="cancelRename"
+                />
+                <button
+                  @click="commitRename(loc)"
+                  :disabled="renaming"
+                  class="text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+                  :title="t('admin.save')"
+                >
+                  <CheckIcon class="w-3.5 h-3.5" />
+                </button>
+                <button
+                  @click="cancelRename"
+                  :disabled="renaming"
+                  class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-50"
+                  :title="t('admin.cancel')"
+                >
+                  <XMarkIcon class="w-3.5 h-3.5" />
+                </button>
+              </span>
+              <span v-else class="inline-flex items-center gap-1">
+                <code class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] break-all">/{{ loc }}</code>
+                <button
+                  @click="startRename(loc)"
+                  class="text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+                  :title="t('admin.rename_filename')"
+                >
+                  <PencilSquareIcon class="w-3.5 h-3.5" />
+                </button>
+              </span>
+            </template>
           </div>
+          <div v-if="renameError" class="text-xs text-red-600 dark:text-red-400 pl-[7.5rem]">{{ renameError }}</div>
         </div>
 
         <div class="p-6 grid grid-cols-[200px_1fr] gap-6">

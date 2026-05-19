@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch, onUnmounted, defineAsyncComponent, inject, type Ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api, { verifyBook, type IntegrityCheckResult, type IntegrityMode } from '../api'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
@@ -17,6 +17,7 @@ const PdfViewer = defineAsyncComponent(() => import('../components/PdfViewer.vue
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
+const router = useRouter()
 const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
 const item = ref<any>(null)
 const loading = ref(true)
@@ -104,6 +105,17 @@ const onEditorSaved = (updated: any) => {
   item.value.description = updated.description
   item.value.clearance = updated.clearance
   if (updated.title) document.title = updated.title
+  // The editor can rename the file; if our current path is no longer one of
+  // the book's locations, navigate to the new path so the URL stops 404ing
+  // on reload and the filename caption refreshes.
+  if (Array.isArray(updated.locations) && !updated.locations.includes(currentPath.value)) {
+    const parent = currentPath.value.split('/').slice(0, -1).join('/')
+    const newPath = updated.locations.find((l: string) => l.startsWith(parent + '/'))
+      || updated.locations[0]
+    if (newPath && newPath !== currentPath.value) {
+      router.replace(`/item/${newPath}`)
+    }
+  }
 }
 
 const loadFavorites = async () => {
@@ -469,22 +481,22 @@ watch(
           <ImageViewer v-else-if="isImage" :src="getDownloadUrl()" />
           
           <!-- PDF Viewer (pdfjs-dist) -->
-          <PdfViewer v-else-if="isPdf" :path="item.path" :hash-id="item.hash_id" />
+          <PdfViewer v-else-if="isPdf" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
 
           <!-- DjVu Viewer -->
-          <DjvuViewer v-else-if="isDjvu" :path="item.path" :hash-id="item.hash_id" />
+          <DjvuViewer v-else-if="isDjvu" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
 
           <!-- EPUB Viewer -->
-          <EpubViewer v-else-if="isEpub" :path="item.path" :hash-id="item.hash_id" />
+          <EpubViewer v-else-if="isEpub" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
 
           <!-- FB2 Viewer (also handles .fb2.zip) -->
-          <Fb2Viewer v-else-if="isFb2" :path="item.path" :hash-id="item.hash_id" />
+          <Fb2Viewer v-else-if="isFb2" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
 
           <!-- Markdown / plain text / code viewer -->
-          <MdViewer v-else-if="isMd || isTxt || isCode" :path="item.path" :hash-id="item.hash_id" />
+          <MdViewer v-else-if="isMd || isTxt || isCode" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
 
           <!-- HTML Viewer (also handles .html.zip) -->
-          <HtmlViewer v-else-if="isHtml" :path="item.path" :hash-id="item.hash_id" />
+          <HtmlViewer v-else-if="isHtml" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">

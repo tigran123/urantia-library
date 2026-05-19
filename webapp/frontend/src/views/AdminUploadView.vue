@@ -18,7 +18,8 @@ import MetadataFields from '../components/MetadataFields.vue'
 import ClearanceControl from '../components/ClearanceControl.vue'
 import ClearancePill from '../components/ClearancePill.vue'
 import CoverPreview from '../components/CoverPreview.vue'
-import DestinationPicker from '../components/upload/DestinationPicker.vue'
+import DirectoryTreePicker from '../components/upload/DirectoryTreePicker.vue'
+import StagingPreview from '../components/upload/StagingPreview.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -78,15 +79,17 @@ const fileHash = ref<string | null>(null)
 const fileFormat = ref<string>('')
 const fileSize = ref<number>(0)
 const meta = ref<Metadata>({ ...DEFAULT_META })
-const topDir = ref<string>('')
-const subpath = ref<string>('')
+const selectedDir = ref<string>('')
+const extraSubpath = ref<string>('')
+const filename = ref<string>('')
+const stagingFilename = ref<string>('')
 const clearance = ref<number>(100)
 const needsReview = ref<boolean>(false)
 const coverOverride = ref<File | null>(null)
 const stagingCoverUrl = ref<string | null>(null)
 const existingBook = ref<ExistingBook | null>(null)
 const committedBook = ref<CommittedBook | null>(null)
-const topDirs = ref<string[]>([])
+const previewOpen = ref<boolean>(true)
 
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const logEl = ref<HTMLElement | null>(null)
@@ -113,22 +116,23 @@ const fmtBytes = (n: number) => {
   return `${f.toFixed(1)} ${units[i]}`
 }
 
-const loadTopDirs = async () => {
-  try {
-    const res = await api.get('/admin/top-dirs')
-    topDirs.value = res.data?.tops || []
-    if (!topDir.value && topDirs.value.length) topDir.value = topDirs.value[0]
-  } catch {
-    topDirs.value = []
-  }
-}
-
-onMounted(async () => {
+onMounted(() => {
   if (!currentUser?.value?.is_admin) {
     router.replace('/')
     return
   }
-  await loadTopDirs()
+})
+
+const originalExt = computed(() => {
+  const n = (stagingFilename.value || '').toLowerCase()
+  if (n.endsWith('.fb2.zip')) return '.fb2.zip'
+  const i = n.lastIndexOf('.')
+  return i >= 0 ? n.slice(i) : ''
+})
+
+const filenameMismatch = computed(() => {
+  if (!filename.value || !originalExt.value) return false
+  return !filename.value.toLowerCase().endsWith(originalExt.value)
 })
 
 watch(log, () => {
@@ -155,13 +159,17 @@ const resetToIdle = () => {
   fileFormat.value = ''
   fileSize.value = 0
   meta.value = { ...DEFAULT_META }
-  subpath.value = ''
+  selectedDir.value = ''
+  extraSubpath.value = ''
+  filename.value = ''
+  stagingFilename.value = ''
   clearance.value = 100
   needsReview.value = false
   coverOverride.value = null
   stagingCoverUrl.value = null
   existingBook.value = null
   committedBook.value = null
+  previewOpen.value = true
   errorMsg.value = ''
 }
 
@@ -255,6 +263,8 @@ const handleSseEvent = (raw: string) => {
       fileHash.value = payload.hash
       fileFormat.value = payload.format
       fileSize.value = payload.size
+      stagingFilename.value = payload.filename || file.value?.name || ''
+      filename.value = stagingFilename.value
       stagingCoverUrl.value = payload.cover_url
       meta.value = { ...DEFAULT_META, ...(payload.extracted_metadata || {}) }
       stage.value = 'review'
@@ -290,13 +300,18 @@ const commit = async () => {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
     }
+    const combinedSubpath = [selectedDir.value, extraSubpath.value]
+      .map((s) => (s || '').replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean)
+      .join('/')
     const payload = {
       staging_id: stagingId.value,
       metadata: meta.value,
-      top_dir: topDir.value,
-      subpath: subpath.value,
+      top_dir: '',
+      subpath: combinedSubpath,
       clearance: clearance.value,
       needs_review: needsReview.value,
+      filename: filename.value,
     }
     const res = await api.post('/admin/books/commit', payload)
     committedBook.value = res.data
@@ -595,15 +610,52 @@ const reviewCoverMeta = computed(() => {
         </div>
       </div>
 
+      <div v-if="stagingId" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+        <button
+          type="button"
+          @click="previewOpen = !previewOpen"
+          class="w-full flex items-center justify-between px-6 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/40"
+        >
+          <span class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.upload.review.preview') }}</span>
+          <span class="inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+            <span v-if="!previewOpen">{{ t('admin.upload.review.preview_open') }}</span>
+            <span v-else>{{ t('admin.upload.review.preview_close') }}</span>
+            <ChevronDownIcon v-if="previewOpen" class="w-4 h-4" />
+            <ChevronRightIcon v-else class="w-4 h-4" />
+          </span>
+        </button>
+        <div v-if="previewOpen" class="px-3 pb-3">
+          <StagingPreview :staging-id="stagingId" :filename="filename" />
+        </div>
+      </div>
+
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-6 space-y-5">
         <div>
           <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.destination') }}</div>
-          <DestinationPicker
-            v-model:top-dir="topDir"
-            v-model:subpath="subpath"
-            :filename="file?.name || ''"
-            :tops="topDirs"
+          <DirectoryTreePicker
+            v-model:selected-dir="selectedDir"
+            v-model:extra-subpath="extraSubpath"
+            :filename="filename"
           />
+        </div>
+        <div class="border-t border-gray-100 dark:border-gray-700 pt-5">
+          <label class="block text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.filename') }}</label>
+          <input
+            v-model="filename"
+            type="text"
+            class="w-full px-3 py-2 border rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+            :class="filenameMismatch
+              ? 'border-amber-400 dark:border-amber-700'
+              : 'border-gray-300 dark:border-gray-600'"
+          />
+          <p
+            class="mt-1 text-xs"
+            :class="filenameMismatch
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-gray-500 dark:text-gray-400'"
+          >
+            {{ t('admin.upload.review.filename_help', { ext: originalExt }) }}
+          </p>
         </div>
         <div class="border-t border-gray-100 dark:border-gray-700 pt-5">
           <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.access') }}</div>

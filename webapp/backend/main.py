@@ -1274,77 +1274,44 @@ def _safe_subpath(sub: str) -> str:
     return "/".join(_safe_path_segment(p) for p in parts)
 
 
-@app.get("/api/admin/top-dirs", response_model=schemas.TopDirsResponse)
-def admin_top_dirs(
-    _admin: models.User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Distinct first-segments of registered book locations, plus any
-    existing top-level directory in BOOKS_DIR that isn't on the skiplist
-    (so a freshly-created /epub directory shows up before any book lands in it)."""
-    rows = db.query(models.BookLocation.symlink_path).all()
-    tops: set[str] = set()
-    for (sp,) in rows:
-        first = (sp or "").lstrip("/").split("/", 1)[0]
-        if first and first not in _TOPDIR_SKIPLIST and not first.startswith("."):
-            tops.add(first)
-    try:
-        for entry in os.listdir(BOOKS_DIR):
-            if entry in _TOPDIR_SKIPLIST or entry.startswith("."):
-                continue
-            if os.path.isdir(os.path.join(BOOKS_DIR, entry)):
-                tops.add(entry)
-    except OSError:
-        pass
-    return {"tops": sorted(tops)}
-
-
 @app.get("/api/admin/dirs", response_model=schemas.DirListing)
 def admin_dirs(
-    top: str = "",
+    path: str = "",
     _admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List subdirectory names under /<top>/ — used to power the subpath
-    autocomplete. Combines DB-known second-segments with on-disk directories
-    so empty-but-existing folders appear too. `top=""` lists root-level
-    directories (subpath under the root option in the dropdown)."""
-    top_clean = (top or "").strip().strip("/")
-    if top_clean:
-        top_clean = _safe_path_segment(top_clean)
+    """List immediate subdirectory names under /<path>/ — powers the
+    expand-on-click directory tree in the upload view. Combines DB-known
+    children with on-disk directories so empty-but-existing folders appear
+    too. `path=""` lists root-level directories."""
+    sub = _safe_subpath(path)
+    prefix = f"{sub}/" if sub else ""
     dirs: set[str] = set()
-    if top_clean:
-        prefix = f"{top_clean}/"
-        rows = (
-            db.query(models.BookLocation.symlink_path)
-            .filter(models.BookLocation.symlink_path.like(f"{prefix}%/%"))
-            .all()
-        )
-        for (sp,) in rows:
-            rest = sp[len(prefix):]
-            if "/" in rest:
-                dirs.add(rest.split("/", 1)[0])
-        fs_top = os.path.join(BOOKS_DIR, top_clean)
-    else:
-        # Root: every first-segment in the location table, plus on-disk dirs.
-        rows = db.query(models.BookLocation.symlink_path).all()
-        for (sp,) in rows:
-            first = (sp or "").lstrip("/").split("/", 1)[0]
-            if first and first not in _TOPDIR_SKIPLIST and not first.startswith("."):
-                dirs.add(first)
-        fs_top = BOOKS_DIR
-    if os.path.isdir(fs_top):
+
+    rows = (
+        db.query(models.BookLocation.symlink_path)
+        .filter(models.BookLocation.symlink_path.like(f"{prefix}%/%"))
+        .all()
+    )
+    for (sp,) in rows:
+        rest = sp[len(prefix):]
+        first = rest.split("/", 1)[0] if "/" in rest else ""
+        if first and not first.startswith(".") and (sub or first not in _TOPDIR_SKIPLIST):
+            dirs.add(first)
+
+    fs_dir = os.path.join(BOOKS_DIR, sub) if sub else BOOKS_DIR
+    if os.path.isdir(fs_dir):
         try:
-            for entry in os.listdir(fs_top):
+            for entry in os.listdir(fs_dir):
                 if entry.startswith("."):
                     continue
-                if not top_clean and entry in _TOPDIR_SKIPLIST:
+                if not sub and entry in _TOPDIR_SKIPLIST:
                     continue
-                if os.path.isdir(os.path.join(fs_top, entry)):
+                if os.path.isdir(os.path.join(fs_dir, entry)):
                     dirs.add(entry)
         except OSError:
             pass
-    return {"top": top_clean, "dirs": sorted(dirs)}
+    return {"path": sub, "dirs": sorted(dirs)}
 
 
 def _validate_cover_upload(file: UploadFile) -> None:
@@ -1573,6 +1540,7 @@ async def admin_upload_book(
                 "hash": file_hash,
                 "size": nonlocal_bytes,
                 "format": nonlocal_fmt,
+                "filename": nonlocal_safe_name,
                 "cover_url": f"/api/admin/books/upload/{staging_id}/cover.jpg" if cover_dims else None,
                 "extracted_metadata": metadata,
             }
@@ -1632,6 +1600,129 @@ async def admin_staging_cover_override(
     return {"cover_url": f"/api/admin/books/upload/{staging_id}/cover.jpg?v={int(datetime.now(timezone.utc).timestamp())}"}
 
 
+def _get_staging_file(staging_id: str) -> str:
+    """Resolve a staging_id to the absolute path of the staged book file. Used
+    by the embedded-viewer endpoints so the admin can preview before commit."""
+    rec = _STAGING.get(staging_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Staging not found")
+    path = os.path.join(rec["dir"], rec["filename"])
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Staging file missing")
+    return path
+
+
+@app.get("/api/admin/books/upload/{staging_id}/file")
+def admin_staging_file(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    """Serve the raw staged file for embedded preview (PDF, EPUB, image)."""
+    return FileResponse(_get_staging_file(staging_id))
+
+
+@app.get("/api/admin/books/upload/{staging_id}/fb2-content")
+async def admin_staging_fb2_content(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    file_path = _get_staging_file(staging_id)
+    lower = file_path.lower()
+    if not (lower.endswith(".fb2") or lower.endswith(".fb2.zip")):
+        raise HTTPException(status_code=400, detail="Not an FB2 file")
+    try:
+        xml_bytes = _read_fb2_bytes(file_path)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    return _convert_fb2(xml_bytes)
+
+
+@app.get("/api/admin/books/upload/{staging_id}/md-content")
+async def admin_staging_md_content(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    file_path = _get_staging_file(staging_id)
+    text = _read_text_file(file_path)
+    lower = file_path.lower()
+    ext = os.path.splitext(lower)[1]
+    if lower.endswith(".txt"):
+        return _convert_txt(text)
+    elif ext in CODE_EXTENSIONS:
+        return _convert_code(text, ext[1:])
+    return _convert_md(text)
+
+
+@app.get("/api/admin/books/upload/{staging_id}/html-content")
+async def admin_staging_html_content(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    file_path = _get_staging_file(staging_id)
+    lower = file_path.lower()
+    if not (lower.endswith(".html") or lower.endswith(".htm")
+            or lower.endswith(".html.zip") or lower.endswith(".htm.zip")):
+        raise HTTPException(status_code=400, detail="Not an HTML file")
+    try:
+        data = _read_html_bytes(file_path)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    return _convert_html(data)
+
+
+@app.get("/api/admin/books/upload/{staging_id}/djvu-metadata")
+async def admin_staging_djvu_metadata(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    file_path = _get_staging_file(staging_id)
+    if not file_path.lower().endswith(".djvu"):
+        raise HTTPException(status_code=400, detail="Not a DjVu file")
+    try:
+        ctx = djvu.decode.Context()
+        doc = ctx.new_document(djvu.decode.FileURI(file_path))
+        doc.decoding_job.wait()
+        return {"total_pages": len(doc.pages)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/books/upload/{staging_id}/djvu-page")
+async def admin_staging_djvu_page(
+    staging_id: str,
+    page: int,
+    _admin: models.User = Depends(require_admin),
+):
+    file_path = _get_staging_file(staging_id)
+    if not file_path.lower().endswith(".djvu"):
+        raise HTTPException(status_code=400, detail="Not a DjVu file")
+    if page < 1:
+        raise HTTPException(status_code=400, detail="Invalid page number")
+    headers = {"Cache-Control": "no-store"}
+    try:
+        ctx = djvu.decode.Context()
+        doc = ctx.new_document(djvu.decode.FileURI(file_path))
+        doc.decoding_job.wait()
+        if page > len(doc.pages):
+            raise HTTPException(status_code=404, detail="Page not found")
+        dpage = doc.pages[page - 1]
+        job = dpage.decode(wait=True)
+        width, height = job.width, job.height
+        rect = (0, 0, width, height)
+        fmt = djvu.decode.PixelFormatRgb()
+        fmt.rows_top_to_bottom = True
+        try:
+            pixels = job.render(djvu.decode.RENDER_COLOR, rect, rect, fmt)
+            img = Image.frombuffer('RGB', (width, height), pixels, 'raw', 'RGB', 0, 1)
+        except djvu.decode.NotAvailable:
+            img = Image.new('RGB', (width, height), (255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return Response(content=buf.getvalue(), media_type="image/jpeg", headers=headers)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/api/admin/books/upload/{staging_id}")
 async def admin_cancel_staging(
     staging_id: str,
@@ -1665,8 +1756,17 @@ async def admin_commit_book(
         raise HTTPException(status_code=400, detail="Clearance must be between 0 and 100")
 
     file_hash = rec["hash"]
-    filename = rec["filename"]
-    staging_book = os.path.join(rec["dir"], filename)
+    staging_filename = rec["filename"]
+    requested_name = (payload.filename or staging_filename).strip()
+    filename = _safe_path_segment(requested_name)
+    # Force the rename to preserve the upload's effective extension so the
+    # viewer's extension switch keeps working and stored content matches the
+    # suffix. .fb2.zip is treated as a single suffix because we re-zip on upload.
+    expected_suffix = (".fb2.zip" if staging_filename.lower().endswith(".fb2.zip")
+                       else os.path.splitext(staging_filename)[1].lower())
+    if expected_suffix and not filename.lower().endswith(expected_suffix):
+        raise HTTPException(status_code=400, detail=f"Filename must keep extension {expected_suffix}")
+    staging_book = os.path.join(rec["dir"], staging_filename)
     staging_cover = os.path.join(rec["dir"], "cover.jpg")
 
     # Destination paths — drop empty segments so "//" doesn't sneak in when
