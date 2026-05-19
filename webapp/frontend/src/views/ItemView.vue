@@ -405,8 +405,8 @@ watch(
                   <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatBytes(item.size, 0) }} ({{ item.size }} bytes)</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.modified') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatDate(item.mtime) }}</td>
+                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.imported') }}</th>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatDate(item.import_date) }}</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.location') }}</th>

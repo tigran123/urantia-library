@@ -432,6 +432,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                     if book.description:
                         item_data["description"] = book.description
                     item_data["clearance"] = int(book.clearance or 0)
+                    item_data["import_date"] = book.import_date
                     if current_user.is_admin:
                         item_data["last_verified_at"] = book.last_verified_at
                         item_data["last_verified_ok"] = book.last_verified_ok
@@ -1820,7 +1821,6 @@ async def admin_commit_book(
     # 4. Register in DB.
     meta = payload.metadata.model_dump(exclude_unset=True)
     title = meta.get("title") or os.path.splitext(filename)[0]
-    verified_at = _now_iso()
     book = models.Book(
         id=file_hash,
         title=title,
@@ -1835,10 +1835,7 @@ async def admin_commit_book(
         original_filename=filename,
         needs_review=bool(payload.needs_review),
         clearance=int(payload.clearance),
-        last_verified_at=verified_at,
-        last_verified_ok=True,
-        last_verified_mode="full",
-        last_verified_error=None,
+        import_date=_now_iso(),
     )
     db.add(book)
     db.add(models.BookLocation(hash_id=file_hash, symlink_path=rel_path))

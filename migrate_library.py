@@ -354,6 +354,16 @@ def main():
                     final_meta['title'] = os.path.splitext(filename)[0].replace('-', ' ').replace('_', ' ')
                     final_meta['needs_review'] = True
 
+            # Capture the source's mtime BEFORE the ingest step — in in-place mode the file
+            # is about to be moved out from under src_filepath, and we want this to reflect
+            # the user's acquisition date, not whatever the vault file's mtime ends up as.
+            try:
+                src_mtime = os.stat(src_filepath).st_mtime
+            except OSError as e:
+                print(f"  [!] Failed to stat source: {e}")
+                n_errors += 1
+                continue
+
             # --- Ingest content into the vault ---
             try:
                 if in_place:
@@ -375,21 +385,24 @@ def main():
 
             # --- DB ---
             try:
-                # Migration just hashed the file and laid it into .data, so this row
-                # is a full verify by construction; seed last_verified_* accordingly.
-                verified_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                # import_date = source file mtime, captured before we touch the file.
+                # This is "when the user acquired this book" — durable across re-migrations
+                # and immune to `touch` on the vault file, unlike st_mtime of the symlink target.
+                # Verified columns are left NULL: verification is an explicit admin action,
+                # not something the migration vouches for.
+                import_date = datetime.fromtimestamp(src_mtime, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                 cursor.execute("""
                     INSERT OR IGNORE INTO books
                     (id, title, author, publisher, tags, series, languages,
                      published, identifiers, description, original_filename, needs_review, clearance,
-                     last_verified_at, last_verified_ok, last_verified_mode, last_verified_error)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     import_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     file_hash, final_meta['title'], final_meta['author'], final_meta['publisher'],
                     final_meta['tags'], final_meta['series'], final_meta['languages'],
                     final_meta['published'], final_meta['identifiers'], final_meta['annotation'],
                     filename, final_meta['needs_review'], DEFAULT_BOOK_CLEARANCE,
-                    verified_at, 1, 'full', None,
+                    import_date,
                 ))
                 cursor.execute("""
                     INSERT OR IGNORE INTO book_locations (hash_id, symlink_path)

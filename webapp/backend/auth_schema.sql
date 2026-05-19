@@ -45,7 +45,7 @@ CREATE TABLE books (
     last_verified_ok BOOLEAN,           -- Result of last integrity check (NULL = never run)
     last_verified_mode VARCHAR,         -- 'quick' or 'full'
     last_verified_error VARCHAR,        -- Short failure key when last_verified_ok = FALSE
-    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    import_date TEXT NOT NULL           -- ISO-8601 UTC; source file mtime at migration time, or _now_iso() for webapp uploads
 );
 
 CREATE INDEX idx_books_clearance ON books(clearance);
