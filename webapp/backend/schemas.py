@@ -191,3 +191,24 @@ class ReadingProgressResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MoveRequest(BaseModel):
+    src: str
+    dst: str
+
+
+class MoveItem(BaseModel):
+    src: str
+    dst: str
+    hash_id: str
+
+
+class MoveResponse(BaseModel):
+    src: str
+    dst: str
+    kind: str            # 'file' | 'directory'
+    dry_run: bool
+    moved: List[MoveItem] = []
+    errors: List[dict] = []
+    skipped: List[dict] = []

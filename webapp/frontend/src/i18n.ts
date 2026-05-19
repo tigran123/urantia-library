@@ -157,6 +157,20 @@ const messages = {
       edit_clearance_tooltip: 'Click to edit required clearance',
       clearance_prompt: 'Set required clearance for "{title}":',
       clearance_invalid: 'Clearance must be a non-negative integer.',
+      move: {
+        heading: 'Reorganize',
+        from: 'From',
+        to: 'To',
+        preview: 'Preview',
+        move: 'Move',
+        confirm: 'Move from {src} to {dst}?',
+        confirm_n: 'Move {n} books from {src} to {dst}?',
+        preview_count: '{n} {kind} entries would move.',
+        moved_n: 'Moved {n} books.',
+        no_changes: 'No books match this path.',
+        error_collision: 'Some destinations already exist — nothing moved.',
+        row_action: 'Move…'
+      },
       integrity: {
         tab: 'Integrity',
         title: 'Data integrity',
@@ -466,6 +480,20 @@ const messages = {
       edit_clearance_tooltip: 'Нажмите, чтобы изменить требуемый допуск',
       clearance_prompt: 'Установить требуемый допуск для «{title}»:',
       clearance_invalid: 'Допуск должен быть неотрицательным целым числом.',
+      move: {
+        heading: 'Реорганизация',
+        from: 'Откуда',
+        to: 'Куда',
+        preview: 'Предпросмотр',
+        move: 'Переместить',
+        confirm: 'Переместить из {src} в {dst}?',
+        confirm_n: 'Переместить {n} книг из {src} в {dst}?',
+        preview_count: 'Будет перемещено: {n} ({kind}).',
+        moved_n: 'Перемещено книг: {n}.',
+        no_changes: 'Книги по этому пути не найдены.',
+        error_collision: 'Некоторые целевые пути уже существуют — ничего не перемещено.',
+        row_action: 'Переместить…'
+      },
       integrity: {
         tab: 'Целостность',
         title: 'Целостность данных',

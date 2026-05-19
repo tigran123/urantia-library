@@ -858,6 +858,187 @@ async def admin_delete_book(
     return {"deleted": hash_id, "locations": locations, "errors": errors}
 
 
+# ---------- Admin: move book(s) between locations ----------
+
+
+def _rel_under_books(p: str) -> str:
+    """Normalise an input path to a relative POSIX path under BOOKS_DIR.
+    Strips leading/trailing slashes, rejects empty + traversal. Mirrors the
+    inline guard used by the commit endpoint at main.py:1496-1498."""
+    rel = (p or "").strip().lstrip("/").rstrip("/")
+    if not rel:
+        raise HTTPException(status_code=400, detail="Empty path")
+    abs_p = os.path.abspath(os.path.join(BOOKS_DIR, rel))
+    books_abs = os.path.abspath(BOOKS_DIR)
+    if not (abs_p == books_abs or abs_p.startswith(books_abs + os.sep)):
+        raise HTTPException(status_code=400, detail="Path escapes library root")
+    return os.path.relpath(abs_p, books_abs).replace("\\", "/")
+
+
+def _rmdir_empty_upwards(start_abs: str) -> None:
+    """rmdir start_abs and every empty parent directory up to (but not
+    including) BOOKS_DIR. Tolerant — stops at first non-empty dir or OSError."""
+    books_abs = os.path.abspath(BOOKS_DIR)
+    cur = os.path.abspath(start_abs)
+    while cur.startswith(books_abs + os.sep) and cur != books_abs:
+        try:
+            os.rmdir(cur)
+        except OSError:
+            return
+        cur = os.path.dirname(cur)
+
+
+@app.post("/api/admin/move", response_model=schemas.MoveResponse)
+async def admin_move(
+    payload: schemas.MoveRequest,
+    dry_run: bool = False,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Move a managed book (symlink) or an entire directory subtree to a new
+    location. The hash never changes — only `book_locations.symlink_path` and
+    the symlink on disk are updated. Favourites and reading progress reference
+    by `hash_id`, so they survive the move automatically."""
+    src = _rel_under_books(payload.src)
+    dst = _rel_under_books(payload.dst)
+
+    if src == dst:
+        return schemas.MoveResponse(
+            src=src, dst=dst, kind="file", dry_run=dry_run,
+            moved=[], errors=[],
+            skipped=[{"path": src, "reason": "from == to"}],
+        )
+
+    # A move that lands inside its own subtree (Urantia → Urantia/Foo) would
+    # corrupt the prefix-rename invariant. Reject up front.
+    if (dst + "/").startswith(src + "/"):
+        raise HTTPException(status_code=400, detail="Cannot move into a subdirectory of itself")
+
+    books_abs = os.path.abspath(BOOKS_DIR)
+    src_abs = os.path.join(books_abs, src)
+
+    if not os.path.lexists(src_abs):
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    # Decide file vs directory. "File" here means a symlink into the CAS vault
+    # (i.e. a managed book). Anything else is rejected.
+    if os.path.islink(src_abs):
+        kind = "file"
+        rows = (
+            db.query(models.BookLocation)
+            .filter(models.BookLocation.symlink_path == src)
+            .all()
+        )
+        if not rows:
+            raise HTTPException(status_code=400, detail="Not a managed book")
+        moves: list[tuple[str, str, str]] = [(src, dst, rows[0].hash_id)]
+    elif os.path.isdir(src_abs):
+        kind = "directory"
+        like_prefix = src + "/"
+        rows = (
+            db.query(models.BookLocation)
+            .filter(models.BookLocation.symlink_path.like(like_prefix + "%"))
+            .all()
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="No registered books under this directory")
+        moves = [(r.symlink_path, dst + r.symlink_path[len(src):], r.hash_id) for r in rows]
+    else:
+        raise HTTPException(status_code=400, detail="Source is neither a symlink nor a directory")
+
+    # Pre-flight: every destination must be free. All-or-nothing on collision.
+    collisions = []
+    for (_old, new_rel, _h) in moves:
+        new_abs = os.path.join(books_abs, new_rel)
+        if os.path.lexists(new_abs):
+            collisions.append({"path": new_rel, "reason": "destination exists"})
+    if collisions:
+        return schemas.MoveResponse(
+            src=src, dst=dst, kind=kind, dry_run=dry_run,
+            moved=[], errors=collisions, skipped=[],
+        )
+
+    if dry_run:
+        return schemas.MoveResponse(
+            src=src, dst=dst, kind=kind, dry_run=True,
+            moved=[schemas.MoveItem(src=o, dst=n, hash_id=h) for (o, n, h) in moves],
+            errors=[], skipped=[],
+        )
+
+    moved: list[schemas.MoveItem] = []
+    errors: list[dict] = []
+
+    for (old_rel, new_rel, hash_id) in moves:
+        old_abs = os.path.join(books_abs, old_rel)
+        new_abs = os.path.join(books_abs, new_rel)
+        new_parent = os.path.dirname(new_abs)
+
+        # Re-derive a relative symlink target from the NEW parent — the old
+        # symlink's relative target is invalid from a different parent.
+        # Mirrors the commit endpoint's pattern (main.py:1534-1535).
+        try:
+            os.makedirs(new_parent, exist_ok=True)
+            vault_path = os.path.join(DATA_DIR, hash_id)
+            new_target = os.path.relpath(vault_path, new_parent)
+        except OSError as e:
+            errors.append({"path": old_rel, "reason": f"mkdir failed: {e}"})
+            continue
+
+        # (a) create new symlink
+        try:
+            os.symlink(new_target, new_abs)
+        except FileExistsError:
+            errors.append({"path": new_rel, "reason": "race: destination appeared"})
+            continue
+        except OSError as e:
+            errors.append({"path": old_rel, "reason": f"symlink failed: {e}"})
+            continue
+
+        # (b) update DB
+        try:
+            db.query(models.BookLocation).filter(
+                models.BookLocation.symlink_path == old_rel
+            ).update(
+                {models.BookLocation.symlink_path: new_rel},
+                synchronize_session=False,
+            )
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            # (c) rollback step (a)
+            try:
+                os.remove(new_abs)
+            except OSError:
+                pass
+            errors.append({"path": old_rel, "reason": f"DB update failed: {e}"})
+            continue
+
+        # (d) best-effort removal of the old symlink. If this fails the DB is
+        # already authoritative — leaves a stale symlink behind that the user
+        # can clean up later. Log for visibility.
+        try:
+            os.remove(old_abs)
+        except OSError as ex:
+            logging.warning("admin_move: stale old symlink left behind: %s (%s)", old_rel, ex)
+
+        moved.append(schemas.MoveItem(src=old_rel, dst=new_rel, hash_id=hash_id))
+
+    # For directory moves, sweep the now-likely-empty source subtree, then
+    # walk up removing empty parents until we hit a non-empty dir or BOOKS_DIR.
+    if kind == "directory" and os.path.isdir(src_abs):
+        for root, _dirs, _files in os.walk(src_abs, topdown=False):
+            try:
+                os.rmdir(root)
+            except OSError:
+                pass
+        _rmdir_empty_upwards(os.path.dirname(src_abs))
+
+    return schemas.MoveResponse(
+        src=src, dst=dst, kind=kind, dry_run=False,
+        moved=moved, errors=errors, skipped=[],
+    )
+
+
 # ---------- Admin upload (Add Book wizard) ----------
 
 STAGING_DIR = os.path.join(DATA_DIR, "staging")

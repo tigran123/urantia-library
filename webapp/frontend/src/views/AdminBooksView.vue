@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, inject, watch } from 'vue'
+import { ref, onMounted, inject, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
@@ -33,6 +33,25 @@ const searching = ref(false)
 const searchError = ref('')
 
 const editingId = ref<string | null>(null)
+
+type MoveItem = { src: string, dst: string, hash_id: string }
+type MoveResponse = {
+  src: string
+  dst: string
+  kind: 'file' | 'directory'
+  dry_run: boolean
+  moved: MoveItem[]
+  errors: { path: string, reason: string }[]
+  skipped: { path: string, reason: string }[]
+}
+
+const moveOpen = ref(false)
+const moveSrc = ref('')
+const moveDst = ref('')
+const movePreview = ref<MoveResponse | null>(null)
+const moveResult = ref<MoveResponse | null>(null)
+const movePending = ref(false)
+const moveError = ref('')
 
 const doSearch = async (resetPage = true) => {
   if (resetPage) page.value = 1
@@ -92,6 +111,67 @@ const deleteBook = async (m: Match) => {
   }
 }
 
+const resetMoveResults = () => {
+  movePreview.value = null
+  moveResult.value = null
+  moveError.value = ''
+}
+
+const movePreviewRun = async () => {
+  if (!moveSrc.value.trim() || !moveDst.value.trim()) return
+  movePending.value = true
+  resetMoveResults()
+  try {
+    const res = await api.post<MoveResponse>('/admin/move', {
+      src: moveSrc.value.trim(),
+      dst: moveDst.value.trim(),
+    }, { params: { dry_run: 1 } })
+    movePreview.value = res.data
+  } catch (err: any) {
+    moveError.value = err.response?.data?.detail || err.message
+  } finally {
+    movePending.value = false
+  }
+}
+
+const moveCommit = async () => {
+  if (!moveSrc.value.trim() || !moveDst.value.trim()) return
+  const n = movePreview.value?.moved.length ?? null
+  const confirmMsg = n !== null
+    ? t('admin.move.confirm_n', { n, src: moveSrc.value, dst: moveDst.value })
+    : t('admin.move.confirm', { src: moveSrc.value, dst: moveDst.value })
+  if (!window.confirm(confirmMsg)) return
+  movePending.value = true
+  resetMoveResults()
+  try {
+    const res = await api.post<MoveResponse>('/admin/move', {
+      src: moveSrc.value.trim(),
+      dst: moveDst.value.trim(),
+    })
+    moveResult.value = res.data
+    if (res.data.moved.length > 0) {
+      // Refresh search so any displayed row's path doesn't go stale.
+      await doSearch(false)
+    }
+  } catch (err: any) {
+    moveError.value = err.response?.data?.detail || err.message
+  } finally {
+    movePending.value = false
+  }
+}
+
+const openMoveForRow = (m: Match) => {
+  moveSrc.value = m.path
+  moveDst.value = ''
+  moveOpen.value = true
+  resetMoveResults()
+  // Scroll the panel into view so the admin sees where the form is.
+  nextTick(() => {
+    const el = document.getElementById('reorganize-section')
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
 const openFromQuery = () => {
   const q = route.query.hash
   if (typeof q === 'string' && q) editingId.value = q
@@ -111,6 +191,88 @@ watch(() => route.query.hash, openFromQuery)
 <template>
   <div class="space-y-6 max-w-6xl mx-auto">
     <AdminNav />
+
+    <section id="reorganize-section" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+      <button
+        type="button"
+        @click="moveOpen = !moveOpen"
+        class="w-full flex items-center justify-between text-left"
+      >
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.move.heading') }}</h2>
+        <span class="text-sm text-gray-500 dark:text-gray-400">{{ moveOpen ? '▾' : '▸' }}</span>
+      </button>
+      <div v-if="moveOpen" class="mt-4 space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="block">
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.move.from') }}</span>
+            <input
+              v-model="moveSrc"
+              type="text"
+              placeholder="Urantia/Law/Modern"
+              class="w-full mt-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+            />
+          </label>
+          <label class="block">
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.move.to') }}</span>
+            <input
+              v-model="moveDst"
+              type="text"
+              placeholder="Law/Modern"
+              class="w-full mt-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+            />
+          </label>
+        </div>
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            @click="movePreviewRun"
+            :disabled="movePending || !moveSrc.trim() || !moveDst.trim()"
+            class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >{{ t('admin.move.preview') }}</button>
+          <button
+            type="button"
+            @click="moveCommit"
+            :disabled="movePending || !moveSrc.trim() || !moveDst.trim()"
+            class="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
+          >{{ t('admin.move.move') }}</button>
+        </div>
+
+        <div v-if="moveError" class="text-red-600 dark:text-red-400 text-sm">{{ moveError }}</div>
+
+        <div v-if="movePreview" class="text-sm">
+          <p class="text-gray-700 dark:text-gray-300">
+            {{ t('admin.move.preview_count', { n: movePreview.moved.length, kind: movePreview.kind }) }}
+          </p>
+          <ul v-if="movePreview.moved.length" class="mt-2 space-y-0.5 max-h-48 overflow-y-auto text-xs font-mono text-gray-600 dark:text-gray-400">
+            <li v-for="(it, i) in movePreview.moved.slice(0, 200)" :key="i" class="truncate">
+              /{{ it.src }} → /{{ it.dst }}
+            </li>
+            <li v-if="movePreview.moved.length > 200" class="italic">… and {{ movePreview.moved.length - 200 }} more</li>
+          </ul>
+          <p v-if="movePreview.errors.length" class="mt-2 text-red-600 dark:text-red-400 text-xs">
+            {{ t('admin.move.error_collision') }}
+          </p>
+          <ul v-if="movePreview.errors.length" class="mt-1 space-y-0.5 text-xs font-mono text-red-600 dark:text-red-400">
+            <li v-for="(e, i) in movePreview.errors" :key="i" class="truncate">{{ e.path }} — {{ e.reason }}</li>
+          </ul>
+          <p v-if="movePreview.skipped.length" class="mt-2 text-gray-500 dark:text-gray-400 text-xs">
+            {{ movePreview.skipped.map(s => `${s.path}: ${s.reason}`).join('; ') }}
+          </p>
+        </div>
+
+        <div v-if="moveResult" class="text-sm">
+          <p class="text-emerald-700 dark:text-emerald-300">
+            {{ t('admin.move.moved_n', { n: moveResult.moved.length }) }}
+          </p>
+          <p v-if="moveResult.errors.length" class="mt-1 text-red-600 dark:text-red-400 text-xs">
+            {{ moveResult.errors.length }} error(s):
+          </p>
+          <ul v-if="moveResult.errors.length" class="mt-1 space-y-0.5 text-xs font-mono text-red-600 dark:text-red-400">
+            <li v-for="(e, i) in moveResult.errors" :key="i" class="truncate">{{ e.path }} — {{ e.reason }}</li>
+          </ul>
+        </div>
+      </div>
+    </section>
 
     <section class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-6 space-y-4">
       <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.find_book') }}</h2>
@@ -162,6 +324,10 @@ watch(() => route.query.hash, openFromQuery)
               @click="openEditor(m)"
               class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none"
             >{{ t('admin.edit') }}</button>
+            <button
+              @click="openMoveForRow(m)"
+              class="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none"
+            >{{ t('admin.move.row_action') }}</button>
             <button
               @click="deleteBook(m)"
               class="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 focus:outline-none"
