@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, inject, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, inject, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
@@ -26,6 +26,7 @@ type Match = {
 }
 
 const query = ref('')
+const searchInput = ref<HTMLInputElement | null>(null)
 const page = ref(1)
 const matches = ref<Match[]>([])
 const total = ref(0)
@@ -196,12 +197,35 @@ const openFromQuery = () => {
   if (typeof q === 'string' && q) editingId.value = q
 }
 
+// Ctrl/Cmd+X clears the search box and focuses it. If the user has text
+// selected inside an editable field we yield to the native cut behaviour so
+// they don't lose the cut affordance for incidental text-editing on the page.
+const onShortcut = (e: KeyboardEvent) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'x') return
+  const active = document.activeElement as HTMLElement | null
+  const inEditable = !!active && (
+    active.tagName === 'INPUT' ||
+    active.tagName === 'TEXTAREA' ||
+    active.isContentEditable
+  )
+  const hasSelection = (window.getSelection()?.toString() || '').length > 0
+  if (inEditable && hasSelection) return
+  e.preventDefault()
+  query.value = ''
+  nextTick(() => searchInput.value?.focus())
+}
+
 onMounted(() => {
   if (!currentUser?.value?.is_admin) {
     router.replace('/')
     return
   }
   openFromQuery()
+  window.addEventListener('keydown', onShortcut)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onShortcut)
 })
 
 watch(() => route.query.hash, openFromQuery)
@@ -311,6 +335,7 @@ watch(() => route.query.hash, openFromQuery)
       <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.find_book') }}</h2>
       <form @submit.prevent="doSearch(true)" class="flex gap-2">
         <input
+          ref="searchInput"
           v-model="query"
           type="search"
           :placeholder="t('admin.search_placeholder')"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, provide } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon } from '@heroicons/vue/24/outline'
 import api from './api'
@@ -12,6 +12,8 @@ const { t } = useI18n({ useScope: 'global' })
 
 const searchQuery = ref('')
 const showSearchTips = ref(false)
+const searchInputDesktop = ref<HTMLInputElement | null>(null)
+const searchInputMobile = ref<HTMLInputElement | null>(null)
 const router = useRouter()
 const route = useRoute()
 
@@ -49,8 +51,41 @@ watch(isAuthRoute, (newVal) => {
   }
 })
 
+// Ctrl/Cmd+X clears the global search box and focuses it. We skip the
+// admin-books page so that view's own handler (which targets its local search
+// box) wins, and skip auth routes where the global search isn't mounted.
+// If the user has text selected in an editable field we yield to the native
+// cut behaviour.
+const onGlobalShortcut = (e: KeyboardEvent) => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'x') return
+  if (route.name === 'admin-books' || isAuthRoute.value) return
+  const active = document.activeElement as HTMLElement | null
+  const inEditable = !!active && (
+    active.tagName === 'INPUT' ||
+    active.tagName === 'TEXTAREA' ||
+    active.isContentEditable
+  )
+  const hasSelection = (window.getSelection()?.toString() || '').length > 0
+  if (inEditable && hasSelection) return
+  e.preventDefault()
+  searchQuery.value = ''
+  nextTick(() => {
+    // Focus whichever search box is currently visible (offsetParent is null
+    // when the responsive class hides the element).
+    const target = searchInputDesktop.value?.offsetParent
+      ? searchInputDesktop.value
+      : searchInputMobile.value
+    target?.focus()
+  })
+}
+
 onMounted(() => {
   fetchCurrentUser()
+  window.addEventListener('keydown', onGlobalShortcut)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalShortcut)
 })
 
 const currentBrowsePath = computed(() => {
@@ -103,6 +138,7 @@ const handleLogout = async () => {
                 <MagnifyingGlassIcon class="h-5 w-5" />
               </button>
               <input
+                ref="searchInputDesktop"
                 v-model="searchQuery"
                 type="search"
                 class="block w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
@@ -180,6 +216,7 @@ const handleLogout = async () => {
             <MagnifyingGlassIcon class="h-5 w-5" />
           </button>
           <input
+            ref="searchInputMobile"
             v-model="searchQuery"
             type="search"
             class="block w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
