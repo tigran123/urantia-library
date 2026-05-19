@@ -1,3 +1,5 @@
+webapp/backend/initdb.sh
+screenshots/
 webapp/secrets.env
 webapp/backend/avatars/
 # Python
