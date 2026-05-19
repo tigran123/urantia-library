@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Re
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 import os
 import re
 import subprocess
@@ -735,6 +735,17 @@ async def admin_bulk_set_book_clearance(
     return {"updated": updated, "clearance": payload.clearance}
 
 
+def _cover_url_for(hash_id: str) -> Optional[str]:
+    """Return a cache-busted URL for the book's cover if the JPEG exists in
+    the vault, else None."""
+    cover_path = os.path.join(DATA_DIR, "covers", f"{hash_id}.jpg")
+    try:
+        mtime = int(os.path.getmtime(cover_path))
+    except OSError:
+        return None
+    return f"/api/covers/{hash_id}?v={mtime}"
+
+
 def _book_to_admin_detail(book: models.Book, db: Session) -> dict:
     locs = db.query(models.BookLocation.symlink_path).filter(
         models.BookLocation.hash_id == book.id
@@ -754,6 +765,7 @@ def _book_to_admin_detail(book: models.Book, db: Session) -> dict:
         "clearance": int(book.clearance or 0),
         "needs_review": bool(book.needs_review),
         "locations": [r[0] for r in locs],
+        "cover_url": _cover_url_for(book.id),
         "last_verified_at": book.last_verified_at,
         "last_verified_ok": book.last_verified_ok,
         "last_verified_mode": book.last_verified_mode,
@@ -844,6 +856,730 @@ async def admin_delete_book(
     db.delete(book)
     db.commit()
     return {"deleted": hash_id, "locations": locations, "errors": errors}
+
+
+# ---------- Admin upload (Add Book wizard) ----------
+
+STAGING_DIR = os.path.join(DATA_DIR, "staging")
+COVERS_DIR = os.path.join(DATA_DIR, "covers")
+
+
+def _ensure_writable_dir(path: str) -> None:
+    """Lazy mkdir — module-load shouldn't fail on a read-only FS just because
+    a dir doesn't exist yet; surface a clean 500 only at first actual use."""
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cannot create {path}: {e}. Service needs write access "
+                   f"(extend ReadWritePaths= in urantia-library.service).",
+        )
+
+_STAGING: dict[str, dict] = {}
+_STAGING_LOCK = threading.Lock()
+_STAGING_TTL_S = 3600
+_MAX_UPLOAD_BYTES = 850 * 1024 * 1024
+_MAX_COVER_BYTES = 5 * 1024 * 1024
+
+_ACCEPTED_BOOK_EXTS = {
+    "fb2", "zip", "epub", "pdf", "djvu", "mobi", "azw", "azw3", "prc",
+    "docx", "odt", "html", "rtf", "txt", "jpg", "jpeg",
+}
+_TOPDIR_SKIPLIST = {".claude", ".vscode", ".data", "urantia-library", "avatars"}
+
+
+def _purge_expired_staging() -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    with _STAGING_LOCK:
+        expired = [sid for sid, rec in _STAGING.items() if rec.get("expires_at", 0) < now]
+        for sid in expired:
+            rec = _STAGING.pop(sid, None)
+            if rec:
+                shutil.rmtree(rec.get("dir", ""), ignore_errors=True)
+
+
+def _detect_format(filename: str) -> str:
+    name = filename.lower()
+    if name.endswith(".fb2.zip"):
+        return "fb2.zip"
+    if name.endswith(".txt.zip"):
+        return "txt.zip"
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    return ext
+
+
+def _zip_fb2_inplace(src_path: str) -> str:
+    """Compress a freshly-uploaded .fb2 into a deterministic .fb2.zip and
+    delete the original. Returns the new (.zip) path. Determinism — fixed
+    date_time, fixed external_attr, fixed compression — makes the hash of the
+    zip stable so duplicate detection works for repeat uploads."""
+    dst = src_path + ".zip"
+    inner_name = os.path.basename(src_path)
+    info = zipfile.ZipInfo(filename=inner_name, date_time=(1980, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o644 << 16
+    with open(src_path, "rb") as fin, zipfile.ZipFile(dst, "w") as zf:
+        with zf.open(info, "w", force_zip64=True) as zout:
+            while True:
+                chunk = fin.read(1024 * 1024)
+                if not chunk:
+                    break
+                zout.write(chunk)
+    os.remove(src_path)
+    return dst
+
+
+def _run(cmd: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def _extract_upload_metadata(src_path: str, fmt: str) -> dict:
+    """Port of the metadata extraction tree from migrate_library.py. Returns a
+    dict with keys matching the Book columns (description maps from annotation
+    so callers can drop it straight into BookUpdate). Named '_upload_' to avoid
+    collision with the FB2-specific _extract_metadata defined later in main.py."""
+    out = {
+        "title": None, "author": None, "publisher": None, "published": None,
+        "description": None, "tags": None, "series": None, "languages": None,
+        "identifiers": None,
+    }
+    try:
+        if fmt == "pdf":
+            r = _run(["pdfinfo", src_path], timeout=10)
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if line.startswith("Title:"):
+                        v = line.split(":", 1)[1].strip()
+                        if v:
+                            out["title"] = v
+                    elif line.startswith("Author:"):
+                        v = line.split(":", 1)[1].strip()
+                        if v:
+                            out["author"] = v
+        elif fmt == "djvu":
+            r = _run(["djvused", "-e", "print-meta", src_path], timeout=10)
+            if r.returncode == 0:
+                import ast as _ast
+                for line in r.stdout.splitlines():
+                    parts = line.split("\t", 1)
+                    if len(parts) != 2:
+                        continue
+                    key = parts[0].strip().lower()
+                    raw_val = parts[1].strip()
+                    try:
+                        val = _ast.literal_eval("b" + raw_val).decode("utf-8").strip()
+                    except Exception:
+                        val = raw_val.strip('" ')
+                    if not val:
+                        continue
+                    if key == "title": out["title"] = val
+                    elif key == "author": out["author"] = val
+                    elif key == "publisher": out["publisher"] = val
+                    elif key == "year": out["published"] = val
+                    elif key == "keywords": out["tags"] = val
+                    elif key == "descr": out["description"] = val
+                    elif key == "isbn":
+                        out["identifiers"] = val if val.startswith("isbn:") else f"isbn:{val}"
+                    elif key == "lang": out["languages"] = val.lower()
+        else:
+            # ebook-meta dispatches on extension; ensure src_path keeps its name.
+            r = _run(["ebook-meta", src_path], timeout=15)
+            if r.returncode == 0:
+                current_key = None
+                comments_buffer: list[str] = []
+                for line in r.stdout.splitlines():
+                    m = re.match(r"^([A-Za-z\(\)]+)\s*:\s*(.*)", line)
+                    if m:
+                        raw_key, val = m.groups()
+                        key = raw_key.strip().lower()
+                        val = val.strip()
+                        if val == "Unknown":
+                            val = ""
+                        if key == "title" and val: out["title"] = val
+                        elif key == "author(s)" and val: out["author"] = re.sub(r"\[.*?\]", "", val).strip()
+                        elif key == "publisher" and val: out["publisher"] = val
+                        elif key == "tags" and val: out["tags"] = val
+                        elif key == "series" and val: out["series"] = val
+                        elif key == "languages" and val: out["languages"] = val.lower()
+                        elif key == "published" and val: out["published"] = val
+                        elif key == "identifiers" and val: out["identifiers"] = val
+                        elif key == "comments":
+                            current_key = "comments"
+                            if val:
+                                comments_buffer.append(val)
+                        else:
+                            current_key = None
+                    elif current_key == "comments":
+                        comments_buffer.append(line.strip())
+                if comments_buffer:
+                    out["description"] = "\n".join(comments_buffer).strip()
+    except Exception as e:
+        logging.warning("metadata extraction failed for %s: %s", src_path, e)
+    return out
+
+
+def _extract_cover_to(src_path: str, fmt: str, dest_jpg: str) -> Optional[tuple[int, int]]:
+    """Run the format-appropriate cover extraction, resize to 300px-wide JPEG
+    written at dest_jpg. Returns (width, height) of the saved cover, or None on
+    failure."""
+    tmp_dir = os.path.join(STAGING_DIR, f".cover-{uuid.uuid4().hex}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        raw = None
+        if fmt == "djvu":
+            raw = os.path.join(tmp_dir, "cover.ppm")
+            r = _run(["ddjvu", "-format=ppm", "-pages=1", src_path, raw], timeout=30)
+            if r.returncode != 0 or not os.path.exists(raw):
+                return None
+        elif fmt == "pdf":
+            r = _run(["pdftoppm", "-singlefile", src_path, os.path.join(tmp_dir, "cover")], timeout=30)
+            if r.returncode != 0:
+                return None
+            for cand in ("cover.ppm", "cover.jpg", "cover.png"):
+                p = os.path.join(tmp_dir, cand)
+                if os.path.exists(p):
+                    raw = p
+                    break
+            if raw is None:
+                return None
+        elif fmt in ("jpg", "jpeg", "png", "webp"):
+            # The "book" file IS the image — use it directly as the cover source.
+            raw = src_path
+        elif fmt in ("txt", "txt.zip", "rtf", "html"):
+            # No reliable cover for these — ebook-meta would either fail or
+            # produce nothing useful. Skip cleanly so the upload continues
+            # without a cover (the UI shows the striped placeholder).
+            return None
+        else:
+            raw = os.path.join(tmp_dir, "cover.jpg")
+            r = _run(["ebook-meta", src_path, f"--get-cover={raw}"], timeout=30)
+            if r.returncode != 0 or not os.path.exists(raw):
+                return None
+        with Image.open(raw) as im:
+            im = im.convert("RGB")
+            w, h = im.size
+            if w > 300:
+                new_h = max(1, int(h * 300 / w))
+                im = im.resize((300, new_h), Image.LANCZOS)
+                w, h = im.size
+            os.makedirs(os.path.dirname(dest_jpg), exist_ok=True)
+            im.save(dest_jpg, format="JPEG", quality=85)
+            return (w, h)
+    except Exception as e:
+        logging.warning("cover extraction failed for %s: %s", src_path, e)
+        return None
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _safe_path_segment(seg: str) -> str:
+    """Validate a single path segment (no separators, no traversal, no
+    leading dot, non-empty). Returns the normalised segment."""
+    seg = (seg or "").strip().strip("/")
+    if not seg:
+        raise HTTPException(status_code=400, detail="Empty path segment")
+    if "/" in seg or "\\" in seg or seg in (".", "..") or seg.startswith("."):
+        raise HTTPException(status_code=400, detail=f"Invalid path segment: {seg!r}")
+    return seg
+
+
+def _safe_subpath(sub: str) -> str:
+    """Validate an optional multi-segment subpath. Empty string is OK."""
+    sub = (sub or "").strip().strip("/")
+    if not sub:
+        return ""
+    parts = [p for p in sub.split("/") if p]
+    return "/".join(_safe_path_segment(p) for p in parts)
+
+
+@app.get("/api/admin/top-dirs", response_model=schemas.TopDirsResponse)
+def admin_top_dirs(
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Distinct first-segments of registered book locations, plus any
+    existing top-level directory in BOOKS_DIR that isn't on the skiplist
+    (so a freshly-created /epub directory shows up before any book lands in it)."""
+    rows = db.query(models.BookLocation.symlink_path).all()
+    tops: set[str] = set()
+    for (sp,) in rows:
+        first = (sp or "").lstrip("/").split("/", 1)[0]
+        if first and first not in _TOPDIR_SKIPLIST and not first.startswith("."):
+            tops.add(first)
+    try:
+        for entry in os.listdir(BOOKS_DIR):
+            if entry in _TOPDIR_SKIPLIST or entry.startswith("."):
+                continue
+            if os.path.isdir(os.path.join(BOOKS_DIR, entry)):
+                tops.add(entry)
+    except OSError:
+        pass
+    return {"tops": sorted(tops)}
+
+
+@app.get("/api/admin/dirs", response_model=schemas.DirListing)
+def admin_dirs(
+    top: str = "",
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List subdirectory names under /<top>/ — used to power the subpath
+    autocomplete. Combines DB-known second-segments with on-disk directories
+    so empty-but-existing folders appear too. `top=""` lists root-level
+    directories (subpath under the root option in the dropdown)."""
+    top_clean = (top or "").strip().strip("/")
+    if top_clean:
+        top_clean = _safe_path_segment(top_clean)
+    dirs: set[str] = set()
+    if top_clean:
+        prefix = f"{top_clean}/"
+        rows = (
+            db.query(models.BookLocation.symlink_path)
+            .filter(models.BookLocation.symlink_path.like(f"{prefix}%/%"))
+            .all()
+        )
+        for (sp,) in rows:
+            rest = sp[len(prefix):]
+            if "/" in rest:
+                dirs.add(rest.split("/", 1)[0])
+        fs_top = os.path.join(BOOKS_DIR, top_clean)
+    else:
+        # Root: every first-segment in the location table, plus on-disk dirs.
+        rows = db.query(models.BookLocation.symlink_path).all()
+        for (sp,) in rows:
+            first = (sp or "").lstrip("/").split("/", 1)[0]
+            if first and first not in _TOPDIR_SKIPLIST and not first.startswith("."):
+                dirs.add(first)
+        fs_top = BOOKS_DIR
+    if os.path.isdir(fs_top):
+        try:
+            for entry in os.listdir(fs_top):
+                if entry.startswith("."):
+                    continue
+                if not top_clean and entry in _TOPDIR_SKIPLIST:
+                    continue
+                if os.path.isdir(os.path.join(fs_top, entry)):
+                    dirs.add(entry)
+        except OSError:
+            pass
+    return {"top": top_clean, "dirs": sorted(dirs)}
+
+
+def _validate_cover_upload(file: UploadFile) -> None:
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+
+def _save_cover_for_hash(file: UploadFile, hash_id: str) -> str:
+    """Resize uploaded image to 300px-wide JPEG, write to
+    .data/covers/<hash>.jpg, return cache-busted URL."""
+    _validate_cover_upload(file)
+    raw = file.file.read(_MAX_COVER_BYTES + 1)
+    if len(raw) > _MAX_COVER_BYTES:
+        raise HTTPException(status_code=413, detail="Cover too large")
+    try:
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Unreadable image")
+    w, h = im.size
+    if w > 300:
+        new_h = max(1, int(h * 300 / w))
+        im = im.resize((300, new_h), Image.LANCZOS)
+    _ensure_writable_dir(COVERS_DIR)
+    dest = os.path.join(COVERS_DIR, f"{hash_id}.jpg")
+    im.save(dest, format="JPEG", quality=85)
+    return _cover_url_for(hash_id) or f"/api/covers/{hash_id}"
+
+
+@app.put("/api/admin/books/{hash_id}/cover", response_model=schemas.CoverUpdateResponse)
+async def admin_replace_book_cover(
+    hash_id: str,
+    file: UploadFile = File(...),
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    cover_url = _save_cover_for_hash(file, hash_id)
+    return {"cover_url": cover_url}
+
+
+@app.post("/api/admin/books/{hash_id}/cover/reextract", response_model=schemas.CoverUpdateResponse)
+async def admin_reextract_book_cover(
+    hash_id: str,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    loc_row = db.query(models.BookLocation.symlink_path).filter(
+        models.BookLocation.hash_id == hash_id
+    ).first()
+    if not loc_row:
+        raise HTTPException(status_code=404, detail="Book has no registered location")
+    symlink_fs = os.path.join(BOOKS_DIR, loc_row[0])
+    real_path = os.path.realpath(symlink_fs)
+    if not os.path.isfile(real_path):
+        raise HTTPException(status_code=404, detail="Book file missing on disk")
+    fmt = _detect_format(book.original_filename or loc_row[0])
+    _ensure_writable_dir(COVERS_DIR)
+    _ensure_writable_dir(STAGING_DIR)
+    dest = os.path.join(COVERS_DIR, f"{hash_id}.jpg")
+    # Run extraction against a copy that retains the original extension so
+    # ebook-meta's dispatch works (the vault file is bare hex).
+    tmp_dir = os.path.join(STAGING_DIR, f".reextract-{uuid.uuid4().hex}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        tmp_src = os.path.join(tmp_dir, book.original_filename or "book.bin")
+        try:
+            os.symlink(real_path, tmp_src)
+        except OSError:
+            shutil.copy2(real_path, tmp_src)
+        result = _extract_cover_to(tmp_src, fmt, dest)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    if result is None:
+        raise HTTPException(status_code=500, detail="Cover extraction failed")
+    cover_url = _cover_url_for(hash_id) or f"/api/covers/{hash_id}"
+    return {"cover_url": cover_url}
+
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _log_entry(level: str, msg: str) -> dict:
+    return {
+        "time": datetime.now(timezone.utc).strftime("%H:%M:%S.") + f"{datetime.now(timezone.utc).microsecond // 1000:03d}",
+        "level": level,
+        "msg": msg,
+    }
+
+
+def _format_size(n: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    i = 0
+    f = float(n)
+    while f >= 1024.0 and i < len(units) - 1:
+        f /= 1024.0
+        i += 1
+    return f"{f:.1f} {units[i]}" if i else f"{int(f)} {units[i]}"
+
+
+@app.post("/api/admin/books/upload")
+async def admin_upload_book(
+    file: UploadFile = File(...),
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Multipart upload of a single book file. Returns an SSE stream of `log`
+    events ending with a `done` event whose payload either contains
+    `extracted_metadata` + `staging_id` (success) or `existing` (duplicate)."""
+    _purge_expired_staging()
+    filename = (file.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="No filename")
+    fmt = _detect_format(filename)
+    primary_ext = fmt.split(".")[-1]
+    if primary_ext not in _ACCEPTED_BOOK_EXTS:
+        raise HTTPException(status_code=415, detail=f"Unsupported format: {fmt}")
+    owner_id = _admin.id
+
+    # Pre-create the staging dir + buffer the upload to disk *before* we open
+    # the generator, so that fatal write errors surface as a clean HTTP error
+    # (not a half-streamed SSE response).
+    _ensure_writable_dir(STAGING_DIR)
+    staging_id = uuid.uuid4().hex
+    sdir = os.path.join(STAGING_DIR, staging_id)
+    os.makedirs(sdir, exist_ok=True)
+    safe_name = os.path.basename(filename)
+    dest_path = os.path.join(sdir, safe_name)
+    bytes_written = 0
+    try:
+        with open(dest_path, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > _MAX_UPLOAD_BYTES:
+                    out.close()
+                    shutil.rmtree(sdir, ignore_errors=True)
+                    raise HTTPException(status_code=413, detail="File too large")
+                out.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        shutil.rmtree(sdir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+
+    async def stream():
+        # Mutable locals so the FB2→FB2.ZIP step can rewrite them mid-stream.
+        nonlocal_fmt = fmt
+        nonlocal_safe_name = safe_name
+        nonlocal_dest_path = dest_path
+        nonlocal_bytes = bytes_written
+        try:
+            size_str = _format_size(nonlocal_bytes)
+            yield _sse_event("log", _log_entry("info", f"POST /api/admin/books/upload  multipart/form-data"))
+            yield _sse_event("log", _log_entry("info", f'Receiving "{nonlocal_safe_name}" ({size_str})'))
+            yield _sse_event("log", _log_entry("info", f"Upload complete — {nonlocal_bytes} bytes"))
+
+            if nonlocal_fmt == "fb2":
+                yield _sse_event("log", _log_entry("info", "Compressing FB2 → FB2.ZIP for storage…"))
+                nonlocal_dest_path = await asyncio.to_thread(_zip_fb2_inplace, nonlocal_dest_path)
+                nonlocal_safe_name = os.path.basename(nonlocal_dest_path)
+                nonlocal_bytes = os.path.getsize(nonlocal_dest_path)
+                nonlocal_fmt = "fb2.zip"
+                yield _sse_event("log", _log_entry("ok", f"Stored as {nonlocal_safe_name} ({_format_size(nonlocal_bytes)})"))
+
+            yield _sse_event("log", _log_entry("info", "Computing BLAKE2b…"))
+            file_hash = await asyncio.to_thread(_blake2b_of_file, nonlocal_dest_path)
+            yield _sse_event("log", _log_entry("ok", f"hash = {file_hash}"))
+
+            yield _sse_event("log", _log_entry("info", "Checking registry for duplicates…"))
+            existing = db.query(models.Book).filter(models.Book.id == file_hash).first()
+            if existing:
+                yield _sse_event("log", _log_entry("warn", "Hash collision in registry"))
+                yield _sse_event("log", _log_entry("error", f"Duplicate: matches existing book id {file_hash[:12]}…"))
+                shutil.rmtree(sdir, ignore_errors=True)
+                yield _sse_event("done", {"existing": _book_to_admin_detail(existing, db)})
+                return
+            yield _sse_event("log", _log_entry("ok", "No duplicate found"))
+
+            yield _sse_event("log", _log_entry("info", f"Detecting format → {nonlocal_fmt.upper()}"))
+
+            yield _sse_event("log", _log_entry("info", "Running metadata extractor…"))
+            metadata = await asyncio.to_thread(_extract_upload_metadata, nonlocal_dest_path, nonlocal_fmt)
+            if metadata.get("title"):
+                yield _sse_event("log", _log_entry("ok", f"Parsed {nonlocal_fmt} description block"))
+            else:
+                yield _sse_event("log", _log_entry("warn", "No title found — filename fallback will apply"))
+                metadata["title"] = os.path.splitext(nonlocal_safe_name)[0].replace("-", " ").replace("_", " ")
+
+            yield _sse_event("log", _log_entry("info", "Extracting cover image…"))
+            cover_dest = os.path.join(sdir, "cover.jpg")
+            cover_dims = await asyncio.to_thread(_extract_cover_to, nonlocal_dest_path, nonlocal_fmt, cover_dest)
+            if cover_dims:
+                w, h = cover_dims
+                yield _sse_event("log", _log_entry("ok", f"Cover extracted ({w} × {h} JPEG)"))
+                yield _sse_event("log", _log_entry("info", "Generating 300px thumbnail…"))
+                yield _sse_event("log", _log_entry("ok", f"Thumbnail written to {os.path.basename(cover_dest)}"))
+            else:
+                yield _sse_event("log", _log_entry("warn", "Cover extraction failed — none saved"))
+
+            with _STAGING_LOCK:
+                _STAGING[staging_id] = {
+                    "dir": sdir,
+                    "filename": nonlocal_safe_name,
+                    "hash": file_hash,
+                    "size": nonlocal_bytes,
+                    "format": nonlocal_fmt,
+                    "metadata": metadata,
+                    "cover_w": cover_dims[0] if cover_dims else None,
+                    "cover_h": cover_dims[1] if cover_dims else None,
+                    "expires_at": datetime.now(timezone.utc).timestamp() + _STAGING_TTL_S,
+                    "owner_id": owner_id,
+                }
+
+            yield _sse_event("log", _log_entry("ok", "Ready for review"))
+
+            payload = {
+                "staging_id": staging_id,
+                "hash": file_hash,
+                "size": nonlocal_bytes,
+                "format": nonlocal_fmt,
+                "cover_url": f"/api/admin/books/upload/{staging_id}/cover.jpg" if cover_dims else None,
+                "extracted_metadata": metadata,
+            }
+            yield _sse_event("done", payload)
+        except Exception as e:
+            logging.exception("admin_upload_book stream failed")
+            shutil.rmtree(sdir, ignore_errors=True)
+            yield _sse_event("log", _log_entry("error", f"Internal error: {e}"))
+            yield _sse_event("done", {"error": str(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/api/admin/books/upload/{staging_id}/cover.jpg")
+def admin_staging_cover(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    rec = _STAGING.get(staging_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Staging not found")
+    cover = os.path.join(rec["dir"], "cover.jpg")
+    if not os.path.exists(cover):
+        raise HTTPException(status_code=404, detail="No cover for staging")
+    return FileResponse(cover, media_type="image/jpeg")
+
+
+@app.post("/api/admin/books/upload/{staging_id}/cover", response_model=schemas.CoverUpdateResponse)
+async def admin_staging_cover_override(
+    staging_id: str,
+    file: UploadFile = File(...),
+    _admin: models.User = Depends(require_admin),
+):
+    rec = _STAGING.get(staging_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Staging not found")
+    _validate_cover_upload(file)
+    raw = file.file.read(_MAX_COVER_BYTES + 1)
+    if len(raw) > _MAX_COVER_BYTES:
+        raise HTTPException(status_code=413, detail="Cover too large")
+    try:
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Unreadable image")
+    w, h = im.size
+    if w > 300:
+        new_h = max(1, int(h * 300 / w))
+        im = im.resize((300, new_h), Image.LANCZOS)
+        w, h = im.size
+    dest = os.path.join(rec["dir"], "cover.jpg")
+    im.save(dest, format="JPEG", quality=85)
+    rec["cover_w"], rec["cover_h"] = w, h
+    return {"cover_url": f"/api/admin/books/upload/{staging_id}/cover.jpg?v={int(datetime.now(timezone.utc).timestamp())}"}
+
+
+@app.delete("/api/admin/books/upload/{staging_id}")
+async def admin_cancel_staging(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    rec = _STAGING.pop(staging_id, None)
+    if rec:
+        shutil.rmtree(rec.get("dir", ""), ignore_errors=True)
+    return {"cancelled": staging_id}
+
+
+@app.post("/api/admin/books/commit", response_model=schemas.AdminBookDetail)
+async def admin_commit_book(
+    payload: schemas.UploadCommitRequest,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Finalise a staged upload: move file into the CAS vault, link from
+    /<top>/<sub>/<filename>, register Book + BookLocation, return AdminBookDetail."""
+    _purge_expired_staging()
+    rec = _STAGING.get(payload.staging_id)
+    if not rec:
+        raise HTTPException(status_code=410, detail="Staging expired or unknown")
+
+    # top_dir is allowed to be empty (root) so admins can create a brand-new
+    # top-level category by setting top=/ and subpath=<NewCategory>.
+    raw_top = (payload.top_dir or "").strip().strip("/")
+    top_dir = _safe_path_segment(raw_top) if raw_top else ""
+    subpath = _safe_subpath(payload.subpath)
+    if payload.clearance < 0 or payload.clearance > 100:
+        raise HTTPException(status_code=400, detail="Clearance must be between 0 and 100")
+
+    file_hash = rec["hash"]
+    filename = rec["filename"]
+    staging_book = os.path.join(rec["dir"], filename)
+    staging_cover = os.path.join(rec["dir"], "cover.jpg")
+
+    # Destination paths — drop empty segments so "//" doesn't sneak in when
+    # uploading directly under root.
+    rel_parts = [seg for seg in (top_dir, subpath) if seg]
+    rel_dir = "/".join(rel_parts)
+    rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
+    abs_target_dir = os.path.abspath(os.path.join(BOOKS_DIR, rel_dir))
+    abs_target = os.path.abspath(os.path.join(BOOKS_DIR, rel_path))
+    if not abs_target.startswith(os.path.abspath(BOOKS_DIR) + os.sep):
+        raise HTTPException(status_code=400, detail="Path escapes library root")
+
+    # If a registered book *just* showed up at this hash via a concurrent
+    # commit (unlikely, but cheap to check), bail out.
+    if db.query(models.Book).filter(models.Book.id == file_hash).first():
+        shutil.rmtree(rec["dir"], ignore_errors=True)
+        _STAGING.pop(payload.staging_id, None)
+        raise HTTPException(status_code=409, detail="Duplicate hash already registered")
+
+    if os.path.lexists(abs_target):
+        raise HTTPException(status_code=409, detail=f"A file already exists at {rel_path}")
+
+    # 1. Move the staged file into the vault.
+    vault_path = os.path.join(DATA_DIR, file_hash)
+    try:
+        if not os.path.exists(vault_path):
+            os.replace(staging_book, vault_path)
+        else:
+            # Vault file already exists (e.g. from a deleted-but-not-purged earlier).
+            os.remove(staging_book)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Vault write failed: {e}")
+
+    # 2. Move the cover into place, if any.
+    if os.path.exists(staging_cover):
+        _ensure_writable_dir(COVERS_DIR)
+        cover_dest = os.path.join(COVERS_DIR, f"{file_hash}.jpg")
+        try:
+            os.replace(staging_cover, cover_dest)
+        except OSError as e:
+            logging.warning("cover move failed: %s", e)
+
+    # 3. Create the symlink (relative target so the CAS layout stays portable).
+    try:
+        os.makedirs(abs_target_dir, exist_ok=True)
+        rel_vault_target = os.path.relpath(vault_path, abs_target_dir)
+        os.symlink(rel_vault_target, abs_target)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Symlink failed: {e}")
+
+    # 4. Register in DB.
+    meta = payload.metadata.model_dump(exclude_unset=True)
+    title = meta.get("title") or os.path.splitext(filename)[0]
+    verified_at = _now_iso()
+    book = models.Book(
+        id=file_hash,
+        title=title,
+        author=meta.get("author"),
+        publisher=meta.get("publisher"),
+        published=meta.get("published"),
+        description=meta.get("description"),
+        tags=meta.get("tags"),
+        series=meta.get("series"),
+        languages=meta.get("languages"),
+        identifiers=meta.get("identifiers"),
+        original_filename=filename,
+        needs_review=bool(payload.needs_review),
+        clearance=int(payload.clearance),
+        last_verified_at=verified_at,
+        last_verified_ok=True,
+        last_verified_mode="full",
+        last_verified_error=None,
+    )
+    db.add(book)
+    db.add(models.BookLocation(hash_id=file_hash, symlink_path=rel_path))
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # Best-effort filesystem rollback: remove the symlink we just created.
+        try:
+            if os.path.islink(abs_target):
+                os.remove(abs_target)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"DB commit failed: {e}")
+    db.refresh(book)
+
+    # 5. Cleanup staging.
+    shutil.rmtree(rec["dir"], ignore_errors=True)
+    with _STAGING_LOCK:
+        _STAGING.pop(payload.staging_id, None)
+
+    return _book_to_admin_detail(book, db)
 
 
 @app.post("/api/admin/integrity/verify/{hash_id}", response_model=schemas.IntegrityCheckResult)

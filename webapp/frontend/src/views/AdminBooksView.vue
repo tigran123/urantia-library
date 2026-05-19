@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, inject } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, inject, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
@@ -11,6 +11,7 @@ const { t } = useI18n({ useScope: 'global' })
 type CurrentUser = { email: string, is_admin?: boolean } | null
 const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
 const router = useRouter()
+const route = useRoute()
 
 type Match = {
   hash_id: string
@@ -58,7 +59,11 @@ const openEditor = (m: Match) => {
   editingId.value = m.hash_id
 }
 
-const closeEditor = () => { editingId.value = null }
+const closeEditor = () => {
+  editingId.value = null
+  // Drop the ?hash= query param so a reload doesn't reopen the editor.
+  if (route.query.hash) router.replace({ query: { ...route.query, hash: undefined } })
+}
 
 const onSaved = (updated: any) => {
   const row = matches.value.find(m => m.hash_id === updated.id)
@@ -87,11 +92,20 @@ const deleteBook = async (m: Match) => {
   }
 }
 
+const openFromQuery = () => {
+  const q = route.query.hash
+  if (typeof q === 'string' && q) editingId.value = q
+}
+
 onMounted(() => {
   if (!currentUser?.value?.is_admin) {
     router.replace('/')
+    return
   }
+  openFromQuery()
 })
+
+watch(() => route.query.hash, openFromQuery)
 </script>
 
 <template>

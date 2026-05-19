@@ -211,6 +211,102 @@ const messages = {
           cancelled: 'Cancelled',
           error: 'Error'
         }
+      },
+      cover: {
+        queued: 'New cover queued ({size} KB)'
+      },
+      upload: {
+        tab: 'Upload',
+        title: 'Upload a book',
+        subtitle: 'Add a new book to the library. Metadata is read from the file; you review and confirm before it goes live.',
+        step: {
+          select:  { label: 'Select',  desc: 'Pick a book file' },
+          extract: { label: 'Extract', desc: 'Auto-read metadata' },
+          review:  { label: 'Review',  desc: 'Confirm & adjust' },
+          commit:  { label: 'Commit',  desc: 'Add to library' }
+        },
+        drop: {
+          heading: 'Drop a book file here',
+          or: 'or',
+          browse_link: 'browse',
+          your_computer: 'your computer',
+          accepted: 'Accepted:',
+          max_size: 'Max 850 MB · One file at a time'
+        },
+        clearance_warning: {
+          title_prefix: 'New books default to clearance',
+          title_suffix: '(restricted)',
+          body: "You'll set the final clearance and destination in the review step before the book becomes available to readers."
+        },
+        log: {
+          heading: 'Processing log',
+          live: 'live',
+          entries_zero: 'no entries',
+          entries_one: '1 entry',
+          entries_other: '{count} entries',
+          view: 'View processing log'
+        },
+        duplicate: {
+          heading: 'This book is already in the library',
+          existing: 'Existing book',
+          path_label: 'Path',
+          clearance_label: 'Clearance',
+          open: 'Open existing book',
+          edit: 'Edit metadata',
+          cancel: 'Cancel upload',
+          override_hint: 'If this is intentional (e.g. replacing a corrupted file), use admin override.'
+        },
+        review: {
+          extracted: 'Metadata extracted — review before committing',
+          cover: 'Cover',
+          cover_meta: '{w} × {h} · auto-extracted',
+          replace_cover: 'Replace cover…',
+          reextract: 'Re-extract',
+          destination: 'Destination',
+          final_location: 'Final location:',
+          existing_subdirs: 'existing:',
+          subpath_placeholder: 'Urantia',
+          access: 'Access',
+          clearance: 'Clearance',
+          clearance_help: 'Users with clearance ≥ this number can access the book. {zero} = public, {hundred} = admin only.',
+          needs_review: 'Flag {flag}',
+          needs_review_help: "Surface this book in admin's review queue.",
+          title_required: 'Title is required',
+          cancel: 'Cancel',
+          commit: 'Commit to library',
+          committing: 'Committing…'
+        },
+        field: {
+          title: 'Title',
+          author: 'Author',
+          publisher: 'Publisher',
+          published: 'Published',
+          published_placeholder: 'YYYY or YYYY-MM-DD',
+          description: 'Description',
+          tags: 'Tags',
+          tags_hint: 'Comma-separated',
+          series: 'Series',
+          languages: 'Languages',
+          languages_hint: 'ISO codes, e.g. en, ru',
+          identifiers: 'Identifiers',
+          identifiers_hint: 'ISBN, DOI, etc.'
+        },
+        clearance_label: {
+          public: 'Public',
+          members: 'Members',
+          restricted: 'Restricted',
+          admin_only: 'Admin only'
+        },
+        success: {
+          heading: 'Added to library',
+          subtitle: 'The book is registered, hashed, and ready for readers (subject to clearance).',
+          path: 'Path',
+          hash: 'Hash',
+          clearance: 'Clearance',
+          view: 'View in library',
+          edit: 'Edit metadata',
+          upload_another: 'Upload another'
+        }
       }
     }
   },
@@ -423,6 +519,102 @@ const messages = {
           done: 'Готово',
           cancelled: 'Отменено',
           error: 'Ошибка'
+        }
+      },
+      cover: {
+        queued: 'Новая обложка готова ({size} КБ)'
+      },
+      upload: {
+        tab: 'Загрузить',
+        title: 'Загрузить книгу',
+        subtitle: 'Добавить новую книгу в библиотеку. Метаданные читаются из файла; вы проверяете и подтверждаете перед публикацией.',
+        step: {
+          select:  { label: 'Выбор',      desc: 'Выберите файл книги' },
+          extract: { label: 'Извлечение', desc: 'Авточтение метаданных' },
+          review:  { label: 'Проверка',   desc: 'Подтвердите и поправьте' },
+          commit:  { label: 'Публикация', desc: 'Добавить в библиотеку' }
+        },
+        drop: {
+          heading: 'Перетащите файл книги сюда',
+          or: 'или',
+          browse_link: 'выберите',
+          your_computer: 'на компьютере',
+          accepted: 'Допустимо:',
+          max_size: 'Не более 850 МБ · По одному файлу'
+        },
+        clearance_warning: {
+          title_prefix: 'Новые книги по умолчанию имеют допуск',
+          title_suffix: '(ограничено)',
+          body: 'Окончательный допуск и расположение вы установите на шаге проверки перед тем, как книга станет доступна читателям.'
+        },
+        log: {
+          heading: 'Журнал обработки',
+          live: 'live',
+          entries_zero: 'нет записей',
+          entries_one: '1 запись',
+          entries_other: '{count} записей',
+          view: 'Открыть журнал'
+        },
+        duplicate: {
+          heading: 'Эта книга уже есть в библиотеке',
+          existing: 'Существующая книга',
+          path_label: 'Путь',
+          clearance_label: 'Допуск',
+          open: 'Открыть существующую',
+          edit: 'Изменить метаданные',
+          cancel: 'Отменить загрузку',
+          override_hint: 'Если это намеренно (например, замена повреждённого файла), используйте админ-замену.'
+        },
+        review: {
+          extracted: 'Метаданные извлечены — проверьте перед публикацией',
+          cover: 'Обложка',
+          cover_meta: '{w} × {h} · авто',
+          replace_cover: 'Заменить обложку…',
+          reextract: 'Извлечь заново',
+          destination: 'Расположение',
+          final_location: 'Финальный путь:',
+          existing_subdirs: 'существуют:',
+          subpath_placeholder: 'Urantia',
+          access: 'Доступ',
+          clearance: 'Допуск',
+          clearance_help: 'Пользователи с допуском ≥ этого числа могут читать книгу. {zero} = публично, {hundred} = только админ.',
+          needs_review: 'Флаг {flag}',
+          needs_review_help: 'Книга появится в очереди на проверку администратора.',
+          title_required: 'Название обязательно',
+          cancel: 'Отмена',
+          commit: 'Добавить в библиотеку',
+          committing: 'Публикация…'
+        },
+        field: {
+          title: 'Название',
+          author: 'Автор',
+          publisher: 'Издатель',
+          published: 'Год издания',
+          published_placeholder: 'ГГГГ или ГГГГ-ММ-ДД',
+          description: 'Описание',
+          tags: 'Теги',
+          tags_hint: 'Через запятую',
+          series: 'Серия',
+          languages: 'Языки',
+          languages_hint: 'Коды ISO, напр. en, ru',
+          identifiers: 'Идентификаторы',
+          identifiers_hint: 'ISBN, DOI и т. п.'
+        },
+        clearance_label: {
+          public: 'Публично',
+          members: 'Участники',
+          restricted: 'Ограничено',
+          admin_only: 'Только админ'
+        },
+        success: {
+          heading: 'Добавлено в библиотеку',
+          subtitle: 'Книга зарегистрирована, хэширована и готова для читателей (с учётом допуска).',
+          path: 'Путь',
+          hash: 'Хэш',
+          clearance: 'Допуск',
+          view: 'Открыть в библиотеке',
+          edit: 'Изменить метаданные',
+          upload_another: 'Загрузить ещё'
         }
       }
     }

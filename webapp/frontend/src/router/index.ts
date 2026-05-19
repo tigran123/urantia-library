@@ -10,6 +10,7 @@ import ItemView from '../views/ItemView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminBooksView from '../views/AdminBooksView.vue'
 import AdminIntegrityView from '../views/AdminIntegrityView.vue'
+import AdminUploadView from '../views/AdminUploadView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -71,6 +72,11 @@ const router = createRouter({
       path: '/admin/integrity',
       name: 'admin-integrity',
       component: AdminIntegrityView
+    },
+    {
+      path: '/admin/upload',
+      name: 'admin-upload',
+      component: AdminUploadView
     }
   ]
 })

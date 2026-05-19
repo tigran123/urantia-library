@@ -65,6 +65,7 @@ class AdminBookDetail(BaseModel):
     clearance: int
     needs_review: bool = False
     locations: List[str] = []
+    cover_url: Optional[str] = None
     last_verified_at: Optional[str] = None
     last_verified_ok: Optional[bool] = None
     last_verified_mode: Optional[str] = None
@@ -72,6 +73,41 @@ class AdminBookDetail(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class UploadStagingResponse(BaseModel):
+    staging_id: str
+    hash: str
+    size: int
+    format: str
+    cover_url: Optional[str] = None
+    extracted_metadata: BookUpdate
+
+
+class UploadCommitRequest(BaseModel):
+    staging_id: str
+    metadata: BookUpdate
+    top_dir: str
+    subpath: str = ""
+    clearance: int = 100
+    needs_review: bool = False
+
+
+class UploadDuplicateError(BaseModel):
+    existing: AdminBookDetail
+
+
+class DirListing(BaseModel):
+    top: str
+    dirs: List[str]
+
+
+class TopDirsResponse(BaseModel):
+    tops: List[str]
+
+
+class CoverUpdateResponse(BaseModel):
+    cover_url: str
 
 
 class IntegrityCheckResult(BaseModel):
