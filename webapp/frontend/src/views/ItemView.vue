@@ -206,10 +206,10 @@ const getDownloadUrl = () => {
 }
 
 const formatBytes = (bytes: number, decimals = 2) => {
-    if (!+bytes) return '0 Bytes'
+    if (!+bytes) return `0 ${t('app.bytes')}`
     const k = 1024
     const dm = decimals < 0 ? 0 : decimals
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
+    const sizes = [t('app.bytes'), 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
     const i = Math.floor(Math.log(bytes) / Math.log(k))
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
 }
@@ -408,7 +408,7 @@ watch(
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.size') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatBytes(item.size, 0) }} ({{ item.size }} bytes)</td>
+                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatBytes(item.size, 0) }} ({{ item.size }} {{ t('app.bytes') }})</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.imported') }}</th>
