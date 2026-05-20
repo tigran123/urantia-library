@@ -304,7 +304,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <li class="inline-flex items-center">
             <router-link to="/browse" class="inline-flex items-center hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
               <HomeIcon class="h-4 w-4 mr-2" />
-              Root
+              /
             </router-link>
           </li>
           <li v-for="crumb in getBreadcrumbs()" :key="crumb.path">
