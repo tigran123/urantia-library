@@ -8,6 +8,7 @@ import {
   ClipboardIcon,
   CheckIcon,
   PencilSquareIcon,
+  TrashIcon,
 } from '@heroicons/vue/24/outline'
 import api from '../api'
 import MetadataFields from './MetadataFields.vue'
@@ -38,11 +39,13 @@ const props = defineProps<{ hashId: string | null }>()
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'saved', book: BookDetail): void
+  (e: 'deleted', hashId: string): void
 }>()
 
 const editing = ref<BookDetail | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
 const reextracting = ref(false)
 const error = ref('')
 const coverFile = ref<File | null>(null)
@@ -162,6 +165,30 @@ const save = async () => {
     error.value = err.response?.data?.detail || err.message
   } finally {
     saving.value = false
+  }
+}
+
+const deleteBook = async () => {
+  if (!editing.value) return
+  const ok = window.confirm(t('admin.delete_confirm', {
+    title: editing.value.title || editing.value.locations[0] || editing.value.id,
+    prefix: editing.value.id.slice(0, 12),
+  }))
+  if (!ok) return
+  deleting.value = true
+  error.value = ''
+  try {
+    const hashId = editing.value.id
+    const res = await api.delete(`/admin/books/${encodeURIComponent(hashId)}`)
+    if (res.data.errors?.length) {
+      alert(t('admin.delete_fs_warnings', { errors: res.data.errors.join('\n') }))
+    }
+    emit('deleted', hashId)
+    emit('close')
+  } catch (err: any) {
+    error.value = err.response?.data?.detail || err.message
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -296,8 +323,18 @@ const reextractCover = async () => {
       <div v-else-if="error" class="p-4 text-red-600 dark:text-red-400 text-sm">{{ error }}</div>
 
       <div class="sticky bottom-0 bg-white dark:bg-gray-800 border-t border-gray-100 dark:border-gray-700 p-4 flex items-center justify-between">
-        <div class="text-xs text-gray-500 dark:text-gray-400">
-          <span v-if="coverFile">{{ t('admin.cover.queued', { size: Math.round(coverFile.size / 1024) }) }}</span>
+        <div class="flex items-center gap-3">
+          <button
+            v-if="editing"
+            @click="deleteBook"
+            :disabled="deleting || saving"
+            class="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 text-sm hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-50"
+          >
+            <ArrowPathIcon v-if="deleting" class="w-4 h-4 animate-spin" />
+            <TrashIcon v-else class="w-4 h-4" />
+            <span>{{ t('admin.delete') }}</span>
+          </button>
+          <span v-if="coverFile" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.cover.queued', { size: Math.round(coverFile.size / 1024) }) }}</span>
         </div>
         <div class="flex items-center gap-3">
           <div v-if="titleMissing && editing" class="inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
@@ -307,7 +344,7 @@ const reextractCover = async () => {
           <button @click="close" class="px-4 py-2 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-gray-700">{{ t('admin.cancel') }}</button>
           <button
             @click="save"
-            :disabled="saving || !editing || titleMissing"
+            :disabled="saving || deleting || !editing || titleMissing"
             class="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
           >
             <ArrowPathIcon v-if="saving" class="w-4 h-4 animate-spin" />

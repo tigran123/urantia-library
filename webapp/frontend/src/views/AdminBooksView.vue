@@ -112,6 +112,11 @@ const onSaved = (updated: any) => {
   }
 }
 
+const onDeleted = (hashId: string) => {
+  matches.value = matches.value.filter(x => x.hash_id !== hashId)
+  total.value = Math.max(0, total.value - 1)
+}
+
 const deleteBook = async (m: Match) => {
   const ok = window.confirm(t('admin.delete_confirm', {
     title: m.title || m.path,
@@ -410,6 +415,6 @@ watch(() => route.query.hash, openFromQuery)
       <p v-else-if="!searching && query" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.no_matches') }}</p>
     </section>
 
-    <BookMetadataEditor :hash-id="editingId" @close="closeEditor" @saved="onSaved" />
+    <BookMetadataEditor :hash-id="editingId" @close="closeEditor" @saved="onSaved" @deleted="onDeleted" />
   </div>
 </template>

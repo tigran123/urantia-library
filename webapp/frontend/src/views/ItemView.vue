@@ -118,6 +118,12 @@ const onEditorSaved = (updated: any) => {
   }
 }
 
+const onEditorDeleted = () => {
+  // The book this page shows is gone; navigate to its parent directory.
+  const parent = currentPath.value.split('/').slice(0, -1).join('/')
+  router.replace(`/browse/${parent}`)
+}
+
 const loadFavorites = async () => {
   try {
     const res = await api.get('/favorites')
@@ -510,7 +516,7 @@ watch(
 
     </div>
 
-    <BookMetadataEditor :hash-id="editingId" @close="editingId = null" @saved="onEditorSaved" />
+    <BookMetadataEditor :hash-id="editingId" @close="editingId = null" @saved="onEditorSaved" @deleted="onEditorDeleted" />
 
     <!-- Integrity verification modal -->
     <div
