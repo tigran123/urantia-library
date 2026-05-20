@@ -86,7 +86,7 @@ const editBookClearance = async (item: any, event: Event) => {
     alert(err.response?.data?.detail || err.message)
   }
 }
-import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 
 const route = useRoute()
@@ -156,6 +156,27 @@ const toggleDirFavorite = async (path: string, event?: Event) => {
     dirFavorites.value = newSet
   } catch (err) {
     console.error('Failed to toggle directory favorite', err)
+  }
+}
+
+const deleteDirectory = async (path: string, name: string, event?: Event) => {
+  if (event) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  if (!path) return
+  const ok = window.confirm(t('admin.delete_dir_confirm', { name }))
+  if (!ok) return
+  try {
+    const res = await api.delete('/admin/dirs', { params: { path } })
+    await loadPath(currentPath.value)
+    if (res.data.errors && res.data.errors.length > 0) {
+      alert(t('admin.delete_dir_warnings', { errors: res.data.errors.join('\n') }))
+    }
+  } catch (err: any) {
+    console.error('Failed to delete directory', err)
+    const msg = err?.response?.data?.detail || err.message
+    alert(t('admin.delete_dir_failed', { error: msg }))
   }
 }
 
@@ -386,7 +407,15 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               class="absolute top-2 left-2 z-10 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
               :title="t('admin.edit_clearance_tooltip')"
             >🔒 {{ item.clearance ?? 0 }}</button>
-            <button v-else-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+            <button
+              v-if="currentUser?.is_admin && item.is_dir"
+              @click.prevent="deleteDirectory(item.path, item.name, $event)"
+              class="absolute top-2 left-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 dark:hover:text-red-400 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600"
+              :title="t('admin.delete_directory')"
+            >
+              <TrashIcon class="h-5 w-5" />
+            </button>
+            <button v-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
               <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
               <BookmarkIcon v-else class="h-5 w-5" />
             </button>
@@ -477,6 +506,14 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
               <div class="flex-shrink-0 flex flex-col items-end gap-1">
                 <div class="flex items-center gap-1">
+                  <button
+                    v-if="currentUser?.is_admin && item.is_dir"
+                    @click.prevent="deleteDirectory(item.path, item.name, $event)"
+                    class="p-1.5 rounded-full hover:bg-red-100 dark:hover:bg-red-950/70 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                    :title="t('admin.delete_directory')"
+                  >
+                    <TrashIcon class="h-5 w-5" />
+                  </button>
                   <button
                     v-if="currentUser?.is_admin && item.hash_id"
                     @click.prevent="editBookClearance(item, $event)"

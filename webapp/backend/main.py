@@ -1276,6 +1276,124 @@ def _safe_subpath(sub: str) -> str:
     return "/".join(_safe_path_segment(p) for p in parts)
 
 
+def _like_escape(s: str) -> str:
+    """Escape SQL LIKE metacharacters so a literal path can be used as a
+    prefix pattern. A directory named e.g. `Law_2024` must not match
+    `LawX2024` via the `_` wildcard."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+@app.delete("/api/admin/dirs")
+def admin_delete_dir(
+    path: str,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Recursively delete a directory, cleaning up symlinks, book database entries,
+    and orphan vault/cover files.
+
+    Destructive steps are ordered so nothing irreversible happens until success
+    is guaranteed: the DB is queried read-only, then `rmtree` runs (its failure
+    leaves the DB and vault untouched), then DB rows are deleted and committed,
+    and only after the commit do orphaned vault/cover files get removed."""
+    sub = _safe_subpath(path)
+    if not sub:
+        raise HTTPException(status_code=400, detail="Cannot delete root directory")
+
+    target_dir = os.path.abspath(os.path.join(BOOKS_DIR, sub))
+    books_root = os.path.abspath(BOOKS_DIR)
+
+    if not target_dir.startswith(books_root + os.sep) or target_dir == books_root:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if os.path.islink(target_dir):
+        raise HTTPException(status_code=400, detail="Path is a symlink, not a directory")
+
+    if not os.path.exists(target_dir):
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    if not os.path.isdir(target_dir):
+        raise HTTPException(status_code=400, detail="Path is not a directory")
+
+    # The DB — not the filesystem — is the canonical record of book locations.
+    # One indexed prefix scan finds every location under the directory; the
+    # exact `startswith` refine guards against LIKE wildcard over-matching.
+    prefix = f"{sub}/"
+    like_prefix = _like_escape(prefix) + "%"
+    locs = [
+        r for r in db.query(models.BookLocation)
+        .filter(models.BookLocation.symlink_path.like(like_prefix, escape="\\"))
+        .all()
+        if r.symlink_path.startswith(prefix)
+    ]
+
+    # A hash is orphaned iff it has no location left outside the deleted subtree.
+    inside_hashes = {r.hash_id for r in locs}
+    orphan_hashes = []
+    for h in inside_hashes:
+        other = (
+            db.query(models.BookLocation.symlink_path)
+            .filter(models.BookLocation.hash_id == h)
+            .all()
+        )
+        if all(sp[0].startswith(prefix) for sp in other):
+            orphan_hashes.append(h)
+
+    # rmtree first: on failure the DB and vault are still pristine.
+    try:
+        shutil.rmtree(target_dir)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to remove directory: {e}")
+
+    # DB cleanup. SQLite foreign keys aren't enforced, so referencing rows are
+    # cleared explicitly (mirrors admin_delete_book).
+    for loc in locs:
+        db.delete(loc)
+    for h in orphan_hashes:
+        book = db.query(models.Book).filter(models.Book.id == h).first()
+        if book:
+            db.delete(book)
+    if orphan_hashes:
+        db.query(models.Favorite).filter(
+            models.Favorite.hash_id.in_(orphan_hashes)
+        ).delete(synchronize_session=False)
+        db.query(models.ReadingProgress).filter(
+            models.ReadingProgress.hash_id.in_(orphan_hashes)
+        ).delete(synchronize_session=False)
+    # Directory bookmarks for the deleted directory and any subdirectory.
+    db.query(models.DirectoryFavorite).filter(
+        or_(
+            models.DirectoryFavorite.path == sub,
+            models.DirectoryFavorite.path.like(like_prefix, escape="\\"),
+        )
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    # Only now — past the point of no rollback — remove orphan vault/cover
+    # files. Best-effort: failures are reported but don't fail the request.
+    errors = []
+    for h in orphan_hashes:
+        vault_file = os.path.join(BOOKS_DIR, ".data", h)
+        if os.path.exists(vault_file):
+            try:
+                os.remove(vault_file)
+            except OSError as e:
+                errors.append(f"vault {h}: {e}")
+        cover_file = os.path.join(BOOKS_DIR, ".data", "covers", f"{h}.jpg")
+        if os.path.exists(cover_file):
+            try:
+                os.remove(cover_file)
+            except OSError as e:
+                errors.append(f"cover {h}: {e}")
+
+    return {
+        "deleted_directory": sub,
+        "locations_removed": len(locs),
+        "books_deleted": len(orphan_hashes),
+        "errors": errors,
+    }
+
+
 @app.get("/api/admin/dirs", response_model=schemas.DirListing)
 def admin_dirs(
     path: str = "",
