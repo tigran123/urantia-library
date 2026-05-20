@@ -31,7 +31,9 @@ def extract_djvu_meta(filepath):
     """Fast extraction for DjVu files using djvused, with octal UTF-8 decoding."""
     meta = {}
     try:
-        result = subprocess.run(['djvused', '-e', 'print-meta', filepath], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(['djvused', '-e', 'print-meta', filepath], capture_output=True, text=True, errors='replace', timeout=10)
+        if '\ufffd' in result.stdout:
+            print(f"      [!] Warning: Non-UTF8 characters detected and replaced in djvused output for {os.path.basename(filepath)}")
         if result.returncode == 0:
             for line in result.stdout.splitlines():
                 parts = line.split('\t', 1)
@@ -41,7 +43,8 @@ def extract_djvu_meta(filepath):
                     try:
                         val_bytes = ast.literal_eval('b' + raw_val)
                         val = val_bytes.decode('utf-8').strip()
-                    except Exception:
+                    except Exception as e:
+                        print(f"      [!] UTF-8 decoding failed for djvused metadata value in {os.path.basename(filepath)}: {e}")
                         val = raw_val.strip('" ')
                     if val:
                         if key == 'title': meta['title'] = val
@@ -82,7 +85,9 @@ def extract_pdfinfo(filepath):
     """Fast extraction specifically for PDF files."""
     meta = {}
     try:
-        result = subprocess.run(['pdfinfo', filepath], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(['pdfinfo', filepath], capture_output=True, text=True, errors='replace', timeout=10)
+        if '\ufffd' in result.stdout:
+            print(f"      [!] Warning: Non-UTF8 characters detected and replaced in pdfinfo output for {os.path.basename(filepath)}")
         if result.returncode == 0:
             for line in result.stdout.splitlines():
                 if line.startswith('Title:'):
@@ -100,7 +105,9 @@ def extract_ebook_meta(filepath):
     """Rich extraction for EPUB, FB2, MOBI, etc."""
     meta = {}
     try:
-        result = subprocess.run(['ebook-meta', filepath], capture_output=True, text=True, timeout=15)
+        result = subprocess.run(['ebook-meta', filepath], capture_output=True, text=True, errors='replace', timeout=15)
+        if '\ufffd' in result.stdout:
+            print(f"      [!] Warning: Non-UTF8 characters detected and replaced in ebook-meta output for {os.path.basename(filepath)}")
         if result.returncode == 0:
             lines = result.stdout.splitlines()
             current_key = None
@@ -140,13 +147,7 @@ def extract_ebook_meta(filepath):
 
 # ---------- CAS helpers ----------
 
-def hash_only(filepath):
-    """Hash a file without copying. Used in in-place mode."""
-    hasher = hashlib.blake2b()
-    with open(filepath, 'rb') as f:
-        while chunk := f.read(CHUNK_SIZE):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+
 
 
 def copy_and_hash(src_path, vault_dir):
@@ -214,7 +215,7 @@ def matches(name, relpath, patterns):
 def main():
     p = ArgumentParser(description="CAS migration: ingest books from --src into --target/.data, write metadata to --db.")
     p.add_argument("--src", required=True,
-                   help="Source root, walked recursively. Treated as read-only unless --src == --target.")
+                   help="Source root, walked recursively.")
     p.add_argument("--target", required=True,
                    help="Target root. The .data/ vault and the symlink tree mirroring --src live here.")
     p.add_argument("--db", required=True,
@@ -225,7 +226,11 @@ def main():
 
     src_root = os.path.abspath(args.src)
     target_root = os.path.abspath(args.target)
-    in_place = (src_root == target_root)
+
+    if src_root == target_root:
+        print("[!] ERROR: Source and target directories must be different (in-place migration is disabled).", file=sys.stderr)
+        sys.exit(1)
+
     vault_dir = os.path.join(target_root, ".data")
     covers_vault = os.path.join(vault_dir, "covers")
     os.makedirs(covers_vault, exist_ok=True)
@@ -245,7 +250,7 @@ def main():
     conn = sqlite3.connect(args.db)
     cursor = conn.cursor()
 
-    print(f"Mode:     {'IN-PLACE (move + symlink)' if in_place else 'COPY (src is read-only)'}")
+    print("Mode:     COPY (src is read-only)")
     print(f"Source:   {src_root}")
     print(f"Target:   {target_root}")
     print(f"Vault:    {vault_dir}")
@@ -312,36 +317,27 @@ def main():
                     n_skipped += 1
                     continue
 
-            print(f"\nProcessing: {rel_path}")
-
             # --- Metadata: Hierarchy of Truth ---
-            # Extract from src_filepath *before* the ingest, while the file
-            # still has its extension. ebook-meta dispatches on extension and
-            # returns "Unknown" if given a bare hex-named vault path.
             final_meta = {
                 'title': None, 'author': None, 'publisher': None, 'tags': None,
                 'series': None, 'languages': None, 'published': None,
                 'identifiers': None, 'annotation': None, 'needs_review': False,
             }
             if filename in htaccess_data and htaccess_data[filename].get('title'):
-                print("      -> Tier 1: .htaccess")
                 final_meta.update(htaccess_data[filename])
             else:
                 lower = filename.lower()
                 if lower.endswith('.pdf'):
                     extracted = extract_pdfinfo(src_filepath)
                     if extracted.get('title'):
-                        print("      -> Tier 2: pdfinfo")
                         final_meta.update(extracted)
                 elif lower.endswith('.djvu'):
                     extracted = extract_djvu_meta(src_filepath)
                     if extracted.get('title'):
-                        print("      -> Tier 2: djvused")
                         final_meta.update(extracted)
                 else:
                     extracted = extract_ebook_meta(src_filepath)
                     if extracted.get('title'):
-                        print("      -> Tier 2: ebook-meta")
                         final_meta.update(extracted)
 
                 if filename in htaccess_data:
@@ -350,47 +346,63 @@ def main():
                             final_meta[k] = v
 
                 if not final_meta['title']:
-                    print("      -> Tier 3: filename fallback (needs review)")
+                    print(f"  [!] Warning: Metadata extraction failed for {rel_path}, falling back to filename.")
                     final_meta['title'] = os.path.splitext(filename)[0].replace('-', ' ').replace('_', ' ')
                     final_meta['needs_review'] = True
 
-            # Capture the source's mtime BEFORE the ingest step — in in-place mode the file
-            # is about to be moved out from under src_filepath, and we want this to reflect
-            # the user's acquisition date, not whatever the vault file's mtime ends up as.
             try:
                 src_mtime = os.stat(src_filepath).st_mtime
             except OSError as e:
-                print(f"  [!] Failed to stat source: {e}")
+                print(f"  [!] Failed to stat source {rel_path}: {e}")
                 n_errors += 1
                 continue
 
             # --- Ingest content into the vault ---
             try:
-                if in_place:
-                    file_hash = hash_only(src_filepath)
-                    vault_filepath = os.path.join(vault_dir, file_hash)
-                    if os.path.exists(vault_filepath):
-                        os.remove(src_filepath)
-                    else:
-                        shutil.move(src_filepath, vault_filepath)
-                else:
-                    file_hash = copy_and_hash(src_filepath, vault_dir)
-                    vault_filepath = os.path.join(vault_dir, file_hash)
+                file_hash = copy_and_hash(src_filepath, vault_dir)
+                vault_filepath = os.path.join(vault_dir, file_hash)
             except (OSError, IOError) as e:
-                print(f"  [!] Failed to ingest: {e}")
+                print(f"  [!] Failed to ingest {rel_path} into vault: {e}")
                 n_errors += 1
                 continue
 
-            n_processed += 1
+            # --- Cover & Symlink in target ---
+            try:
+                # Cover
+                legacy_cover = os.path.join(root, ".covers", f"{filename}.jpg")
+                vault_cover = os.path.join(covers_vault, f"{file_hash}.jpg")
+                if os.path.exists(legacy_cover) and not os.path.exists(vault_cover):
+                    try:
+                        shutil.copy2(legacy_cover, vault_cover)
+                    except OSError as e:
+                        print(f"  [!] Cover copy failed for {rel_path}: {e}")
+
+                # Symlink
+                target_parent = os.path.dirname(target_filepath)
+                if target_parent:
+                    os.makedirs(target_parent, exist_ok=True)
+                if os.path.lexists(target_filepath):
+                    if os.path.islink(target_filepath):
+                        os.remove(target_filepath)
+                    else:
+                        print(f"  [!] Target path exists and is not a symlink, skipping symlink: {target_filepath}")
+                        n_errors += 1
+                        continue
+                rel_vault_target = os.path.relpath(vault_filepath, target_parent)
+                os.symlink(rel_vault_target, target_filepath)
+            except Exception as e:
+                print(f"  [!] Filesystem operation failed for {rel_path}: {e}")
+                n_errors += 1
+                continue
 
             # --- DB ---
             try:
-                # import_date = source file mtime, captured before we touch the file.
-                # This is "when the user acquired this book" — durable across re-migrations
-                # and immune to `touch` on the vault file, unlike st_mtime of the symlink target.
-                # Verified columns are left NULL: verification is an explicit admin action,
-                # not something the migration vouches for.
-                import_date = datetime.fromtimestamp(src_mtime, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                try:
+                    import_date = datetime.fromtimestamp(src_mtime, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                except (ValueError, OverflowError, OSError) as e:
+                    import_date = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    print(f"  [!] Warning: Invalid modification time for {rel_path} ({e}). Using current time instead.")
+
                 cursor.execute("""
                     INSERT OR IGNORE INTO books
                     (id, title, author, publisher, tags, series, languages,
@@ -408,36 +420,21 @@ def main():
                     INSERT OR IGNORE INTO book_locations (hash_id, symlink_path)
                     VALUES (?, ?)
                 """, (file_hash, rel_path))
-                conn.commit()
             except sqlite3.Error as e:
-                print(f"  [!] CRITICAL DB error: {e}")
+                print(f"  [!] CRITICAL DB error during {rel_path}: {e}")
                 conn.rollback()
                 sys.exit(1)
 
-            # --- Cover ---
-            legacy_cover = os.path.join(root, ".covers", f"{filename}.jpg")
-            vault_cover = os.path.join(covers_vault, f"{file_hash}.jpg")
-            if os.path.exists(legacy_cover) and not os.path.exists(vault_cover):
-                try:
-                    shutil.copy2(legacy_cover, vault_cover)
-                except OSError as e:
-                    print(f"  [!] cover copy failed: {e}")
+            n_processed += 1
 
-            # --- Symlink in target ---
-            target_parent = os.path.dirname(target_filepath)
-            if target_parent:
-                os.makedirs(target_parent, exist_ok=True)
-            if os.path.lexists(target_filepath):
-                if os.path.islink(target_filepath):
-                    os.remove(target_filepath)
-                else:
-                    # Real file/dir lives at the target path — refuse to clobber.
-                    print(f"  [!] target path exists and is not a symlink, skipping symlink: {target_filepath}")
-                    continue
-            rel_vault_target = os.path.relpath(vault_filepath, target_parent)
-            os.symlink(rel_vault_target, target_filepath)
-
-    conn.close()
+    try:
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"  [!] CRITICAL DB commit error: {e}")
+        conn.rollback()
+        sys.exit(1)
+    finally:
+        conn.close()
     print("\nMigration complete!")
     print(f"  processed:       {n_processed}")
     print(f"  resumed/skipped: {n_skipped}")
