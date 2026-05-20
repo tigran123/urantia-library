@@ -294,8 +294,6 @@ def main():
         for filename in files:
             if filename in DEFAULT_FILE_EXCLUDES:
                 continue
-            if filename.lower().endswith('.jpg'):
-                continue
             rel_path = os.path.join(rel_root, filename) if rel_root else filename
             if matches(filename, rel_path, any_pats):
                 continue
@@ -371,11 +369,27 @@ def main():
                 # Cover
                 legacy_cover = os.path.join(root, ".covers", f"{filename}.jpg")
                 vault_cover = os.path.join(covers_vault, f"{file_hash}.jpg")
-                if os.path.exists(legacy_cover) and not os.path.exists(vault_cover):
-                    try:
-                        shutil.copy2(legacy_cover, vault_cover)
-                    except OSError as e:
-                        print(f"  [!] Cover copy failed for {rel_path}: {e}")
+                if not os.path.exists(vault_cover):
+                    if os.path.exists(legacy_cover):
+                        try:
+                            shutil.copy2(legacy_cover, vault_cover)
+                        except OSError as e:
+                            print(f"  [!] Cover copy failed for {rel_path}: {e}")
+                    elif filename.lower().endswith(('.jpg', '.jpeg')):
+                        try:
+                            from PIL import Image
+                            resample_filter = getattr(Image, 'Resampling', Image).LANCZOS
+                            with Image.open(src_filepath) as im:
+                                im = im.convert("RGB")
+                                w, h = im.size
+                                if w > 300:
+                                    new_h = max(1, int(h * 300 / w))
+                                    im = im.resize((300, new_h), resample_filter)
+                                    im.save(vault_cover, format="JPEG", quality=85)
+                                else:
+                                    shutil.copy2(src_filepath, vault_cover)
+                        except Exception as e:
+                            print(f"  [!] Failed to generate cover from image file {rel_path}: {e}")
 
                 # Symlink
                 target_parent = os.path.dirname(target_filepath)
