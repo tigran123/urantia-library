@@ -101,10 +101,10 @@ const finalPath = computed(() => {
       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.upload.review.extra_subpath_help') }}</p>
     </div>
 
-    <div v-if="showFinal" class="mt-2 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
-      <FolderIcon class="w-3.5 h-3.5" />
-      <span>{{ t('admin.upload.review.final_location') }}</span>
-      <code class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] break-all">{{ finalPath }}</code>
+    <div v-if="showFinal" class="mt-3 flex items-center gap-2 flex-wrap">
+      <FolderIcon class="w-4 h-4 shrink-0 text-gray-500 dark:text-gray-400" />
+      <span class="text-sm font-medium text-gray-600 dark:text-gray-400">{{ t('admin.upload.review.final_location') }}</span>
+      <code class="px-2 py-1 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200 font-mono text-sm font-semibold break-all">{{ finalPath }}</code>
     </div>
   </div>
 </template>
