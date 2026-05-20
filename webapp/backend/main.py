@@ -697,6 +697,11 @@ async def admin_set_user_clearance(
         if user.id == admin.id and payload.is_admin is False:
             raise HTTPException(status_code=400, detail="Refusing to demote the current admin")
         user.is_admin = payload.is_admin
+    if payload.is_active is not None:
+        # Guard: an admin must not lock themselves out of the system.
+        if user.id == admin.id and payload.is_active is False:
+            raise HTTPException(status_code=400, detail="Refusing to deactivate the current admin")
+        user.is_active = payload.is_active
     db.commit()
     db.refresh(user)
     return user

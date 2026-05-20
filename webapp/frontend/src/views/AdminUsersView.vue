@@ -23,6 +23,10 @@ const users = ref<AdminUser[]>([])
 const loading = ref(true)
 const error = ref('')
 const savingId = ref<number | null>(null)
+const flash = ref<{ id: number; text: string } | null>(null)
+// Server-side is_active per user, so a save can tell an enable/disable from
+// an unrelated change (clearance, admin) and word the confirmation accordingly.
+const origActive = new Map<number, boolean>()
 
 const loadUsers = async () => {
   loading.value = true
@@ -30,6 +34,8 @@ const loadUsers = async () => {
   try {
     const res = await api.get('/admin/users')
     users.value = res.data
+    origActive.clear()
+    for (const u of users.value) origActive.set(u.id, u.is_active)
   } catch (err: any) {
     error.value = err.response?.data?.detail || err.message
   } finally {
@@ -39,12 +45,20 @@ const loadUsers = async () => {
 
 const saveUser = async (u: AdminUser) => {
   savingId.value = u.id
+  const wasActive = origActive.get(u.id)
   try {
     const res = await api.put(`/admin/users/${u.id}/clearance`, {
       clearance: u.clearance,
       is_admin: u.is_admin,
+      is_active: u.is_active,
     })
     Object.assign(u, res.data)
+    origActive.set(u.id, u.is_active)
+    const text = wasActive !== undefined && wasActive !== u.is_active
+      ? t(u.is_active ? 'admin.user_enabled' : 'admin.user_disabled', { email: u.email })
+      : t('admin.user_saved', { email: u.email })
+    flash.value = { id: u.id, text }
+    setTimeout(() => { if (flash.value?.id === u.id) flash.value = null }, 4000)
   } catch (err: any) {
     alert(err.response?.data?.detail || err.message)
     await loadUsers()
@@ -95,15 +109,30 @@ onMounted(() => {
                 class="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </td>
-            <td class="py-2 pr-2 text-gray-600 dark:text-gray-300">{{ u.is_active ? t('admin.yes') : t('admin.no') }}</td>
+            <td class="py-2 pr-2">
+              <input type="checkbox" v-model="u.is_active" />
+            </td>
             <td class="py-2">
-              <button
-                @click="saveUser(u)"
-                :disabled="savingId === u.id"
-                class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 focus:outline-none"
-              >
-                {{ savingId === u.id ? t('admin.saving') : t('admin.save') }}
-              </button>
+              <div class="flex items-center gap-3">
+                <button
+                  @click="saveUser(u)"
+                  :disabled="savingId === u.id"
+                  class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 focus:outline-none"
+                >
+                  {{ savingId === u.id ? t('admin.saving') : t('admin.save') }}
+                </button>
+                <transition
+                  enter-active-class="transition-opacity duration-200"
+                  leave-active-class="transition-opacity duration-500"
+                  enter-from-class="opacity-0"
+                  leave-to-class="opacity-0"
+                >
+                  <span
+                    v-if="flash && flash.id === u.id"
+                    class="text-sm text-emerald-700 dark:text-emerald-400"
+                  >{{ flash.text }}</span>
+                </transition>
+              </div>
             </td>
           </tr>
         </tbody>

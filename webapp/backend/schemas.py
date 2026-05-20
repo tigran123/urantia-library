@@ -29,6 +29,7 @@ class AdminUserSummary(BaseModel):
 class UserClearanceUpdate(BaseModel):
     clearance: Optional[int] = None
     is_admin: Optional[bool] = None
+    is_active: Optional[bool] = None
 
 class BookClearanceUpdate(BaseModel):
     clearance: int
