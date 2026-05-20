@@ -123,7 +123,7 @@ const handleLogout = async () => {
     </div>
 
     <!-- Header -->
-    <header class="bg-white dark:bg-gray-800 shadow-sm dark:shadow-gray-900/50 sticky top-0 z-10 border-b border-transparent dark:border-gray-700" v-if="!isAuthRoute">
+    <header class="bg-white dark:bg-gray-800 shadow-sm dark:shadow-gray-900/50 sticky top-0 z-30 border-b border-transparent dark:border-gray-700" v-if="!isAuthRoute">
       <div class="w-full px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16 items-center">
           <div class="flex items-center">
