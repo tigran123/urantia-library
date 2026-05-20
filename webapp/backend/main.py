@@ -83,6 +83,7 @@ async def strip_charset_for_websites(request: Request, call_next):
 
 BOOKS_DIR = os.environ.get("BOOKS_DIR", "/Books")
 DATA_DIR = os.path.join(BOOKS_DIR, ".data")
+_TOPDIR_SKIPLIST = {".claude", ".antigravitycli", ".vscode", ".data", "CLAUDE.md", "GEMINI.md", "urantia-library", "avatars"}
 
 
 def _resolve_vault_hash(symlink_path: str) -> str | None:
@@ -387,7 +388,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         raise HTTPException(status_code=500, detail=str(e))
 
     for entry in entries:
-        if entry in [".claude", ".vscode", ".data", "md5sums.txt", "urantia-library"]:
+        if entry in _TOPDIR_SKIPLIST:
             continue
 
         entry_path = os.path.join(target_dir, entry)
@@ -1068,7 +1069,7 @@ _ACCEPTED_BOOK_EXTS = {
     "fb2", "zip", "epub", "pdf", "djvu", "mobi", "azw", "azw3", "prc",
     "docx", "odt", "html", "rtf", "txt", "jpg", "jpeg",
 }
-_TOPDIR_SKIPLIST = {".claude", ".vscode", ".data", "urantia-library", "avatars"}
+
 
 
 def _purge_expired_staging() -> None:
