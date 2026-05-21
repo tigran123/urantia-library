@@ -22,7 +22,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi.middleware.cors import CORSMiddleware
 import models
 import schemas
@@ -264,6 +264,29 @@ def _book_clearance(file_hash: str | None, db: Session) -> int:
     return book.clearance if book else 0
 
 
+def _rating_stats(db: Session, hash_ids) -> dict[str, dict]:
+    """avg_rating + rating_count per hash_id, computed in ONE GROUP BY query.
+    Hashes with no ratings are simply absent from the returned dict — callers
+    default those to {avg_rating: None, rating_count: 0}."""
+    ids = {h for h in hash_ids if h}
+    if not ids:
+        return {}
+    rows = (
+        db.query(
+            models.BookRating.hash_id,
+            func.avg(models.BookRating.rating),
+            func.count(models.BookRating.id),
+        )
+        .filter(models.BookRating.hash_id.in_(ids))
+        .group_by(models.BookRating.hash_id)
+        .all()
+    )
+    return {
+        hid: {"avg_rating": round(float(avg), 3), "rating_count": int(cnt)}
+        for hid, avg, cnt in rows
+    }
+
+
 def assert_can_read_path(symlink_fs_path: str, user: models.User, db: Session) -> None:
     """Resolve `symlink_fs_path` through the CAS vault, look up the book's
     clearance, and 403 if `user.clearance` is below it. Admins bypass.
@@ -445,6 +468,13 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
     # Sort: folders first, then files
     items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
 
+    # Attach average ratings in one GROUP BY over the already-filtered items.
+    stats = _rating_stats(db, [it.get("hash_id") for it in items])
+    for it in items:
+        s = stats.get(it.get("hash_id"))
+        it["avg_rating"] = s["avg_rating"] if s else None
+        it["rating_count"] = s["rating_count"] if s else 0
+
     return {"path": path, "items": items}
 
 def parse_search_query(q: str):
@@ -558,6 +588,12 @@ async def search(
             "description": book.description,
             "clearance": int(book.clearance or 0),
         })
+
+    stats = _rating_stats(db, [m["hash_id"] for m in matches])
+    for m in matches:
+        s = stats.get(m["hash_id"])
+        m["avg_rating"] = s["avg_rating"] if s else None
+        m["rating_count"] = s["rating_count"] if s else 0
 
     return {
         "matches": matches,
@@ -860,6 +896,8 @@ async def admin_delete_book(
     db.query(models.BookLocation).filter(models.BookLocation.hash_id == hash_id).delete()
     db.query(models.Favorite).filter(models.Favorite.hash_id == hash_id).delete()
     db.query(models.ReadingProgress).filter(models.ReadingProgress.hash_id == hash_id).delete()
+    db.query(models.BookRating).filter(models.BookRating.hash_id == hash_id).delete()
+    db.query(models.BookComment).filter(models.BookComment.hash_id == hash_id).delete()
     db.delete(book)
     db.commit()
     return {"deleted": hash_id, "locations": locations, "errors": errors}
@@ -3558,6 +3596,335 @@ async def update_progress(prog: schemas.ReadingProgressCreate, current_user: mod
     db.commit()
     db.refresh(new_prog)
     return new_prog
+
+# ==============================================================================
+# Ratings
+# ==============================================================================
+# A 1-5 star rating, one per user per book. Not moderated — it counts toward the
+# book's average as soon as it is submitted.
+
+@app.get("/api/books/{hash_id}/rating", response_model=schemas.RatingResponse)
+async def get_my_rating(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    row = db.query(models.BookRating).filter(
+        models.BookRating.user_id == current_user.id,
+        models.BookRating.hash_id == hash_id,
+    ).first()
+    return {"hash_id": hash_id, "rating": row.rating if row else None}
+
+
+@app.post("/api/books/{hash_id}/rating", response_model=schemas.RatingResponse)
+async def set_my_rating(hash_id: str, payload: schemas.RatingCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if payload.rating < 1 or payload.rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not db.query(models.Book.id).filter(models.Book.id == hash_id).first():
+        raise HTTPException(status_code=404, detail="Book not found")
+    now = _now_iso()
+    row = db.query(models.BookRating).filter(
+        models.BookRating.user_id == current_user.id,
+        models.BookRating.hash_id == hash_id,
+    ).first()
+    if row:
+        row.rating = payload.rating
+        row.updated_at = now
+    else:
+        row = models.BookRating(
+            user_id=current_user.id, hash_id=hash_id, rating=payload.rating,
+            created_at=now, updated_at=now,
+        )
+        db.add(row)
+    db.commit()
+    return {"hash_id": hash_id, "rating": payload.rating}
+
+
+@app.delete("/api/books/{hash_id}/rating")
+async def delete_my_rating(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.query(models.BookRating).filter(
+        models.BookRating.user_id == current_user.id,
+        models.BookRating.hash_id == hash_id,
+    ).first()
+    if row:
+        db.delete(row)
+        db.commit()
+    return {"message": "Removed"}
+
+
+# ==============================================================================
+# Comments
+# ==============================================================================
+# Text comments are moderated: they are created 'pending' and become public only
+# after an admin approves them. A comment may have one level of replies.
+
+_COMMENT_MAX_LEN = 5000
+MODERATION_DIGEST_INTERVAL_HOURS = 6
+_MODERATION_META_KEY = "moderation_email_last_sent_at"
+
+
+def _author_name(email: str) -> str:
+    """Public display name for a commenter — the local-part of their email, so
+    we never expose the full address to other users."""
+    return (email or "user").split("@", 1)[0]
+
+
+def _maybe_send_moderation_digest(db: Session) -> None:
+    """Best-effort: if pending comments exist and >6h elapsed since the last
+    digest, email the admin a summary. Race-free — the conditional UPDATE on
+    app_meta succeeds for exactly one of any concurrent callers."""
+    try:
+        pending = db.query(func.count(models.BookComment.id)).filter(
+            models.BookComment.status == "pending"
+        ).scalar() or 0
+        if pending <= 0:
+            return
+        now = datetime.now(timezone.utc)
+        now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        cutoff_iso = (now - timedelta(hours=MODERATION_DIGEST_INTERVAL_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Seed the throttle row once so the conditional UPDATE has something to match.
+        if not db.query(models.AppMeta).filter(models.AppMeta.key == _MODERATION_META_KEY).first():
+            try:
+                db.add(models.AppMeta(key=_MODERATION_META_KEY, value="1970-01-01T00:00:00Z"))
+                db.commit()
+            except Exception:
+                db.rollback()
+        updated = db.query(models.AppMeta).filter(
+            models.AppMeta.key == _MODERATION_META_KEY,
+            models.AppMeta.value < cutoff_iso,
+        ).update({models.AppMeta.value: now_iso}, synchronize_session=False)
+        db.commit()
+        if updated == 1:
+            threading.Thread(
+                target=email_utils.send_moderation_digest, args=(pending,), daemon=True,
+            ).start()
+    except Exception as e:
+        print(f"moderation digest check failed: {e}")
+
+
+@app.get("/api/books/{hash_id}/comments")
+async def get_comments(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    visible = or_(
+        models.BookComment.status == "approved",
+        models.BookComment.user_id == current_user.id,
+    )
+    tops = db.query(models.BookComment).filter(
+        models.BookComment.hash_id == hash_id,
+        models.BookComment.parent_id.is_(None),
+        visible,
+    ).order_by(models.BookComment.created_at).all()
+
+    replies_by_parent: dict[int, list] = {}
+    top_ids = [c.id for c in tops]
+    if top_ids:
+        for r in db.query(models.BookComment).filter(
+            models.BookComment.parent_id.in_(top_ids),
+            visible,
+        ).order_by(models.BookComment.created_at).all():
+            replies_by_parent.setdefault(r.parent_id, []).append(r)
+
+    # Author display names + each top-level author's own rating of this book.
+    all_uids = {c.user_id for c in tops}
+    for reps in replies_by_parent.values():
+        all_uids.update(r.user_id for r in reps)
+    names = {}
+    if all_uids:
+        names = {uid: _author_name(email) for uid, email in db.query(
+            models.User.id, models.User.email).filter(models.User.id.in_(all_uids)).all()}
+    ratings = {}
+    if tops:
+        ratings = dict(db.query(models.BookRating.user_id, models.BookRating.rating).filter(
+            models.BookRating.hash_id == hash_id,
+            models.BookRating.user_id.in_([c.user_id for c in tops]),
+        ).all())
+
+    def node(c, with_rating: bool) -> dict:
+        return {
+            "id": c.id,
+            "author_name": names.get(c.user_id, "user"),
+            "body": c.body,
+            "status": c.status,
+            "created_at": c.created_at,
+            "is_own": c.user_id == current_user.id,
+            "rating": ratings.get(c.user_id) if with_rating else None,
+            "replies": [node(r, False) for r in replies_by_parent.get(c.id, [])],
+        }
+
+    return {"comments": [node(c, True) for c in tops]}
+
+
+@app.post("/api/books/{hash_id}/comments")
+async def create_comment(hash_id: str, payload: schemas.CommentCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    body = (payload.body or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Comment body required")
+    if len(body) > _COMMENT_MAX_LEN:
+        raise HTTPException(status_code=400, detail="Comment is too long")
+    if not db.query(models.Book.id).filter(models.Book.id == hash_id).first():
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if payload.parent_id is not None:
+        parent = db.query(models.BookComment).filter(
+            models.BookComment.id == payload.parent_id).first()
+        if not parent or parent.hash_id != hash_id:
+            raise HTTPException(status_code=400, detail="Invalid parent comment")
+        if parent.parent_id is not None:
+            raise HTTPException(status_code=400, detail="Cannot reply to a reply")
+    else:
+        existing = db.query(models.BookComment.id).filter(
+            models.BookComment.hash_id == hash_id,
+            models.BookComment.user_id == current_user.id,
+            models.BookComment.parent_id.is_(None),
+        ).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="You have already commented on this book")
+
+    now = _now_iso()
+    # Admin comments need no moderation — they go live immediately.
+    status = "approved" if current_user.is_admin else "pending"
+    row = models.BookComment(
+        user_id=current_user.id, hash_id=hash_id, parent_id=payload.parent_id,
+        body=body, status=status, created_at=now, updated_at=now,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    if row.status == "pending":
+        _maybe_send_moderation_digest(db)
+    return {"id": row.id, "status": row.status}
+
+
+@app.put("/api/comments/{comment_id}")
+async def edit_comment(comment_id: int, payload: schemas.CommentUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.query(models.BookComment).filter(models.BookComment.id == comment_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    if row.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    body = (payload.body or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Comment body required")
+    if len(body) > _COMMENT_MAX_LEN:
+        raise HTTPException(status_code=400, detail="Comment is too long")
+    row.body = body
+    # Admin edits stay public; everyone else's edit returns to moderation.
+    row.status = "approved" if current_user.is_admin else "pending"
+    row.updated_at = _now_iso()
+    db.commit()
+    if row.status == "pending":
+        _maybe_send_moderation_digest(db)
+    return {"id": row.id, "status": row.status}
+
+
+@app.delete("/api/comments/{comment_id}")
+async def delete_comment(comment_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.query(models.BookComment).filter(models.BookComment.id == comment_id).first()
+    if not row:
+        return {"message": "Removed"}
+    if row.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    # No DB cascade is enforced — drop replies of a top-level comment by hand.
+    if row.parent_id is None:
+        db.query(models.BookComment).filter(models.BookComment.parent_id == row.id).delete()
+    db.delete(row)
+    db.commit()
+    return {"message": "Removed"}
+
+
+# ---------- Admin: comment moderation ----------
+
+@app.get("/api/admin/comments")
+async def admin_list_comments(
+    status: str = "pending",
+    page: int = 1,
+    per_page: int = 50,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    page = max(page, 1)
+    per_page = max(1, min(per_page, 200))
+
+    q = db.query(models.BookComment)
+    if status == "pending":
+        q = q.filter(models.BookComment.status == "pending")
+    elif status in ("approved", "rejected"):
+        q = q.filter(models.BookComment.status == status)
+    # status == "recent" (or anything else): no status filter, newest first.
+
+    total = q.order_by(None).count()
+    rows = (
+        q.order_by(models.BookComment.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    book_ids = {r.hash_id for r in rows}
+    titles = dict(db.query(models.Book.id, models.Book.title).filter(
+        models.Book.id.in_(book_ids)).all()) if book_ids else {}
+    # One reachable path per book so the admin can open it from the queue.
+    paths: dict[str, str] = {}
+    if book_ids:
+        for hid, sp in db.query(
+            models.BookLocation.hash_id, models.BookLocation.symlink_path
+        ).filter(models.BookLocation.hash_id.in_(book_ids)).all():
+            paths.setdefault(hid, sp)
+    user_ids = {r.user_id for r in rows}
+    names = {uid: _author_name(email) for uid, email in db.query(
+        models.User.id, models.User.email).filter(models.User.id.in_(user_ids)).all()} if user_ids else {}
+    parent_ids = {r.parent_id for r in rows if r.parent_id}
+    parents = dict(db.query(models.BookComment.id, models.BookComment.body).filter(
+        models.BookComment.id.in_(parent_ids)).all()) if parent_ids else {}
+
+    return {
+        "comments": [
+            {
+                "id": r.id,
+                "hash_id": r.hash_id,
+                "book_title": titles.get(r.hash_id),
+                "book_path": paths.get(r.hash_id),
+                "author_name": names.get(r.user_id, "user"),
+                "body": r.body,
+                "status": r.status,
+                "parent_id": r.parent_id,
+                "parent_snippet": (parents.get(r.parent_id) or "")[:120] if r.parent_id else None,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
+    }
+
+
+@app.post("/api/admin/comments/{comment_id}/approve")
+async def admin_approve_comment(comment_id: int, _admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    row = db.query(models.BookComment).filter(models.BookComment.id == comment_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    row.status = "approved"
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"id": row.id, "status": row.status}
+
+
+@app.delete("/api/admin/comments/{comment_id}")
+async def admin_delete_comment(comment_id: int, _admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+    row = db.query(models.BookComment).filter(models.BookComment.id == comment_id).first()
+    if row:
+        if row.parent_id is None:
+            db.query(models.BookComment).filter(models.BookComment.parent_id == row.id).delete()
+        db.delete(row)
+        db.commit()
+    return {"message": "Removed"}
+
 
 # Frontend static files will be mounted here later
 app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="frontend")

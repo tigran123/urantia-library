@@ -88,6 +88,7 @@ const editBookClearance = async (item: any, event: Event) => {
 }
 import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
+import StarRating from '../components/StarRating.vue'
 
 const route = useRoute()
 const items = ref<any[]>([])
@@ -454,6 +455,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               </div>
               <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words line-clamp-2" :title="item.title || item.name">{{ item.title || formatFilename(item.name, item.is_dir) }}</h3>
               <p v-if="item.author" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate font-bold italic" :title="item.author">{{ item.author }}</p>
+              <StarRating v-if="item.rating_count" :rating="item.avg_rating" :count="item.rating_count" class="mt-1" />
               <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
             </router-link>
           </div>
@@ -532,6 +534,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 <div v-if="!item.is_dir" class="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">
                   <span v-if="fileTypeLabel(item.name)" class="font-semibold">{{ fileTypeLabel(item.name) }}</span><span v-if="fileTypeLabel(item.name)"> · </span>{{ formatBytes(item.size) }}
                 </div>
+                <StarRating v-if="!item.is_dir && item.rating_count" :rating="item.avg_rating" :count="item.rating_count" />
               </div>
             </div>
           </li>

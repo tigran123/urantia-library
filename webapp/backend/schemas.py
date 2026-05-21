@@ -191,6 +191,57 @@ class ReadingProgressResponse(BaseModel):
         from_attributes = True
 
 
+class RatingCreate(BaseModel):
+    rating: int  # 1..5
+
+
+class RatingResponse(BaseModel):
+    """The caller's own rating for a book; `rating` is None when not rated."""
+    hash_id: str
+    rating: Optional[int] = None
+
+
+class BookRatingStats(BaseModel):
+    avg_rating: Optional[float] = None
+    rating_count: int = 0
+
+
+class CommentCreate(BaseModel):
+    body: str
+    parent_id: Optional[int] = None
+
+
+class CommentUpdate(BaseModel):
+    body: str
+
+
+class CommentNode(BaseModel):
+    """A comment as shown on the book page. Top-level nodes may carry the
+    author's star rating and a list of replies; replies have neither."""
+    id: int
+    author_name: str
+    body: str
+    status: str          # 'pending' | 'approved'
+    created_at: str
+    is_own: bool
+    rating: Optional[int] = None
+    replies: List["CommentNode"] = []
+
+
+class AdminCommentItem(BaseModel):
+    """A comment in the admin moderation queue, with parent/book context."""
+    id: int
+    hash_id: str
+    book_title: Optional[str] = None
+    book_path: Optional[str] = None
+    author_name: str
+    body: str
+    status: str
+    parent_id: Optional[int] = None
+    parent_snippet: Optional[str] = None
+    created_at: str
+
+
 class MoveRequest(BaseModel):
     src: str
     dst: str

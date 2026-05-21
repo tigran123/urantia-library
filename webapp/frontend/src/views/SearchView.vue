@@ -7,6 +7,7 @@ import api, { startIntegrityJob, searchHashIds, type IntegrityMode } from '../ap
 const { t } = useI18n({ useScope: 'global' })
 import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
+import StarRating from '../components/StarRating.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -388,11 +389,15 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 </div>
               </div>
 
-              <div class="mt-2 text-xs text-gray-400 flex items-center gap-1">
-                 {{ $t('app.location') }}
-                 <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 hover:underline">
-                   /{{ match.parent_dir || 'Root' }}
-                 </router-link>
+              <div class="mt-2 text-xs text-gray-400 flex items-center gap-2 flex-wrap">
+                 <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" />
+                 <span v-if="match.rating_count" class="text-gray-300">·</span>
+                 <span class="flex items-center gap-1">
+                   {{ $t('app.location') }}
+                   <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 hover:underline">
+                     /{{ match.parent_dir || 'Root' }}
+                   </router-link>
+                 </span>
               </div>
             </div>
 

@@ -1,4 +1,5 @@
-from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, Column, Integer, String, Text, ForeignKey, UniqueConstraint, Index
+from sqlalchemy.sql import text
 from database import Base
 import uuid
 
@@ -78,3 +79,49 @@ class BookLocation(Base):
 
     hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
     symlink_path = Column(String, primary_key=True)
+
+
+class BookRating(Base):
+    """One 1-5 star rating per user per book. Not moderated — a rating counts
+    toward the book's average as soon as it is submitted."""
+    __tablename__ = "book_ratings"
+    __table_args__ = (UniqueConstraint("user_id", "hash_id"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
+    rating = Column(Integer, nullable=False)  # 1..5
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+
+class BookComment(Base):
+    """Moderated text comment. parent_id NULL = top-level comment; a non-NULL
+    parent_id marks a reply. Replies cannot be replied to (one level only)."""
+    __tablename__ = "book_comments"
+    __table_args__ = (
+        # One top-level comment per user per book; replies are unrestricted.
+        Index(
+            "ix_book_comments_one_toplevel", "user_id", "hash_id",
+            unique=True, sqlite_where=text("parent_id IS NULL"),
+        ),
+        Index("idx_book_comments_hash_status", "hash_id", "status"),
+        Index("idx_book_comments_parent", "parent_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    hash_id = Column(String, ForeignKey("books.id"), nullable=False)
+    parent_id = Column(Integer, ForeignKey("book_comments.id"), nullable=True)
+    body = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="pending")  # 'pending' | 'approved'
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+
+class AppMeta(Base):
+    """Small key/value store for app-wide state (e.g. moderation digest throttle)."""
+    __tablename__ = "app_meta"
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=True)

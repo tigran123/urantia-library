@@ -58,7 +58,21 @@ const messages = {
       view_rendered: 'Show rendered',
       grid_view: 'Grid view',
       list_view: 'List view',
-      source_code: 'Source Code'
+      source_code: 'Source Code',
+      description: 'Description',
+      comments: 'Comments',
+      your_rating: 'Your rating',
+      write_review_placeholder: 'Share your thoughts about this book…',
+      submit_review: 'Post comment',
+      pending_moderation: 'Awaiting moderation',
+      no_comments: 'No comments yet.',
+      reply: 'Reply',
+      write_reply_placeholder: 'Write a reply…',
+      delete_comment_confirm: 'Delete this comment?',
+      edit: 'Edit',
+      save: 'Save',
+      cancel: 'Cancel',
+      delete: 'Delete'
     },
     auth: {
       signInTitle: 'Sign In',
@@ -343,6 +357,20 @@ const messages = {
           edit: 'Edit metadata',
           upload_another: 'Upload another'
         }
+      },
+      comments: {
+        tab: 'Comments',
+        title: 'Comment moderation',
+        filter_pending: 'Pending',
+        filter_recent: 'Recent',
+        empty: 'Nothing to moderate.',
+        on_book: 'On',
+        reply_badge: 'reply',
+        approve: 'Approve',
+        delete: 'Delete',
+        delete_confirm: 'Delete this comment? This cannot be undone.',
+        load_more: 'Load more',
+        shown_count: 'Showing {shown} of {total}'
       }
     }
   },
@@ -403,7 +431,21 @@ const messages = {
       view_rendered: 'Показать отрисованный',
       grid_view: 'Сетка',
       list_view: 'Список',
-      source_code: 'Исходный код'
+      source_code: 'Исходный код',
+      description: 'Описание',
+      comments: 'Комментарии',
+      your_rating: 'Ваша оценка',
+      write_review_placeholder: 'Поделитесь своим мнением об этой книге…',
+      submit_review: 'Оставить отзыв',
+      pending_moderation: 'Ожидает модерации',
+      no_comments: 'Пока нет комментариев.',
+      reply: 'Ответить',
+      write_reply_placeholder: 'Написать ответ…',
+      delete_comment_confirm: 'Удалить этот комментарий?',
+      edit: 'Изменить',
+      save: 'Сохранить',
+      cancel: 'Отмена',
+      delete: 'Удалить'
     },
     auth: {
       signInTitle: 'Вход',
@@ -688,6 +730,20 @@ const messages = {
           edit: 'Изменить метаданные',
           upload_another: 'Загрузить ещё'
         }
+      },
+      comments: {
+        tab: 'Комментарии',
+        title: 'Модерация комментариев',
+        filter_pending: 'На модерации',
+        filter_recent: 'Недавние',
+        empty: 'Нет комментариев для модерации.',
+        on_book: 'К книге',
+        reply_badge: 'ответ',
+        approve: 'Одобрить',
+        delete: 'Удалить',
+        delete_confirm: 'Удалить этот комментарий? Это действие необратимо.',
+        load_more: 'Показать ещё',
+        shown_count: 'Показано {shown} из {total}'
       }
     }
   }

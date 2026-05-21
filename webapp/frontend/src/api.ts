@@ -89,4 +89,73 @@ export const cancelIntegrityJob = (jobId: string) =>
 export const searchHashIds = (q: string) =>
   api.get<{ hash_ids: string[]; total: number }>('/search/hash_ids', { params: { q } })
 
+// ---------- Ratings & comments ----------
+
+export interface CommentNode {
+  id: number
+  author_name: string
+  body: string
+  status: 'pending' | 'approved'
+  created_at: string
+  is_own: boolean
+  rating: number | null
+  replies: CommentNode[]
+}
+
+export interface AdminCommentItem {
+  id: number
+  hash_id: string
+  book_title: string | null
+  book_path: string | null
+  author_name: string
+  body: string
+  status: string
+  parent_id: number | null
+  parent_snippet: string | null
+  created_at: string
+}
+
+export interface AdminCommentsPage {
+  comments: AdminCommentItem[]
+  total: number
+  page: number
+  per_page: number
+  total_pages: number
+}
+
+export const getMyRating = (hashId: string) =>
+  api.get<{ hash_id: string; rating: number | null }>(
+    `/books/${encodeURIComponent(hashId)}/rating`)
+
+export const setMyRating = (hashId: string, rating: number) =>
+  api.post<{ hash_id: string; rating: number | null }>(
+    `/books/${encodeURIComponent(hashId)}/rating`, { rating })
+
+export const deleteMyRating = (hashId: string) =>
+  api.delete(`/books/${encodeURIComponent(hashId)}/rating`)
+
+export const getComments = (hashId: string) =>
+  api.get<{ comments: CommentNode[] }>(
+    `/books/${encodeURIComponent(hashId)}/comments`)
+
+export const postComment = (hashId: string, body: string, parentId?: number) =>
+  api.post<{ id: number; status: string }>(
+    `/books/${encodeURIComponent(hashId)}/comments`,
+    { body, parent_id: parentId ?? null })
+
+export const editComment = (commentId: number, body: string) =>
+  api.put<{ id: number; status: string }>(`/comments/${commentId}`, { body })
+
+export const deleteComment = (commentId: number) =>
+  api.delete(`/comments/${commentId}`)
+
+export const adminListComments = (status: 'pending' | 'recent' = 'pending', page = 1, perPage = 50) =>
+  api.get<AdminCommentsPage>('/admin/comments', { params: { status, page, per_page: perPage } })
+
+export const adminApproveComment = (commentId: number) =>
+  api.post(`/admin/comments/${commentId}/approve`)
+
+export const adminDeleteComment = (commentId: number) =>
+  api.delete(`/admin/comments/${commentId}`)
+
 export default api

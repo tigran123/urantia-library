@@ -66,6 +66,21 @@ def send_user_approval(user_email: str, token: str):
     """
     _send_email(user_email, "Registration Approved - Action Required", html)
 
+def send_moderation_digest(pending_count: int):
+    """Throttled digest sent to the admin when book comments await moderation."""
+    link = f"{APP_URL}/#/admin/comments"
+    noun = "comment" if pending_count == 1 else "comments"
+    html = f"""
+    <html>
+      <body>
+        <h3>Comments awaiting moderation — Urantia Library</h3>
+        <p>There {'is' if pending_count == 1 else 'are'} <strong>{pending_count}</strong> {noun} waiting to be reviewed.</p>
+        <p><a href="{link}" style="padding: 10px 15px; background-color: #2563eb; color: white; text-decoration: none; border-radius: 5px;">Open moderation queue</a></p>
+      </body>
+    </html>
+    """
+    _send_email(ADMIN_EMAIL, "Comments awaiting moderation", html)
+
 def send_user_rejection(user_email: str):
     html = f"""
     <html>

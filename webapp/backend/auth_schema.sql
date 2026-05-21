@@ -88,3 +88,45 @@ CREATE TABLE directory_favorites (
 );
 
 CREATE INDEX idx_directory_favorites_user ON directory_favorites(user_id);
+
+-- ==============================================================================
+-- 5. Ratings and Comments
+-- ==============================================================================
+-- One 1-5 star rating per user per book. Not moderated: a rating counts toward
+-- the book's average the moment it is submitted.
+CREATE TABLE book_ratings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    rating INTEGER NOT NULL,             -- 1..5
+    created_at TEXT NOT NULL,            -- ISO-8601 UTC
+    updated_at TEXT NOT NULL,            -- ISO-8601 UTC
+    UNIQUE(user_id, hash_id)
+);
+
+CREATE INDEX idx_book_ratings_hash ON book_ratings(hash_id);
+
+-- Moderated text comments. parent_id NULL = top-level comment; a non-NULL
+-- parent_id is a reply (one level only -- replies cannot be replied to).
+CREATE TABLE book_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES book_comments(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    status VARCHAR NOT NULL DEFAULT 'pending',  -- 'pending' | 'approved' (reject = row delete)
+    created_at TEXT NOT NULL,            -- ISO-8601 UTC
+    updated_at TEXT NOT NULL             -- ISO-8601 UTC
+);
+
+-- One top-level comment per user per book; replies are unrestricted.
+CREATE UNIQUE INDEX ix_book_comments_one_toplevel
+    ON book_comments(user_id, hash_id) WHERE parent_id IS NULL;
+CREATE INDEX idx_book_comments_hash_status ON book_comments(hash_id, status);
+CREATE INDEX idx_book_comments_parent ON book_comments(parent_id);
+
+-- Small key/value store for app-wide state (e.g. moderation digest throttle).
+CREATE TABLE app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);

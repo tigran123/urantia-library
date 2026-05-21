@@ -11,6 +11,7 @@ import AdminUsersView from '../views/AdminUsersView.vue'
 import AdminBooksView from '../views/AdminBooksView.vue'
 import AdminIntegrityView from '../views/AdminIntegrityView.vue'
 import AdminUploadView from '../views/AdminUploadView.vue'
+import AdminCommentsView from '../views/AdminCommentsView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -77,6 +78,11 @@ const router = createRouter({
       path: '/admin/upload',
       name: 'admin-upload',
       component: AdminUploadView
+    },
+    {
+      path: '/admin/comments',
+      name: 'admin-comments',
+      component: AdminCommentsView
     }
   ]
 })

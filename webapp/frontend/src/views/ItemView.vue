@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch, onUnmounted, defineAsyncComponent, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import api, { verifyBook, type IntegrityCheckResult, type IntegrityMode } from '../api'
+import api, {
+  verifyBook,
+  getMyRating, setMyRating,
+  getComments, postComment, editComment, deleteComment,
+  type IntegrityCheckResult, type IntegrityMode, type CommentNode,
+} from '../api'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
+import StarRating from '../components/StarRating.vue'
 import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
 import EpubViewer from '../components/EpubViewer.vue'
@@ -252,7 +258,18 @@ const displayFormat = computed(() => {
   return fileExtension.value
 })
 
-const fb2Meta = ref<{ title: string; authors: string[]; annotation_html: string } | null>(null)
+// Stable source object for the built-in viewers. It MUST be a computed (not an
+// inline object literal in the template): the viewers watch `source` and
+// reload the whole book when its reference changes, so an inline literal would
+// make every ItemView re-render (e.g. each keystroke in the comment box)
+// reload — or, for EPUB, destroy — the open book.
+const viewerSource = computed(() => ({
+  kind: 'live' as const,
+  path: item.value?.path ?? '',
+  hashId: item.value?.hash_id ?? '',
+}))
+
+const fb2Meta = ref<{ title: string; authors: string[] } | null>(null)
 
 const loadFb2Meta = async (path: string) => {
   fb2Meta.value = null
@@ -308,6 +325,128 @@ watch(
   (p) => { if (p) loadHtmlPreview(p); else htmlPreview.value = { html: '' } },
   { immediate: true }
 )
+
+// ---------- Ratings & comments ----------
+const myRating = ref<number | null>(null)
+const comments = ref<CommentNode[]>([])
+const reviewDraft = ref('')
+const reviewBusy = ref(false)
+const editingCommentId = ref<number | null>(null)
+const editDraft = ref('')
+const replyToId = ref<number | null>(null)
+const replyDraft = ref('')
+
+// The caller's own top-level comment. Used to decide whether to show the
+// new-comment textarea; the comment itself is rendered inline in the list.
+const myComment = computed<CommentNode | null>(
+  () => comments.value.find((c) => c.is_own) || null)
+
+const loadRatingAndComments = async (hashId: string) => {
+  myRating.value = null
+  comments.value = []
+  try {
+    const [r, c] = await Promise.all([getMyRating(hashId), getComments(hashId)])
+    myRating.value = r.data.rating
+    comments.value = c.data.comments
+  } catch (e) {
+    console.error('Failed to load ratings/comments', e)
+  }
+}
+
+watch(
+  () => item.value?.hash_id || null,
+  (h) => { if (h) loadRatingAndComments(h) },
+  { immediate: true }
+)
+
+const onRate = async (value: number) => {
+  if (!item.value?.hash_id) return
+  try {
+    await setMyRating(item.value.hash_id, value)
+    // Fold the change into the displayed average without a full reload.
+    const oldCount = item.value.rating_count || 0
+    const oldAvg = item.value.avg_rating || 0
+    let total = oldAvg * oldCount
+    let count = oldCount
+    if (myRating.value != null) total -= myRating.value
+    else count += 1
+    total += value
+    item.value.rating_count = count
+    item.value.avg_rating = count ? total / count : null
+    myRating.value = value
+  } catch (e) {
+    console.error('Failed to set rating', e)
+  }
+}
+
+const submitReview = async () => {
+  if (!item.value?.hash_id) return
+  const body = reviewDraft.value.trim()
+  if (!body) return
+  reviewBusy.value = true
+  try {
+    await postComment(item.value.hash_id, body)
+    reviewDraft.value = ''
+    await loadRatingAndComments(item.value.hash_id)
+  } catch (e: any) {
+    alert(e?.response?.data?.detail || 'Failed to post comment')
+  } finally {
+    reviewBusy.value = false
+  }
+}
+
+const startEdit = (c: CommentNode) => {
+  editingCommentId.value = c.id
+  editDraft.value = c.body
+}
+
+const saveEdit = async () => {
+  if (editingCommentId.value == null) return
+  const body = editDraft.value.trim()
+  if (!body) return
+  reviewBusy.value = true
+  try {
+    await editComment(editingCommentId.value, body)
+    editingCommentId.value = null
+    if (item.value?.hash_id) await loadRatingAndComments(item.value.hash_id)
+  } catch (e: any) {
+    alert(e?.response?.data?.detail || 'Failed to save')
+  } finally {
+    reviewBusy.value = false
+  }
+}
+
+const removeComment = async (c: CommentNode) => {
+  if (!confirm(t('app.delete_comment_confirm'))) return
+  try {
+    await deleteComment(c.id)
+    if (item.value?.hash_id) await loadRatingAndComments(item.value.hash_id)
+  } catch (e) {
+    console.error('Failed to delete comment', e)
+  }
+}
+
+const startReply = (c: CommentNode) => {
+  replyToId.value = c.id
+  replyDraft.value = ''
+}
+
+const submitReply = async () => {
+  if (!item.value?.hash_id || replyToId.value == null) return
+  const body = replyDraft.value.trim()
+  if (!body) return
+  reviewBusy.value = true
+  try {
+    await postComment(item.value.hash_id, body, replyToId.value)
+    replyToId.value = null
+    replyDraft.value = ''
+    await loadRatingAndComments(item.value.hash_id)
+  } catch (e: any) {
+    alert(e?.response?.data?.detail || 'Failed to post reply')
+  } finally {
+    reviewBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -388,6 +527,9 @@ watch(
             <p class="mt-2 text-sm text-gray-500 dark:text-gray-400 font-sans break-all">
               {{ item.name }}
             </p>
+            <div v-if="item.hash_id && item.rating_count" class="mt-2">
+              <StarRating :rating="item.avg_rating" :count="item.rating_count" size="h-5 w-5" />
+            </div>
           </div>
           
           <!-- Metadata Table -->
@@ -443,21 +585,17 @@ watch(
                     <template v-else>{{ t('admin.integrity.never') }}</template>
                   </td>
                 </tr>
-                <tr v-if="item.description" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">Description</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400 prose dark:prose-invert max-w-none text-sm whitespace-pre-wrap" v-html="item.description"></td>
-                </tr>
               </tbody>
             </table>
           </div>
 
-          <!-- FB2 Annotation -->
-          <details v-if="fb2Meta?.annotation_html" class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group">
+          <!-- Description (collapsible; shown for any book with a description) -->
+          <details v-if="item.description" class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group">
             <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between rounded-lg">
-              <span>{{ t('app.annotation') }}</span>
+              <span>{{ t('app.description') }}</span>
               <span class="transition-transform group-open:rotate-90 text-gray-400">›</span>
             </summary>
-            <div class="px-6 pb-5 prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 fb2-content" v-html="fb2Meta.annotation_html"></div>
+            <div class="px-6 pb-5 prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 whitespace-pre-wrap" v-html="item.description"></div>
           </details>
 
           <!-- Actions -->
@@ -467,6 +605,87 @@ watch(
               {{ t('app.download') }} {{ formatBytes(item.size, 0) }}
             </a>
           </div>
+
+          <!-- Ratings & Comments (collapsed by default) -->
+          <details v-if="item.hash_id" class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group">
+            <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between rounded-lg">
+              <span>
+                {{ t('app.comments') }}
+                <span v-if="comments.length" class="text-gray-400 font-normal"> ({{ comments.length }})</span>
+              </span>
+              <span class="transition-transform group-open:rotate-90 text-gray-400">›</span>
+            </summary>
+            <div class="px-6 pb-6 space-y-6">
+
+              <!-- Your rating + (when you have not commented yet) a new-comment form -->
+              <div class="border-b border-gray-100 dark:border-gray-700 pb-5">
+                <div class="flex items-center gap-3 flex-wrap">
+                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('app.your_rating') }}</span>
+                  <StarRating :rating="myRating" :interactive="true" :show-count="false" size="h-6 w-6" @update:rating="onRate" />
+                </div>
+                <div v-if="!myComment" class="mt-3">
+                  <textarea v-model="reviewDraft" rows="3" :placeholder="t('app.write_review_placeholder')" class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100"></textarea>
+                  <button @click="submitReview()" :disabled="reviewBusy || !reviewDraft.trim()" class="mt-2 px-4 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{{ t('app.submit_review') }}</button>
+                </div>
+              </div>
+
+              <!-- Comment list (your own comment is shown inline, with its replies) -->
+              <p v-if="!comments.length" class="text-sm text-gray-500 dark:text-gray-400">{{ t('app.no_comments') }}</p>
+              <div v-for="c in comments" :key="c.id" class="space-y-3">
+                <div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ c.author_name }}</span>
+                    <StarRating v-if="c.rating" :rating="c.rating" :show-count="false" size="h-4 w-4" />
+                    <span class="text-xs text-gray-400">{{ formatDate(c.created_at) }}</span>
+                    <span v-if="c.status === 'pending'" class="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{{ t('app.pending_moderation') }}</span>
+                  </div>
+                  <div v-if="editingCommentId === c.id" class="mt-1">
+                    <textarea v-model="editDraft" rows="3" class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100"></textarea>
+                    <div class="mt-2 flex gap-2">
+                      <button @click="saveEdit()" :disabled="reviewBusy || !editDraft.trim()" class="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{{ t('app.save') }}</button>
+                      <button @click="editingCommentId = null" class="px-3 py-1.5 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">{{ t('app.cancel') }}</button>
+                    </div>
+                  </div>
+                  <template v-else>
+                    <p class="mt-1 text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{{ c.body }}</p>
+                    <div class="mt-1 flex items-center gap-3 text-xs">
+                      <button v-if="c.is_own" @click="startEdit(c)" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.edit') }}</button>
+                      <button v-else @click="startReply(c)" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.reply') }}</button>
+                      <button v-if="c.is_own || currentUser?.is_admin" @click="removeComment(c)" class="text-red-600 dark:text-red-400 hover:underline">{{ t('app.delete') }}</button>
+                    </div>
+                  </template>
+                  <div v-if="replyToId === c.id" class="mt-2">
+                    <textarea v-model="replyDraft" rows="2" :placeholder="t('app.write_reply_placeholder')" class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100"></textarea>
+                    <div class="mt-2 flex gap-2">
+                      <button @click="submitReply()" :disabled="reviewBusy || !replyDraft.trim()" class="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{{ t('app.reply') }}</button>
+                      <button @click="replyToId = null" class="px-3 py-1.5 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">{{ t('app.cancel') }}</button>
+                    </div>
+                  </div>
+                </div>
+                <div v-for="r in c.replies" :key="r.id" class="ml-6 pl-4 border-l-2 border-gray-100 dark:border-gray-700">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ r.author_name }}</span>
+                    <span class="text-xs text-gray-400">{{ formatDate(r.created_at) }}</span>
+                    <span v-if="r.status === 'pending'" class="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{{ t('app.pending_moderation') }}</span>
+                  </div>
+                  <div v-if="editingCommentId === r.id" class="mt-1">
+                    <textarea v-model="editDraft" rows="2" class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-900 dark:text-gray-100"></textarea>
+                    <div class="mt-2 flex gap-2">
+                      <button @click="saveEdit()" :disabled="reviewBusy || !editDraft.trim()" class="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{{ t('app.save') }}</button>
+                      <button @click="editingCommentId = null" class="px-3 py-1.5 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">{{ t('app.cancel') }}</button>
+                    </div>
+                  </div>
+                  <template v-else>
+                    <p class="mt-1 text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{{ r.body }}</p>
+                    <div v-if="r.is_own || currentUser?.is_admin" class="mt-1 flex items-center gap-3 text-xs">
+                      <button v-if="r.is_own" @click="startEdit(r)" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.edit') }}</button>
+                      <button @click="removeComment(r)" class="text-red-600 dark:text-red-400 hover:underline">{{ t('app.delete') }}</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -487,22 +706,22 @@ watch(
           <ImageViewer v-else-if="isImage" :src="getDownloadUrl()" />
           
           <!-- PDF Viewer (pdfjs-dist) -->
-          <PdfViewer v-else-if="isPdf" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
+          <PdfViewer v-else-if="isPdf" :source="viewerSource" />
 
           <!-- DjVu Viewer -->
-          <DjvuViewer v-else-if="isDjvu" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
+          <DjvuViewer v-else-if="isDjvu" :source="viewerSource" />
 
           <!-- EPUB Viewer -->
-          <EpubViewer v-else-if="isEpub" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
+          <EpubViewer v-else-if="isEpub" :source="viewerSource" />
 
           <!-- FB2 Viewer (also handles .fb2.zip) -->
-          <Fb2Viewer v-else-if="isFb2" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
+          <Fb2Viewer v-else-if="isFb2" :source="viewerSource" />
 
           <!-- Markdown / plain text / code viewer -->
-          <MdViewer v-else-if="isMd || isTxt || isCode" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
+          <MdViewer v-else-if="isMd || isTxt || isCode" :source="viewerSource" />
 
           <!-- HTML Viewer (also handles .html.zip) -->
-          <HtmlViewer v-else-if="isHtml" :source="{ kind: 'live', path: item.path, hashId: item.hash_id }" />
+          <HtmlViewer v-else-if="isHtml" :source="viewerSource" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">
