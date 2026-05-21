@@ -9,7 +9,9 @@ const messages = {
       previous: 'Previous',
       next: 'Next',
       singlePage: 'Single page',
-      twoPages: 'Two pages'
+      twoPages: 'Two pages',
+      oddPagesRight: 'Odd pages right',
+      oddPagesLeft: 'Odd pages left'
     },
     app: {
       title: 'Urantia Library',
@@ -352,7 +354,9 @@ const messages = {
       previous: 'Назад',
       next: 'Вперёд',
       singlePage: 'Одна страница',
-      twoPages: 'Две страницы'
+      twoPages: 'Две страницы',
+      oddPagesRight: 'Нечётные справа',
+      oddPagesLeft: 'Нечётные слева'
     },
     app: {
       title: 'Библиотека Урантии',

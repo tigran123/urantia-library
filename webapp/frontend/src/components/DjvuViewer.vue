@@ -11,6 +11,8 @@ import {
   DocumentIcon,
   ArrowsPointingOutIcon,
   ArrowsPointingInIcon,
+  ArrowLongLeftIcon,
+  ArrowLongRightIcon,
 } from '@heroicons/vue/24/outline'
 import DjvuTocNode, { type DjvuOutlineNode } from './DjvuTocNode.vue'
 import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
@@ -29,6 +31,13 @@ const error = ref('')
 const imageUrl = ref('')
 const imageUrl2 = ref('')
 const isDoublePage = ref(false)
+// Whether odd page numbers fall on the right (evince default): spreads run
+// [1] [2,3] [4,5]…. When false, odd pages fall on the left: [1,2] [3,4]….
+const oddOnRight = ref(true)
+// The two pages of the spread currently on screen; either may be null (the
+// lone cover in odd-right mode, or a lone last page).
+const leftPage = ref<number | null>(null)
+const rightPage = ref<number | null>(null)
 const immersive = ref(false)
 const container = ref<HTMLElement | null>(null)
 
@@ -80,6 +89,12 @@ const onKeyDown = (e: KeyboardEvent) => {
   } else if (e.key === 'End') {
     e.preventDefault()
     if (container.value) container.value.scrollTop = container.value.scrollHeight
+  } else if (e.key === 'd') {
+    e.preventDefault()
+    toggleViewMode()
+  } else if (e.key === 'o') {
+    e.preventDefault()
+    toggleOddSide()
   }
 }
 
@@ -98,7 +113,7 @@ const saveProgress = async (page: number) => {
   try {
     await api.post('/progress', {
       hash_id: hashId.value,
-      location: JSON.stringify({ page: page, isDoublePage: isDoublePage.value })
+      location: JSON.stringify({ page: page, isDoublePage: isDoublePage.value, oddOnRight: oddOnRight.value })
     })
   } catch (e) {
     console.error('Failed to save progress', e)
@@ -113,6 +128,9 @@ const loadProgress = async () => {
       const data = JSON.parse(res.data.location)
       if (data.isDoublePage !== undefined) {
         isDoublePage.value = data.isDoublePage
+      }
+      if (typeof data.oddOnRight === 'boolean') {
+        oddOnRight.value = data.oddOnRight
       }
       return parseInt(data.page)
     } catch {
@@ -172,26 +190,41 @@ const fetchPageData = async (page: number) => {
   return URL.createObjectURL(blob)
 }
 
+// Snap an arbitrary page number to the spread that contains it. A spread may
+// have a null left slot (the lone cover in odd-right mode) or a null right
+// slot (a lone last page).
+const pageSpread = (p: number): { left: number | null; right: number | null } => {
+  if (!isDoublePage.value) return { left: p, right: null }
+  if (oddOnRight.value) {
+    if (p <= 1) return { left: null, right: 1 }
+    const base = p % 2 === 0 ? p : p - 1
+    return { left: base, right: base + 1 <= totalPages.value ? base + 1 : null }
+  }
+  const base = p % 2 === 1 ? p : p - 1
+  return { left: base, right: base + 1 <= totalPages.value ? base + 1 : null }
+}
+
 const fetchPage = async (page: number) => {
   if (page < 1 || page > totalPages.value) return
   loadingPage.value = true
   error.value = ''
-  
+
   try {
-    const promises = [fetchPageData(page)]
-    if (isDoublePage.value && page + 1 <= totalPages.value) {
-      promises.push(fetchPageData(page + 1))
-    }
-    
-    const results = await Promise.all(promises)
-    
+    const sp = pageSpread(page)
+    const [imgL, imgR] = await Promise.all([
+      sp.left !== null ? fetchPageData(sp.left) : Promise.resolve(''),
+      sp.right !== null ? fetchPageData(sp.right) : Promise.resolve(''),
+    ])
+
     if (imageUrl.value) URL.revokeObjectURL(imageUrl.value)
     if (imageUrl2.value) URL.revokeObjectURL(imageUrl2.value)
-    
-    imageUrl.value = results[0]
-    imageUrl2.value = results.length > 1 ? results[1] : ''
-    currentPage.value = page
-    saveProgress(page)
+
+    imageUrl.value = imgL
+    imageUrl2.value = imgR
+    leftPage.value = sp.left
+    rightPage.value = sp.right
+    currentPage.value = sp.left ?? sp.right ?? page
+    saveProgress(currentPage.value)
   } catch (err: any) {
     error.value = err.message || 'Failed to load page'
   } finally {
@@ -202,22 +235,18 @@ const fetchPage = async (page: number) => {
 // Turning the page resets the viewport: Next lands at the top of the new
 // page, Prev at the bottom — so the reader's eye position carries over.
 const nextPage = async () => {
-  const step = isDoublePage.value ? 2 : 1
-  if (currentPage.value < totalPages.value) {
-    let next = currentPage.value + step
-    if (next > totalPages.value) next = totalPages.value
-    await fetchPage(next)
+  const last = rightPage.value ?? leftPage.value ?? currentPage.value
+  if (last < totalPages.value) {
+    await fetchPage(last + 1)
     await nextTick()
     if (container.value) container.value.scrollTop = 0
   }
 }
 
 const prevPage = async () => {
-  const step = isDoublePage.value ? 2 : 1
-  if (currentPage.value > 1) {
-    let prev = currentPage.value - step
-    if (prev < 1) prev = 1
-    await fetchPage(prev)
+  const first = leftPage.value ?? rightPage.value ?? currentPage.value
+  if (first > 1) {
+    await fetchPage(first - 1)
     await nextTick()
     if (container.value) container.value.scrollTop = container.value.scrollHeight
   }
@@ -235,6 +264,12 @@ const goToPage = (event: Event) => {
 
 const toggleViewMode = () => {
   isDoublePage.value = !isDoublePage.value
+  fetchPage(currentPage.value)
+}
+
+const toggleOddSide = () => {
+  if (!isDoublePage.value) return
+  oddOnRight.value = !oddOnRight.value
   fetchPage(currentPage.value)
 }
 
@@ -271,7 +306,7 @@ watch(() => props.source, () => {
         <div class="flex items-center space-x-2">
           <button
             @click="prevPage"
-            :disabled="currentPage === 1 || loadingPage"
+            :disabled="(leftPage ?? rightPage ?? currentPage) <= 1 || loadingPage"
             :title="t('djvu.previous')"
             class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
@@ -279,7 +314,7 @@ watch(() => props.source, () => {
           </button>
           <button
             @click="nextPage"
-            :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
+            :disabled="(rightPage ?? leftPage ?? currentPage) >= totalPages || loadingPage"
             :title="t('djvu.next')"
             class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
@@ -298,7 +333,7 @@ watch(() => props.source, () => {
             :disabled="loadingPage"
             class="w-16 px-2 py-1 text-center border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
           />
-          <span v-if="isDoublePage && currentPage < totalPages">- {{ currentPage + 1 }}</span>
+          <span v-if="rightPage !== null && leftPage !== null">- {{ rightPage }}</span>
           <span>{{ t('djvu.of') }} {{ totalPages }}</span>
         </div>
         
@@ -311,6 +346,15 @@ watch(() => props.source, () => {
           >
             <DocumentIcon v-if="isDoublePage" class="h-5 w-5" />
             <BookOpenIcon v-else class="h-5 w-5" />
+          </button>
+          <button
+            @click="toggleOddSide"
+            :disabled="!isDoublePage || loadingPage"
+            :title="oddOnRight ? t('djvu.oddPagesRight') : t('djvu.oddPagesLeft')"
+            class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <ArrowLongRightIcon v-if="oddOnRight" class="h-5 w-5" />
+            <ArrowLongLeftIcon v-else class="h-5 w-5" />
           </button>
           <button
             @click="toggleImmersive"
@@ -357,12 +401,15 @@ watch(() => props.source, () => {
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
           </div>
 
-          <div v-if="imageUrl" class="flex flex-row items-center justify-center h-full w-full gap-1 md:gap-2">
+          <div v-if="imageUrl || imageUrl2" class="flex flex-row items-center justify-center h-full w-full gap-1 md:gap-2">
             <img
+              v-if="imageUrl"
               :src="imageUrl"
               :class="['max-h-full object-contain shadow-md bg-white', isDoublePage ? 'max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)]' : 'max-w-full']"
               alt="DjVu Page"
             />
+            <!-- Odd-right cover: blank left half so the cover page sits on the right. -->
+            <div v-else-if="isDoublePage && imageUrl2" class="w-[calc(50%-0.125rem)] md:w-[calc(50%-0.25rem)] h-full shrink-0"></div>
             <img
               v-if="isDoublePage && imageUrl2"
               :src="imageUrl2"
@@ -421,7 +468,7 @@ watch(() => props.source, () => {
         </button>
         <button
           @click="prevPage"
-          :disabled="currentPage === 1 || loadingPage"
+          :disabled="(leftPage ?? rightPage ?? currentPage) <= 1 || loadingPage"
           :title="t('djvu.previous')"
           class="absolute bottom-3 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
         >
@@ -429,14 +476,14 @@ watch(() => props.source, () => {
         </button>
         <button
           @click="nextPage"
-          :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
+          :disabled="(rightPage ?? leftPage ?? currentPage) >= totalPages || loadingPage"
           :title="t('djvu.next')"
           class="absolute bottom-3 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ChevronRightIcon class="h-6 w-6" />
         </button>
         <div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-black/15 text-white/80 text-sm select-none pointer-events-none">
-          {{ currentPage }}<span v-if="isDoublePage && currentPage < totalPages">–{{ currentPage + 1 }}</span> / {{ totalPages }}
+          {{ currentPage }}<span v-if="rightPage !== null && leftPage !== null">–{{ rightPage }}</span> / {{ totalPages }}
         </div>
       </template>
     </template>

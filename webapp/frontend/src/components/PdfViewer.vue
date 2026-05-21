@@ -14,6 +14,8 @@ import {
   ChevronRightIcon,
   ArrowsPointingOutIcon,
   ArrowsPointingInIcon,
+  ArrowLongLeftIcon,
+  ArrowLongRightIcon,
   ArrowsRightLeftIcon,
   ArrowsUpDownIcon,
   MagnifyingGlassPlusIcon,
@@ -46,6 +48,13 @@ const totalPages = ref(0)
 const currentPage = ref(1)
 const renderedScale = ref(1)
 const isDoublePage = ref(false)
+// Whether odd page numbers fall on the right (evince default): spreads run
+// [1] [2,3] [4,5]…. When false, odd pages fall on the left: [1,2] [3,4]….
+const oddOnRight = ref(true)
+// The two pages of the spread currently on screen; either may be null (the
+// lone cover in odd-right mode, or a lone last page).
+const leftPage = ref<number | null>(null)
+const rightPage = ref<number | null>(null)
 
 // 'width' / 'height': re-fit to container on every render (and on resize).
 // 'custom': user picked a zoom level; persist verbatim.
@@ -68,6 +77,7 @@ const saveProgress = () => {
           fitMode: fitMode.value,
           scale: customScale.value,
           isDoublePage: isDoublePage.value,
+          oddOnRight: oddOnRight.value,
         }),
       })
     } catch (e) {
@@ -76,7 +86,7 @@ const saveProgress = () => {
   }, 500)
 }
 
-const loadProgress = async (): Promise<{ page: number; fitMode?: 'width' | 'height' | 'custom'; scale?: number; isDoublePage?: boolean } | null> => {
+const loadProgress = async (): Promise<{ page: number; fitMode?: 'width' | 'height' | 'custom'; scale?: number; isDoublePage?: boolean; oddOnRight?: boolean } | null> => {
   if (!hashId.value) return null
   try {
     const res = await api.get(`/progress/${encodeURIComponent(hashId.value)}`)
@@ -124,11 +134,41 @@ const renderOne = async (page: PDFPageProxy, canvasEl: HTMLCanvasElement, effect
   return page.render({ canvasContext: ctx, viewport, canvas: canvasEl })
 }
 
+// Size a canvas to match refPage's dimensions and leave it blank white — used
+// for the empty left half of the lone cover spread in odd-right mode.
+const renderBlank = (canvasEl: HTMLCanvasElement, refPage: PDFPageProxy, effective: number) => {
+  const dpr = window.devicePixelRatio || 1
+  const viewport = refPage.getViewport({ scale: effective * dpr })
+  const cssViewport = refPage.getViewport({ scale: effective })
+  const ctx = canvasEl.getContext('2d')
+  if (!ctx) return
+  canvasEl.width = Math.floor(viewport.width)
+  canvasEl.height = Math.floor(viewport.height)
+  canvasEl.style.width = `${Math.floor(cssViewport.width)}px`
+  canvasEl.style.height = `${Math.floor(cssViewport.height)}px`
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, canvasEl.width, canvasEl.height)
+}
+
 const cancelTasks = () => {
   for (const t of activeTasks) {
     try { t.cancel() } catch { /* already done */ }
   }
   activeTasks = []
+}
+
+// Snap an arbitrary page number to the spread that contains it. A spread may
+// have a null left slot (the lone cover in odd-right mode) or a null right
+// slot (a lone last page).
+const pageSpread = (p: number): { left: number | null; right: number | null } => {
+  if (!isDoublePage.value) return { left: p, right: null }
+  if (oddOnRight.value) {
+    if (p <= 1) return { left: null, right: 1 }
+    const base = p % 2 === 0 ? p : p - 1
+    return { left: base, right: base + 1 <= totalPages.value ? base + 1 : null }
+  }
+  const base = p % 2 === 1 ? p : p - 1
+  return { left: base, right: base + 1 <= totalPages.value ? base + 1 : null }
 }
 
 const renderPage = async (n: number) => {
@@ -137,22 +177,30 @@ const renderPage = async (n: number) => {
   cancelTasks()
   loadingPage.value = true
   try {
-    const page = await pdfDoc.getPage(n)
-    const effective = fitMode.value === 'custom' ? customScale.value : computeFitScale(page)
+    const sp = pageSpread(n)
+    const anchor = sp.left ?? sp.right ?? n
+    const scalePage = await pdfDoc.getPage(anchor)
+    const effective = fitMode.value === 'custom' ? customScale.value : computeFitScale(scalePage)
     renderedScale.value = effective
 
-    const t1 = await renderOne(page, canvas.value, effective)
-    if (t1) activeTasks.push(t1)
-
-    let t2: RenderTask | null = null
-    if (isDoublePage.value && n + 1 <= totalPages.value && canvas2.value) {
-      const page2 = await pdfDoc.getPage(n + 1)
-      t2 = await renderOne(page2, canvas2.value, effective)
-      if (t2) activeTasks.push(t2)
+    if (sp.left !== null) {
+      const pageL = sp.left === anchor ? scalePage : await pdfDoc.getPage(sp.left)
+      const tL = await renderOne(pageL, canvas.value, effective)
+      if (tL) activeTasks.push(tL)
+    } else {
+      // Odd-right cover: blank left half so the cover page sits on the right.
+      renderBlank(canvas.value, scalePage, effective)
+    }
+    if (sp.right !== null && canvas2.value) {
+      const pageR = sp.right === anchor ? scalePage : await pdfDoc.getPage(sp.right)
+      const tR = await renderOne(pageR, canvas2.value, effective)
+      if (tR) activeTasks.push(tR)
     }
 
     await Promise.all(activeTasks.map(t => t.promise))
-    currentPage.value = n
+    leftPage.value = sp.left
+    rightPage.value = sp.right
+    currentPage.value = anchor
     saveProgress()
   } catch (e: any) {
     if (e?.name !== 'RenderingCancelledException') {
@@ -167,25 +215,26 @@ const renderPage = async (n: number) => {
 // page, Prev at the bottom — so the reader continues from where their eye
 // already was, not from where the previous page happened to be scrolled.
 const nextPage = async () => {
-  const step = isDoublePage.value ? 2 : 1
-  if (currentPage.value < totalPages.value) {
-    let next = currentPage.value + step
-    if (next > totalPages.value) next = totalPages.value
-    await renderPage(next)
+  const last = rightPage.value ?? leftPage.value ?? currentPage.value
+  if (last < totalPages.value) {
+    await renderPage(last + 1)
     if (container.value) container.value.scrollTop = 0
   }
 }
 const prevPage = async () => {
-  const step = isDoublePage.value ? 2 : 1
-  if (currentPage.value > 1) {
-    let prev = currentPage.value - step
-    if (prev < 1) prev = 1
-    await renderPage(prev)
+  const first = leftPage.value ?? rightPage.value ?? currentPage.value
+  if (first > 1) {
+    await renderPage(first - 1)
     if (container.value) container.value.scrollTop = container.value.scrollHeight
   }
 }
 const toggleViewMode = () => {
   isDoublePage.value = !isDoublePage.value
+  renderPage(currentPage.value)
+}
+const toggleOddSide = () => {
+  if (!isDoublePage.value) return
+  oddOnRight.value = !oddOnRight.value
   renderPage(currentPage.value)
 }
 
@@ -277,6 +326,12 @@ const onKeyDown = (e: KeyboardEvent) => {
   } else if (e.key === 'End') {
     e.preventDefault()
     if (container.value) container.value.scrollTop = container.value.scrollHeight
+  } else if (e.key === 'd') {
+    e.preventDefault()
+    toggleViewMode()
+  } else if (e.key === 'o') {
+    e.preventDefault()
+    toggleOddSide()
   }
 }
 
@@ -318,6 +373,9 @@ const initPdf = async () => {
     }
     if (typeof saved?.isDoublePage === 'boolean') {
       isDoublePage.value = saved.isDoublePage
+    }
+    if (typeof saved?.oddOnRight === 'boolean') {
+      oddOnRight.value = saved.oddOnRight
     }
     const startPage = saved && saved.page >= 1 && saved.page <= totalPages.value ? saved.page : 1
     await renderPage(startPage)
@@ -397,7 +455,7 @@ onBeforeUnmount(() => {
       <div class="flex items-center gap-1 sm:gap-2">
         <button
           @click="prevPage"
-          :disabled="currentPage <= 1 || loadingPage"
+          :disabled="(leftPage ?? rightPage ?? currentPage) <= 1 || loadingPage"
           :title="t('djvu.previous')"
           class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
@@ -405,7 +463,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           @click="nextPage"
-          :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
+          :disabled="(rightPage ?? leftPage ?? currentPage) >= totalPages || loadingPage"
           :title="t('djvu.next')"
           class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
@@ -424,7 +482,7 @@ onBeforeUnmount(() => {
           :disabled="loadingPage"
           class="w-16 px-2 py-1 text-center border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
         />
-        <span v-if="isDoublePage && currentPage < totalPages">- {{ currentPage + 1 }}</span>
+        <span v-if="rightPage !== null && leftPage !== null">- {{ rightPage }}</span>
         <span>{{ t('djvu.of') }} {{ totalPages }}</span>
       </div>
 
@@ -470,6 +528,15 @@ onBeforeUnmount(() => {
         >
           <DocumentIcon v-if="isDoublePage" class="h-5 w-5" />
           <BookOpenIcon v-else class="h-5 w-5" />
+        </button>
+        <button
+          @click="toggleOddSide"
+          :disabled="!isDoublePage || loadingPage"
+          :title="oddOnRight ? t('djvu.oddPagesRight') : t('djvu.oddPagesLeft')"
+          class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors disabled:opacity-50"
+        >
+          <ArrowLongRightIcon v-if="oddOnRight" class="h-5 w-5" />
+          <ArrowLongLeftIcon v-else class="h-5 w-5" />
         </button>
         <button @click="toggleImmersive" :title="t('app.immersive_enter')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors">
           <ArrowsPointingOutIcon class="h-5 w-5" />
@@ -518,7 +585,7 @@ onBeforeUnmount(() => {
           <canvas ref="canvas" class="shadow-md bg-white"></canvas>
           <canvas
             ref="canvas2"
-            v-show="isDoublePage && currentPage < totalPages"
+            v-show="rightPage !== null"
             class="shadow-md bg-white"
           ></canvas>
         </div>
@@ -574,7 +641,7 @@ onBeforeUnmount(() => {
 
       <button
         @click="prevPage"
-        :disabled="currentPage <= 1 || loadingPage"
+        :disabled="(leftPage ?? rightPage ?? currentPage) <= 1 || loadingPage"
         :title="t('djvu.previous')"
         class="absolute bottom-3 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
       >
@@ -583,7 +650,7 @@ onBeforeUnmount(() => {
 
       <button
         @click="nextPage"
-        :disabled="(isDoublePage ? currentPage >= totalPages - 1 && totalPages > 1 : currentPage >= totalPages) || loadingPage"
+        :disabled="(rightPage ?? leftPage ?? currentPage) >= totalPages || loadingPage"
         :title="t('djvu.next')"
         class="absolute bottom-3 right-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
       >
@@ -591,7 +658,7 @@ onBeforeUnmount(() => {
       </button>
 
       <div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-full bg-black/15 text-white/80 text-sm select-none pointer-events-none">
-        {{ currentPage }}<span v-if="isDoublePage && currentPage < totalPages">–{{ currentPage + 1 }}</span> / {{ totalPages }}
+        {{ currentPage }}<span v-if="rightPage !== null && leftPage !== null">–{{ rightPage }}</span> / {{ totalPages }}
       </div>
     </template>
   </div>
