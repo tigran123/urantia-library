@@ -9,12 +9,14 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     email: EmailStr
     avatar_url: Optional[str] = None
+    real_name: Optional[str] = None
     search_per_page: Optional[int] = None
     is_admin: bool = False
     clearance: int = 0
 
 class UserSettingsUpdate(BaseModel):
     search_per_page: Optional[int] = None
+    real_name: Optional[str] = None
 
 class AdminUserSummary(BaseModel):
     id: int
@@ -154,6 +156,7 @@ class UserLogin(BaseModel):
 class UserSetPassword(BaseModel):
     token: str
     password: str
+    real_name: Optional[str] = None
 
 class FavoriteCreate(BaseModel):
     hash_id: str

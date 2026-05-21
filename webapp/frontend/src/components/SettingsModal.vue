@@ -2,12 +2,13 @@
 import { ref, computed, watch } from 'vue'
 import { XMarkIcon } from '@heroicons/vue/24/outline'
 import api from '../api'
+import { userInitials } from '../userDisplay'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
 
 const props = defineProps<{
-  user: { email: string, avatar_url?: string, search_per_page?: number | null } | null,
+  user: { email: string, avatar_url?: string, real_name?: string | null, search_per_page?: number | null } | null,
   isOpen: boolean
 }>()
 
@@ -31,13 +32,31 @@ const PER_PAGE_OPTIONS = [10, 25, 50, 100, 200]
 const searchPerPage = ref<number>(50)
 const isSavingSearch = ref(false)
 
+const realName = ref('')
+const isSavingPersonalInfo = ref(false)
+
 watch(
-  () => [props.isOpen, props.user?.search_per_page],
+  () => [props.isOpen, props.user?.search_per_page, props.user?.real_name],
   () => {
     searchPerPage.value = props.user?.search_per_page ?? 50
+    realName.value = props.user?.real_name ?? ''
   },
   { immediate: true }
 )
+
+const savePersonalInfo = async () => {
+  isSavingPersonalInfo.value = true
+  try {
+    const response = await api.put('/users/me/settings', { real_name: realName.value.trim() })
+    emit('update-user', response.data)
+    emit('close')
+  } catch (error) {
+    console.error('Failed to save personal information', error)
+    alert('Failed to save settings')
+  } finally {
+    isSavingPersonalInfo.value = false
+  }
+}
 
 const saveSearchSettings = async () => {
   isSavingSearch.value = true
@@ -131,8 +150,25 @@ const close = () => {
           <div v-if="activeTab === 'Personal Information'">
             <h4 class="text-md font-medium text-gray-900 dark:text-white mb-4">{{ t('settings.personal_info') }}</h4>
             <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">{{ t('settings.email') }} {{ user?.email }}</p>
-            <div class="mt-4 p-4 border border-dashed border-gray-300 dark:border-gray-600 rounded-md text-center">
-              <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('settings.future_extensions') }}</p>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              {{ t('settings.full_name') }}
+            </label>
+            <input
+              v-model="realName"
+              type="text"
+              maxlength="100"
+              autocomplete="name"
+              class="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+            />
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">{{ t('settings.full_name_help') }}</p>
+            <div class="mt-6 flex justify-end">
+              <button
+                @click="savePersonalInfo"
+                :disabled="isSavingPersonalInfo"
+                class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {{ isSavingPersonalInfo ? t('settings.saving') : t('settings.save') }}
+              </button>
             </div>
           </div>
           
@@ -170,7 +206,7 @@ const close = () => {
                   alt="Avatar"
                 />
                 <div v-else class="h-24 w-24 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-                  <span class="text-gray-500 dark:text-gray-400 text-2xl">{{ user?.email?.charAt(0).toUpperCase() }}</span>
+                  <span class="text-gray-500 dark:text-gray-300 text-2xl font-semibold">{{ userInitials(user) }}</span>
                 </div>
               </div>
               <label class="block">

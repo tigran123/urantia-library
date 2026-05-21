@@ -342,6 +342,7 @@ async def get_me(current_user: models.User = Depends(get_current_user)):
     return {
         "email": current_user.email,
         "avatar_url": current_user.avatar_url,
+        "real_name": current_user.real_name,
         "search_per_page": current_user.search_per_page,
         "is_admin": bool(current_user.is_admin),
         "clearance": int(current_user.clearance or 0),
@@ -355,6 +356,10 @@ async def update_settings(
 ):
     if settings.search_per_page is not None:
         current_user.search_per_page = max(10, min(settings.search_per_page, 200))
+    if settings.real_name is not None:
+        # Empty (or whitespace-only) clears the name; otherwise trim and cap length.
+        cleaned = settings.real_name.strip()[:100]
+        current_user.real_name = cleaned or None
     db.commit()
     db.refresh(current_user)
     return current_user
@@ -840,9 +845,11 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
 
     # Create active user
     hashed_password = get_password_hash(data.password)
+    real_name = (data.real_name or "").strip()[:100] or None
     new_user = models.User(
         email=db_req.email,
         hashed_password=hashed_password,
+        real_name=real_name,
         is_active=True
     )
     db.add(new_user)
@@ -3826,9 +3833,12 @@ MODERATION_DIGEST_INTERVAL_HOURS = 6
 _MODERATION_META_KEY = "moderation_email_last_sent_at"
 
 
-def _author_name(email: str) -> str:
-    """Public display name for a commenter — the local-part of their email, so
-    we never expose the full address to other users."""
+def _author_name(email: str, real_name: str | None = None) -> str:
+    """Public display name for a commenter — their chosen real name if they set
+    one, otherwise the local-part of their email (so we never expose the full
+    address to other users)."""
+    if real_name and real_name.strip():
+        return real_name.strip()
     return (email or "user").split("@", 1)[0]
 
 
@@ -3895,8 +3905,9 @@ async def get_comments(hash_id: str, current_user: models.User = Depends(get_cur
         all_uids.update(r.user_id for r in reps)
     names = {}
     if all_uids:
-        names = {uid: _author_name(email) for uid, email in db.query(
-            models.User.id, models.User.email).filter(models.User.id.in_(all_uids)).all()}
+        names = {uid: _author_name(email, real_name) for uid, email, real_name in db.query(
+            models.User.id, models.User.email, models.User.real_name
+        ).filter(models.User.id.in_(all_uids)).all()}
     ratings = {}
     if tops:
         ratings = dict(db.query(models.BookRating.user_id, models.BookRating.rating).filter(
@@ -4038,8 +4049,9 @@ async def admin_list_comments(
         ).filter(models.BookLocation.hash_id.in_(book_ids)).all():
             paths.setdefault(hid, sp)
     user_ids = {r.user_id for r in rows}
-    names = {uid: _author_name(email) for uid, email in db.query(
-        models.User.id, models.User.email).filter(models.User.id.in_(user_ids)).all()} if user_ids else {}
+    names = {uid: _author_name(email, real_name) for uid, email, real_name in db.query(
+        models.User.id, models.User.email, models.User.real_name
+    ).filter(models.User.id.in_(user_ids)).all()} if user_ids else {}
     parent_ids = {r.parent_id for r in rows if r.parent_id}
     parents = dict(db.query(models.BookComment.id, models.BookComment.body).filter(
         models.BookComment.id.in_(parent_ids)).all()) if parent_ids else {}

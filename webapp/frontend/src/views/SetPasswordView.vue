@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/vue/24/outline'
 import api from '../api'
 
+const realName = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const showPassword = ref(false)
@@ -37,6 +38,7 @@ const handleSetPassword = async () => {
     await api.post('/set-password', {
       token: token.value,
       password: password.value,
+      real_name: realName.value.trim() || null,
     })
     successMsg.value = 'Password set successfully! You can now log in.'
     password.value = ''
@@ -69,6 +71,18 @@ const handleSetPassword = async () => {
     </div>
 
     <form v-if="!successMsg && token" @submit.prevent="handleSetPassword" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-gray-400 font-normal">(optional)</span></label>
+        <input
+          v-model="realName"
+          type="text"
+          maxlength="100"
+          autocomplete="name"
+          class="w-full px-3 py-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
+        />
+        <p class="text-xs text-gray-500 mt-1">Shown next to your comments. You can change it later in Settings.</p>
+      </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">New Password</label>
         <div class="relative">

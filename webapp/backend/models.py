@@ -13,6 +13,7 @@ class User(Base):
     is_admin = Column(Boolean, nullable=False, default=False)
     clearance = Column(Integer, nullable=False, default=0)
     avatar_url = Column(String, nullable=True)
+    real_name = Column(String, nullable=True)
     search_per_page = Column(Integer, nullable=True)
 
 class RegistrationRequest(Base):

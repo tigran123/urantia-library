@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, UserCircleIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon } from '@heroicons/vue/24/outline'
+import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon } from '@heroicons/vue/24/outline'
 import api from './api'
+import { userInitials } from './userDisplay'
 import { useI18n } from 'vue-i18n'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import ThemeSwitcher from './components/ThemeSwitcher.vue'
@@ -17,7 +18,7 @@ const searchInputMobile = ref<HTMLInputElement | null>(null)
 const router = useRouter()
 const route = useRoute()
 
-const currentUser = ref<{ email: string, avatar_url?: string, search_per_page?: number | null, is_admin?: boolean, clearance?: number } | null>(null)
+const currentUser = ref<{ email: string, avatar_url?: string, real_name?: string | null, search_per_page?: number | null, is_admin?: boolean, clearance?: number } | null>(null)
 provide('currentUser', currentUser)
 const isProfileMenuOpen = ref(false)
 const isSettingsModalOpen = ref(false)
@@ -179,7 +180,10 @@ const handleLogout = async () => {
             <div class="relative ml-2">
               <button @click="isProfileMenuOpen = !isProfileMenuOpen" class="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none">
                 <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-8 w-8 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
-                <UserCircleIcon v-else class="h-7 w-7" />
+                <span
+                  v-else
+                  class="h-8 w-8 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-xs font-semibold text-gray-600 dark:text-gray-200"
+                >{{ userInitials(currentUser) }}</span>
               </button>
 
               <!-- Invisible Overlay to handle clicking outside -->

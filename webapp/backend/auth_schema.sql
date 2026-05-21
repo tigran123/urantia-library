@@ -12,6 +12,7 @@ CREATE TABLE users (
     is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     clearance INTEGER NOT NULL DEFAULT 0,
     avatar_url VARCHAR,
+    real_name VARCHAR,                  -- Optional display name shown on comments instead of the email local-part
     search_per_page INTEGER DEFAULT 50
 );
 
