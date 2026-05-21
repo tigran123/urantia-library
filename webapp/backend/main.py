@@ -455,6 +455,18 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                         item_data["author"] = book.author
                     if book.description:
                         item_data["description"] = book.description
+                    if book.publisher:
+                        item_data["publisher"] = book.publisher
+                    if book.published:
+                        item_data["published"] = book.published
+                    if book.tags:
+                        item_data["tags"] = book.tags
+                    if book.series:
+                        item_data["series"] = book.series
+                    if book.languages:
+                        item_data["languages"] = book.languages
+                    if book.identifiers:
+                        item_data["identifiers"] = book.identifiers
                     item_data["clearance"] = int(book.clearance or 0)
                     item_data["import_date"] = book.import_date
                     if current_user.is_admin:

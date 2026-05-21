@@ -108,7 +108,13 @@ const onEditorSaved = (updated: any) => {
   if (!item.value || item.value.hash_id !== updated.id) return
   item.value.title = updated.title
   item.value.author = updated.author
+  item.value.publisher = updated.publisher
+  item.value.published = updated.published
   item.value.description = updated.description
+  item.value.tags = updated.tags
+  item.value.series = updated.series
+  item.value.languages = updated.languages
+  item.value.identifiers = updated.identifiers
   item.value.clearance = updated.clearance
   if (updated.title) document.title = updated.title
   // The editor can rename the file; if our current path is no longer one of
@@ -268,24 +274,6 @@ const viewerSource = computed(() => ({
   path: item.value?.path ?? '',
   hashId: item.value?.hash_id ?? '',
 }))
-
-const fb2Meta = ref<{ title: string; authors: string[] } | null>(null)
-
-const loadFb2Meta = async (path: string) => {
-  fb2Meta.value = null
-  try {
-    const res = await api.get('/fb2-metadata', { params: { path } })
-    fb2Meta.value = res.data
-  } catch (e) {
-    console.error('Failed to load FB2 metadata', e)
-  }
-}
-
-watch(
-  () => item.value && isFb2.value ? item.value.path : null,
-  (p) => { if (p) loadFb2Meta(p); else fb2Meta.value = null },
-  { immediate: true }
-)
 
 const textPreview = ref<{ text: string; html: string }>({ text: '', html: '' })
 
@@ -532,41 +520,65 @@ const submitReply = async () => {
             </div>
           </div>
           
-          <!-- Metadata Table -->
-          <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm">
-            <table class="w-full text-sm text-left">
+          <!-- Details (collapsible metadata panel; collapsed by default) -->
+          <details class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group overflow-hidden">
+            <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between">
+              <span>{{ t('app.details') }}</span>
+              <span class="transition-transform group-open:rotate-90 text-gray-400">›</span>
+            </summary>
+            <table class="w-full text-sm text-left border-t border-gray-200 dark:border-gray-700">
               <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.format') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400 uppercase font-semibold">{{ displayFormat }}</td>
+                <tr v-if="item.title" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.book_title') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ item.title }}</td>
                 </tr>
-                <tr v-if="fb2Meta?.title" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.book_title') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ fb2Meta.title }}</td>
-                </tr>
-                <tr v-if="fb2Meta?.authors?.length" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.author') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ fb2Meta.authors.join(', ') }}</td>
+                <tr v-if="item.author" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.author') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ item.author }}</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.size') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatBytes(item.size, 0) }} ({{ item.size }} {{ t('app.bytes') }})</td>
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.format') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400 uppercase font-semibold">{{ displayFormat }}</td>
+                </tr>
+                <tr v-if="item.publisher" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.field_publisher') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ item.publisher }}</td>
+                </tr>
+                <tr v-if="item.published" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.field_published') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ item.published }}</td>
+                </tr>
+                <tr v-if="item.series" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.field_series') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ item.series }}</td>
+                </tr>
+                <tr v-if="item.tags" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.field_tags') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ item.tags }}</td>
+                </tr>
+                <tr v-if="item.languages" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.field_languages') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ item.languages }}</td>
+                </tr>
+                <tr v-if="item.identifiers" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.field_identifiers') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400 break-all">{{ item.identifiers }}</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.imported') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">{{ formatDate(item.import_date) }}</td>
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.size') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ formatBytes(item.size, 0) }} ({{ item.size }} {{ t('app.bytes') }})</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('app.location') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.location') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">
                     <router-link :to="`/browse/${currentPath.split('/').slice(0, -1).join('/')}`" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline">
                       /{{ currentPath.split('/').slice(0, -1).join('/') || 'Root' }}
                     </router-link>
                   </td>
                 </tr>
                 <tr v-if="currentUser?.is_admin && item.hash_id" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-4 font-medium text-gray-900 dark:text-gray-100">{{ t('admin.integrity.last_verified') }}</th>
-                  <td class="px-6 py-4 text-gray-600 dark:text-gray-400">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('admin.integrity.last_verified') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">
                     <template v-if="item.last_verified_at">
                       {{ formatDate(item.last_verified_at) }}
                       <span
@@ -585,17 +597,16 @@ const submitReply = async () => {
                     <template v-else>{{ t('admin.integrity.never') }}</template>
                   </td>
                 </tr>
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.imported') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ formatDate(item.import_date) }}</td>
+                </tr>
               </tbody>
             </table>
-          </div>
-
-          <!-- Description (collapsible; shown for any book with a description) -->
-          <details v-if="item.description" class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group">
-            <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between rounded-lg">
-              <span>{{ t('app.description') }}</span>
-              <span class="transition-transform group-open:rotate-90 text-gray-400">›</span>
-            </summary>
-            <div class="px-6 pb-5 prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 whitespace-pre-wrap" v-html="item.description"></div>
+            <div v-if="item.description" class="px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+              <div class="font-medium text-gray-900 dark:text-gray-100 mb-2">{{ t('app.description') }}</div>
+              <div class="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 whitespace-pre-wrap" v-html="item.description"></div>
+            </div>
           </details>
 
           <!-- Actions -->
