@@ -3,6 +3,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import {
+  Bars3Icon,
+  ChevronDoubleLeftIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   BookOpenIcon,
@@ -10,6 +12,7 @@ import {
   ArrowsPointingOutIcon,
   ArrowsPointingInIcon,
 } from '@heroicons/vue/24/outline'
+import DjvuTocNode, { type DjvuOutlineNode } from './DjvuTocNode.vue'
 import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -29,6 +32,9 @@ const isDoublePage = ref(false)
 const immersive = ref(false)
 const container = ref<HTMLElement | null>(null)
 
+const toc = ref<DjvuOutlineNode[]>([])
+const tocOpen = ref(false)
+
 const toggleImmersive = () => { immersive.value = !immersive.value }
 
 // Lock body scroll while immersive so accidental swipes near the page edges
@@ -37,6 +43,7 @@ const toggleImmersive = () => { immersive.value = !immersive.value }
 watch(immersive, (v) => {
   document.body.style.overflow = v ? 'hidden' : ''
   document.documentElement.style.overflow = v ? 'hidden' : ''
+  if (v) tocOpen.value = false
 })
 
 // PgDn/PgUp scroll the viewport within the current page; only when already
@@ -117,14 +124,28 @@ const loadProgress = async () => {
   }
 }
 
+// Outline is best-effort: a missing or broken outline must never block the
+// page from rendering, so this runs fire-and-forget and only logs on failure.
+const fetchOutline = async () => {
+  try {
+    const urls = viewerUrls(props.source)
+    const res = await api.get(urls.djvuOutline, { params: viewerParams(props.source) })
+    toc.value = res.data.toc || []
+  } catch (e) {
+    console.error('Failed to load DjVu outline', e)
+  }
+}
+
 const fetchMetadata = async () => {
   loadingMetadata.value = true
   error.value = ''
+  toc.value = []
   try {
     const urls = viewerUrls(props.source)
     const res = await api.get(urls.djvuMeta, { params: viewerParams(props.source) })
     totalPages.value = res.data.total_pages
     if (totalPages.value > 0) {
+      fetchOutline()
       const savedPage = await loadProgress()
       await fetchPage(savedPage && savedPage <= totalPages.value ? savedPage : 1)
     }
@@ -133,6 +154,12 @@ const fetchMetadata = async () => {
   } finally {
     loadingMetadata.value = false
   }
+}
+
+const onTocNavigate = (page: number) => {
+  if (!page || page < 1 || page > totalPages.value) return
+  fetchPage(page)
+  if (immersive.value) tocOpen.value = false
 }
 
 const fetchPageData = async (page: number) => {
@@ -223,7 +250,7 @@ watch(() => props.source, () => {
 <template>
   <div
     :class="[
-      'djvu-viewer flex flex-col items-center bg-gray-100 dark:bg-gray-800 w-full overscroll-contain',
+      'djvu-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full overscroll-contain',
       immersive
         ? 'fixed inset-0 z-50 h-dvh rounded-none'
         : 'relative rounded-lg shadow djvu-resizable'
@@ -295,24 +322,54 @@ watch(() => props.source, () => {
         </div>
       </div>
       
-      <!-- Viewer area -->
-      <div ref="container" class="relative w-full flex-grow overflow-auto flex items-center justify-center bg-gray-200 dark:bg-gray-900 p-2 lg:p-4">
-        <div v-if="loadingPage" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
-          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-        </div>
-        
-        <div v-if="imageUrl" class="flex flex-row items-center justify-center h-full w-full gap-1 md:gap-2">
-          <img
-            :src="imageUrl"
-            :class="['max-h-full object-contain shadow-md bg-white', isDoublePage ? 'max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)]' : 'max-w-full']"
-            alt="DjVu Page"
-          />
-          <img
-            v-if="isDoublePage && imageUrl2"
-            :src="imageUrl2"
-            class="max-h-full max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)] object-contain shadow-md bg-white"
-            alt="DjVu Page 2"
-          />
+      <!-- TOC sidebar + viewer area -->
+      <div class="flex flex-row flex-grow min-h-0 overflow-hidden" :class="immersive ? '' : 'rounded-b-lg'">
+        <aside
+          v-if="!immersive"
+          class="shrink-0 flex flex-col border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 transition-[width] duration-200"
+          :class="tocOpen ? 'w-64' : 'w-9'"
+        >
+          <div class="flex items-center p-1.5 border-b border-gray-200 dark:border-gray-700" :class="tocOpen ? 'justify-between' : 'justify-center'">
+            <span v-if="tocOpen" class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ t('app.toc') }}</span>
+            <button
+              @click="tocOpen = !tocOpen"
+              class="p-1 rounded text-gray-600 hover:bg-gray-200 dark:text-gray-300 dark:hover:bg-gray-700"
+              :title="tocOpen ? t('app.toc_collapse') : t('app.toc_expand')"
+            >
+              <ChevronDoubleLeftIcon v-if="tocOpen" class="w-4 h-4" />
+              <Bars3Icon v-else class="w-4 h-4" />
+            </button>
+          </div>
+          <nav v-if="tocOpen" class="flex-grow overflow-auto p-1 text-gray-800 dark:text-gray-200">
+            <p v-if="!toc.length" class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">{{ t('app.toc_empty') }}</p>
+            <DjvuTocNode
+              v-for="(entry, i) in toc"
+              :key="i"
+              :entry="entry"
+              :level="0"
+              @navigate="onTocNavigate"
+            />
+          </nav>
+        </aside>
+
+        <div ref="container" class="relative flex-grow min-w-0 overflow-auto flex items-center justify-center bg-gray-200 dark:bg-gray-900 p-2 lg:p-4">
+          <div v-if="loadingPage" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+          </div>
+
+          <div v-if="imageUrl" class="flex flex-row items-center justify-center h-full w-full gap-1 md:gap-2">
+            <img
+              :src="imageUrl"
+              :class="['max-h-full object-contain shadow-md bg-white', isDoublePage ? 'max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)]' : 'max-w-full']"
+              alt="DjVu Page"
+            />
+            <img
+              v-if="isDoublePage && imageUrl2"
+              :src="imageUrl2"
+              class="max-h-full max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)] object-contain shadow-md bg-white"
+              alt="DjVu Page 2"
+            />
+          </div>
         </div>
       </div>
 
@@ -320,6 +377,41 @@ watch(() => props.source, () => {
            so they stay pinned to the viewport when zoom modes (fit-width)
            later cause the page to overflow vertically. -->
       <template v-if="immersive">
+        <aside
+          v-if="tocOpen"
+          class="absolute inset-y-0 left-0 z-40 w-64 max-w-[80%] bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-xl flex flex-col"
+        >
+          <div class="flex items-center justify-between p-1.5 border-b border-gray-200 dark:border-gray-700">
+            <span class="px-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ t('app.toc') }}</span>
+            <button
+              @click="tocOpen = false"
+              class="p-1 rounded text-gray-600 hover:bg-gray-200 dark:text-gray-300 dark:hover:bg-gray-700"
+              :title="t('app.toc_collapse')"
+            >
+              <ChevronDoubleLeftIcon class="w-4 h-4" />
+            </button>
+          </div>
+          <nav class="flex-grow overflow-auto p-1 text-gray-800 dark:text-gray-200">
+            <p v-if="!toc.length" class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">{{ t('app.toc_empty') }}</p>
+            <DjvuTocNode
+              v-for="(entry, i) in toc"
+              :key="i"
+              :entry="entry"
+              :level="0"
+              @navigate="onTocNavigate"
+            />
+          </nav>
+        </aside>
+
+        <button
+          v-if="!tocOpen"
+          @click="tocOpen = true"
+          :title="t('app.toc_expand')"
+          class="absolute top-2 left-2 z-40 p-2 rounded-full bg-black/15 hover:bg-black/40 text-white/80 hover:text-white"
+        >
+          <Bars3Icon class="h-5 w-5" />
+        </button>
+
         <button
           @click="toggleImmersive"
           :title="t('app.immersive_exit')"

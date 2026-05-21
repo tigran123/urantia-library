@@ -1812,6 +1812,20 @@ async def admin_staging_djvu_metadata(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/admin/books/upload/{staging_id}/djvu-outline")
+async def admin_staging_djvu_outline(
+    staging_id: str,
+    _admin: models.User = Depends(require_admin),
+):
+    file_path = _get_staging_file(staging_id)
+    if not file_path.lower().endswith(".djvu"):
+        raise HTTPException(status_code=400, detail="Not a DjVu file")
+    try:
+        return {"toc": extract_djvu_outline(file_path)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/admin/books/upload/{staging_id}/djvu-page")
 async def admin_staging_djvu_page(
     staging_id: str,
@@ -3270,6 +3284,34 @@ def sanitize_djvu_path(path: str) -> str:
         raise HTTPException(status_code=400, detail="Not a DjVu file")
     return target_path
 
+
+def _parse_djvu_bookmark(node) -> dict:
+    """Convert one djvu sexpr bookmark node into a TOC entry.
+
+    A node is a native tuple (title, link, *children); `link` is "#<page>"
+    where a numeric page is 1-based (matching doc.pages[page-1])."""
+    title = str(node[0]) if len(node) > 0 else ""
+    link = node[1] if len(node) > 1 else ""
+    page = None
+    if isinstance(link, str) and link.startswith("#") and link[1:].isdigit():
+        page = int(link[1:])
+    children = [_parse_djvu_bookmark(c) for c in node[2:]]
+    return {"title": title, "page": page, "children": children}
+
+
+def extract_djvu_outline(file_path: str) -> list:
+    """Extract the embedded outline (bookmarks) of a DjVu file as a nested
+    list of {title, page, children}. Returns [] when the file has none."""
+    ctx = djvu.decode.Context()
+    doc = ctx.new_document(djvu.decode.FileURI(file_path))
+    doc.decoding_job.wait()
+    outline = doc.outline
+    outline.wait()
+    items = list(outline.sexpr)  # [] when the file has no outline
+    # items[0] is Symbol('bookmarks'); the rest are bookmark entries.
+    return [_parse_djvu_bookmark(e.value) for e in items[1:]]
+
+
 @app.get("/api/djvu-metadata")
 async def djvu_metadata(
     path: str,
@@ -3284,6 +3326,19 @@ async def djvu_metadata(
         doc.decoding_job.wait()
         total_pages = len(doc.pages)
         return {"total_pages": total_pages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/djvu-outline")
+async def djvu_outline(
+    path: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    file_path = sanitize_djvu_path(path)
+    assert_can_read_path(file_path, current_user, db)
+    try:
+        return {"toc": extract_djvu_outline(file_path)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -19,6 +19,7 @@ export const viewerUrls = (s: ViewerSource) => {
       htmlContent: `${base}/html-content`,
       djvuMeta: `${base}/djvu-metadata`,
       djvuPage: `${base}/djvu-page`,
+      djvuOutline: `${base}/djvu-outline`,
     }
   }
   return {
@@ -28,6 +29,7 @@ export const viewerUrls = (s: ViewerSource) => {
     htmlContent: '/html-content',
     djvuMeta: '/djvu-metadata',
     djvuPage: '/djvu-page',
+    djvuOutline: '/djvu-outline',
   }
 }
 
