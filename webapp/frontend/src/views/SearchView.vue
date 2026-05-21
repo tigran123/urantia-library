@@ -163,10 +163,20 @@ const loadFavorites = async () => {
   }
 }
 
+// Guests may search freely, but a per-user action nudges them to sign in.
+const requireAuth = (): boolean => {
+  if (!currentUser.value) {
+    router.push({ name: 'login' })
+    return false
+  }
+  return true
+}
+
 const toggleFavorite = async (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
   if (!item.hash_id) return
+  if (!requireAuth()) return
   const id = item.hash_id
   try {
     const newIds = new Set(favoriteIds.value)

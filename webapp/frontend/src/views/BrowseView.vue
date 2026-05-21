@@ -100,6 +100,15 @@ const viewMode = ref<'grid' | 'list'>(savedViewMode === 'list' ? 'list' : 'grid'
 const favoriteIds = ref<Set<string>>(new Set())
 const dirFavorites = ref<Set<string>>(new Set())
 
+// Guests may browse freely, but a per-user action nudges them to sign in.
+const requireAuth = (): boolean => {
+  if (!currentUser.value) {
+    router.push({ name: 'login' })
+    return false
+  }
+  return true
+}
+
 const loadFavorites = async () => {
   try {
     const res = await api.get('/favorites')
@@ -123,6 +132,7 @@ const toggleFavorite = async (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
   if (!item.hash_id) return
+  if (!requireAuth()) return
 
   try {
     const newIds = new Set(favoriteIds.value)
@@ -145,6 +155,7 @@ const toggleDirFavorite = async (path: string, event?: Event) => {
     event.stopPropagation()
   }
   if (!path) return
+  if (!requireAuth()) return
   try {
     const newSet = new Set(dirFavorites.value)
     if (dirFavorites.value.has(path)) {

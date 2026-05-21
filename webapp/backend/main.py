@@ -254,6 +254,38 @@ def require_admin(current_user: models.User = Depends(get_current_user)):
     return current_user
 
 
+async def get_optional_user(
+    access_token: str = Cookie(None), db: Session = Depends(get_db)
+) -> models.User | None:
+    """Like `get_current_user`, but returns `None` instead of raising 401 when
+    there is no valid session. Used by guest-reachable endpoints: a `None` user
+    is an anonymous visitor, treated as clearance 0 (see `_clearance_of` /
+    `_is_admin`). Never raises."""
+    if not access_token:
+        return None
+    try:
+        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            return None
+    except jwt.PyJWTError:
+        return None
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
+def _clearance_of(user: models.User | None) -> int:
+    """Clearance for a possibly-anonymous user; guests (`None`) are clearance 0."""
+    return (user.clearance or 0) if user else 0
+
+
+def _is_admin(user: models.User | None) -> bool:
+    """True only for a signed-in admin; guests (`None`) are never admin."""
+    return bool(user and user.is_admin)
+
+
 def _book_clearance(file_hash: str | None, db: Session) -> int:
     """Return the clearance required to read `file_hash`. 0 (public) if the
     hash is unknown or has no row in `books` — matches the design decision
@@ -287,26 +319,27 @@ def _rating_stats(db: Session, hash_ids) -> dict[str, dict]:
     }
 
 
-def assert_can_read_path(symlink_fs_path: str, user: models.User, db: Session) -> None:
+def assert_can_read_path(symlink_fs_path: str, user: models.User | None, db: Session) -> None:
     """Resolve `symlink_fs_path` through the CAS vault, look up the book's
-    clearance, and 403 if `user.clearance` is below it. Admins bypass.
-    Non-CAS files (symlinks pointing outside .data) are treated as public."""
-    if user.is_admin:
+    clearance, and 403 if the user's clearance is below it. Admins bypass.
+    Non-CAS files (symlinks pointing outside .data) are treated as public.
+    A `None` user is an anonymous guest (clearance 0)."""
+    if _is_admin(user):
         return
     file_hash = _resolve_vault_hash(symlink_fs_path)
     required = _book_clearance(file_hash, db)
-    if required > (user.clearance or 0):
+    if required > _clearance_of(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
-def _accessible_locations_query(db: Session, prefix: str, user: models.User):
+def _accessible_locations_query(db: Session, prefix: str, user: models.User | None):
     """Query for `book_locations.symlink_path` values under `prefix` that point
     to books readable by `user`. `prefix` should already end with '/' (or be ''
     for the library root). Relies on the PK index on symlink_path."""
     return (
         db.query(models.BookLocation.symlink_path)
         .join(models.Book, models.Book.id == models.BookLocation.hash_id)
-        .filter(models.Book.clearance <= (user.clearance or 0))
+        .filter(models.Book.clearance <= _clearance_of(user))
         .filter(models.BookLocation.symlink_path.like(f"{prefix}%"))
     )
 
@@ -387,7 +420,7 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
     return current_user
 
 @app.get("/api/browse")
-async def browse(path: str = "", current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def browse(path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
     target_dir = os.path.join(BOOKS_DIR, path)
     if not os.path.abspath(target_dir).startswith(os.path.abspath(BOOKS_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -398,7 +431,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
     # (and 403 on direct access to such a directory) so the topic structure of
     # the library isn't leaked via directory names.
     accessible_subdirs: set[str] = set()
-    if not current_user.is_admin:
+    if not _is_admin(current_user):
         prefix = f"{path.rstrip('/')}/" if path else ""
         rows = _accessible_locations_query(db, prefix, current_user).all()
         if path and not rows:
@@ -423,7 +456,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
         if not os.path.exists(entry_path):
             continue
         is_dir = os.path.isdir(entry_path)
-        if is_dir and not current_user.is_admin and entry not in accessible_subdirs:
+        if is_dir and not _is_admin(current_user) and entry not in accessible_subdirs:
             continue
 
         try:
@@ -452,7 +485,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                     item_data["cover_url"] = f"/api/covers/{file_hash}"
                 book = db.query(models.Book).filter(models.Book.id == file_hash).first()
                 if book:
-                    if not current_user.is_admin and (book.clearance or 0) > (current_user.clearance or 0):
+                    if not _is_admin(current_user) and (book.clearance or 0) > _clearance_of(current_user):
                         continue
                     if book.title:
                         item_data["title"] = book.title
@@ -474,7 +507,7 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
                         item_data["identifiers"] = book.identifiers
                     item_data["clearance"] = int(book.clearance or 0)
                     item_data["import_date"] = book.import_date
-                    if current_user.is_admin:
+                    if _is_admin(current_user):
                         item_data["last_verified_at"] = book.last_verified_at
                         item_data["last_verified_ok"] = book.last_verified_ok
                         item_data["last_verified_mode"] = book.last_verified_mode
@@ -660,7 +693,7 @@ def _relevance_score(terms: list):
     return score
 
 
-def _build_search_query(q: str, current_user: models.User, db: Session):
+def _build_search_query(q: str, current_user: models.User | None, db: Session):
     """Shared query builder for /api/search and /api/search/hash_ids.
     Returns ``(query, terms)`` — the joined Book+BookLocation query with all
     filters applied, plus the parsed terms (for relevance ranking)."""
@@ -670,8 +703,8 @@ def _build_search_query(q: str, current_user: models.User, db: Session):
         models.BookLocation, models.Book.id == models.BookLocation.hash_id
     )
 
-    if not current_user.is_admin:
-        query = query.filter(models.Book.clearance <= (current_user.clearance or 0))
+    if not _is_admin(current_user):
+        query = query.filter(models.Book.clearance <= _clearance_of(current_user))
 
     conds = []
     for t in terms:
@@ -691,7 +724,7 @@ def _build_search_query(q: str, current_user: models.User, db: Session):
             func.lower(models.BookLocation.symlink_path).like(f"%{filters['ext']}")
         )
 
-    if filters["needs_review"] is not None and current_user.is_admin:
+    if filters["needs_review"] is not None and _is_admin(current_user):
         query = query.filter(models.Book.needs_review == filters["needs_review"])
 
     return query, terms
@@ -702,7 +735,7 @@ async def search(
     q: str = "",
     page: int = 1,
     per_page: int = 50,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     page = max(page, 1)
@@ -2418,7 +2451,7 @@ async def admin_cancel_integrity_job(
 @app.get("/api/files/{path:path}")
 async def get_file(
     path: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = os.path.join(BOOKS_DIR, path)
@@ -2759,7 +2792,7 @@ def _extract_annotation_html(root) -> str:
 @app.get("/api/fb2-content")
 async def fb2_content(
     path: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = sanitize_fb2_path(path)
@@ -2774,7 +2807,7 @@ async def fb2_content(
 @app.get("/api/fb2-metadata")
 async def fb2_metadata(
     path: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = sanitize_fb2_path(path)
@@ -3144,7 +3177,7 @@ def _convert_txt(text: str) -> Dict[str, Any]:
 @app.get("/api/md-content")
 async def md_content(
     path: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = sanitize_text_path(path)
@@ -3163,7 +3196,7 @@ async def md_content(
 async def text_preview(
     path: str,
     max_chars: int = 2000,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     """Return up to max_chars of text from a .md/.txt file for use as a
@@ -3442,7 +3475,7 @@ def _convert_html(html_bytes: bytes, max_chars: int | None = None) -> Dict[str, 
 @app.get("/api/html-content")
 async def html_content(
     path: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = sanitize_html_path(path)
@@ -3458,7 +3491,7 @@ async def html_content(
 async def html_preview(
     path: str,
     max_chars: int = 2000,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     """Sanitized HTML snippet for the ItemView cover-slot placeholder. The
@@ -3523,7 +3556,7 @@ def extract_djvu_outline(file_path: str) -> list:
 @app.get("/api/djvu-metadata")
 async def djvu_metadata(
     path: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = sanitize_djvu_path(path)
@@ -3540,7 +3573,7 @@ async def djvu_metadata(
 @app.get("/api/djvu-outline")
 async def djvu_outline(
     path: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = sanitize_djvu_path(path)
@@ -3554,7 +3587,7 @@ async def djvu_outline(
 async def djvu_page(
     path: str,
     page: int,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     file_path = sanitize_djvu_path(path)
@@ -3596,20 +3629,22 @@ async def djvu_page(
 @app.get("/api/covers/{hash_id}")
 async def get_cover(
     hash_id: str,
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     cover_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{hash_id}.jpg")
     if not os.path.exists(cover_path) or not os.path.isfile(cover_path):
         raise HTTPException(status_code=404, detail="Cover not found")
-    if not current_user.is_admin:
+    if not _is_admin(current_user):
         required = _book_clearance(hash_id, db)
-        if required > (current_user.clearance or 0):
+        if required > _clearance_of(current_user):
             raise HTTPException(status_code=403, detail="Forbidden")
     return FileResponse(cover_path)
 
 @app.get("/api/favorites")
-async def get_favorites(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_favorites(current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    if current_user is None:  # guest — no per-user state
+        return {"items": []}
     q = db.query(models.Favorite, models.Book, models.BookLocation).join(
         models.Book, models.Favorite.hash_id == models.Book.id
     ).outerjoin(
@@ -3680,9 +3715,11 @@ def _normalize_dir_path(path: str) -> str:
 
 @app.get("/api/dir-favorites")
 async def get_dir_favorites(
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    if current_user is None:  # guest — no per-user state
+        return {"items": []}
     rows = db.query(models.DirectoryFavorite).filter(
         models.DirectoryFavorite.user_id == current_user.id
     ).order_by(models.DirectoryFavorite.path).all()
@@ -3736,8 +3773,10 @@ async def remove_dir_favorite(
     return {"message": "Removed"}
 
 @app.get("/api/progress/{hash_id}", response_model=schemas.ReadingProgressResponse)
-async def get_progress(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+async def get_progress(hash_id: str, current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    if current_user is None:  # guest — no saved progress
+        raise HTTPException(status_code=404, detail="No progress found")
+    if not _is_admin(current_user) and _book_clearance(hash_id, db) > _clearance_of(current_user):
         raise HTTPException(status_code=403, detail="Forbidden")
     progress = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
@@ -3748,8 +3787,10 @@ async def get_progress(hash_id: str, current_user: models.User = Depends(get_cur
     return progress
 
 @app.post("/api/progress", response_model=schemas.ReadingProgressResponse)
-async def update_progress(prog: schemas.ReadingProgressCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not current_user.is_admin and _book_clearance(prog.hash_id, db) > (current_user.clearance or 0):
+async def update_progress(prog: schemas.ReadingProgressCreate, current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    if current_user is None:  # guest — accept silently, nothing is persisted
+        return {"id": 0, "user_id": 0, "hash_id": prog.hash_id, "location": prog.location}
+    if not _is_admin(current_user) and _book_clearance(prog.hash_id, db) > _clearance_of(current_user):
         raise HTTPException(status_code=403, detail="Forbidden")
     existing = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,
@@ -3774,8 +3815,10 @@ async def update_progress(prog: schemas.ReadingProgressCreate, current_user: mod
 # book's average as soon as it is submitted.
 
 @app.get("/api/books/{hash_id}/rating", response_model=schemas.RatingResponse)
-async def get_my_rating(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+async def get_my_rating(hash_id: str, current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    if current_user is None:  # guest — no personal rating
+        return {"hash_id": hash_id, "rating": None}
+    if not _is_admin(current_user) and _book_clearance(hash_id, db) > _clearance_of(current_user):
         raise HTTPException(status_code=403, detail="Forbidden")
     row = db.query(models.BookRating).filter(
         models.BookRating.user_id == current_user.id,
@@ -3876,13 +3919,15 @@ def _maybe_send_moderation_digest(db: Session) -> None:
 
 
 @app.get("/api/books/{hash_id}/comments")
-async def get_comments(hash_id: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not current_user.is_admin and _book_clearance(hash_id, db) > (current_user.clearance or 0):
+async def get_comments(hash_id: str, current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    if not _is_admin(current_user) and _book_clearance(hash_id, db) > _clearance_of(current_user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    # Guests (uid None) see only approved comments and own nothing.
+    uid = current_user.id if current_user else None
     visible = or_(
         models.BookComment.status == "approved",
-        models.BookComment.user_id == current_user.id,
+        models.BookComment.user_id == uid,
     )
     tops = db.query(models.BookComment).filter(
         models.BookComment.hash_id == hash_id,
@@ -3922,7 +3967,7 @@ async def get_comments(hash_id: str, current_user: models.User = Depends(get_cur
             "body": c.body,
             "status": c.status,
             "created_at": c.created_at,
-            "is_own": c.user_id == current_user.id,
+            "is_own": c.user_id == uid,
             "rating": ratings.get(c.user_id) if with_rating else None,
             "replies": [node(r, False) for r in replies_by_parent.get(c.id, [])],
         }

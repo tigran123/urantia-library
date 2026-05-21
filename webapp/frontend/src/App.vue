@@ -117,7 +117,8 @@ const handleLogout = async () => {
   } catch (e) {
     console.error(e)
   } finally {
-    router.push({ name: 'login' })
+    currentUser.value = null
+    router.push({ name: 'browse' })
   }
 }
 </script>
@@ -166,7 +167,7 @@ const handleLogout = async () => {
           </div>
 
           <div class="flex items-center gap-2 sm:gap-4">
-            <router-link to="/bookshelf" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none ml-2 mr-2">
+            <router-link v-if="currentUser" to="/bookshelf" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none ml-2 mr-2">
               <BookmarkIcon class="h-5 w-5" />
               <span>{{ t('app.bookshelf') }}</span>
             </router-link>
@@ -176,8 +177,18 @@ const handleLogout = async () => {
             <!-- Language Switcher -->
             <LanguageSwitcher />
 
+            <!-- Guest: Sign in link in place of the profile menu -->
+            <router-link
+              v-if="!currentUser"
+              :to="{ name: 'login' }"
+              class="flex items-center gap-1 ml-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none"
+            >
+              <ArrowRightOnRectangleIcon class="h-5 w-5" />
+              <span>{{ t('auth.signInBtn') }}</span>
+            </router-link>
+
             <!-- User Profile Menu Dropdown -->
-            <div class="relative ml-2">
+            <div v-else class="relative ml-2">
               <button @click="isProfileMenuOpen = !isProfileMenuOpen" class="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none">
                 <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-8 w-8 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
                 <span

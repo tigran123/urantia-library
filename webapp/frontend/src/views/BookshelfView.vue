@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, inject, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
 import { DocumentIcon, BookmarkIcon, TrashIcon, ArrowLeftIcon, FolderIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 
 const router = useRouter()
+const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
 const favorites = ref<any[]>([])
 const dirFavorites = ref<any[]>([])
 const loading = ref(true)
@@ -86,7 +87,15 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       </p>
     </div>
 
-    <div v-if="loading" class="flex justify-center items-center py-20">
+    <div v-if="!currentUser" class="text-center py-20 text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm">
+      <BookmarkIcon class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-3" />
+      <p class="text-lg">{{ $t('app.bookshelf_signin') }}</p>
+      <router-link :to="{ name: 'login' }" class="inline-block mt-4 px-5 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">
+        {{ $t('auth.signInBtn') }}
+      </router-link>
+    </div>
+
+    <div v-else-if="loading" class="flex justify-center items-center py-20">
       <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
     </div>
 

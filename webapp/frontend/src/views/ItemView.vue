@@ -146,8 +146,18 @@ const loadFavorites = async () => {
   }
 }
 
+// Guests may read freely, but a per-user action nudges them to sign in.
+const requireAuth = (): boolean => {
+  if (!currentUser.value) {
+    router.push({ name: 'login' })
+    return false
+  }
+  return true
+}
+
 const toggleFavorite = async () => {
   if (!item.value || !item.value.hash_id) return
+  if (!requireAuth()) return
   const id = item.value.hash_id
   try {
     const newIds = new Set(favoriteIds.value)
@@ -349,6 +359,7 @@ watch(
 
 const onRate = async (value: number) => {
   if (!item.value?.hash_id) return
+  if (!requireAuth()) return
   try {
     await setMyRating(item.value.hash_id, value)
     // Fold the change into the displayed average without a full reload.
@@ -611,14 +622,19 @@ const submitReply = async () => {
 
           <!-- Actions -->
           <div class="flex flex-wrap gap-4 pt-4">
-            <a :href="getDownloadUrl()" download class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+            <!-- Signed-in: real download. Guest: nudge to the login/register page. -->
+            <a v-if="currentUser" :href="getDownloadUrl()" download class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
               <ArrowDownTrayIcon class="-ml-1 mr-2 h-5 w-5" aria-hidden="true" />
               {{ t('app.download') }} {{ formatBytes(item.size, 0) }}
             </a>
+            <router-link v-else :to="{ name: 'login' }" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+              <ArrowDownTrayIcon class="-ml-1 mr-2 h-5 w-5" aria-hidden="true" />
+              {{ t('app.download_signin') }}
+            </router-link>
           </div>
 
-          <!-- Ratings & Comments (collapsed by default) -->
-          <details v-if="item.hash_id" class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group">
+          <!-- Ratings & Comments (collapsed by default) — hidden for guests -->
+          <details v-if="item.hash_id && currentUser" class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group">
             <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between rounded-lg">
               <span>
                 {{ t('app.comments') }}

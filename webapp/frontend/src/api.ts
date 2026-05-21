@@ -13,8 +13,12 @@ api.interceptors.response.use(
       // Public routes that don't require an active session
       const publicRoutes = ['login', 'register', 'set-password']
 
+      // The guest landing flow probes /me on every page load; a 401 there just
+      // means "browsing anonymously" and must NOT bounce the visitor to login.
+      const isMeProbe = error.config?.url === '/me'
+
       // Redirect to login if unauthorized AND not already on a public page
-      if (router.currentRoute.value.name && !publicRoutes.includes(router.currentRoute.value.name.toString())) {
+      if (!isMeProbe && router.currentRoute.value.name && !publicRoutes.includes(router.currentRoute.value.name.toString())) {
         router.push({ name: 'login' })
       }
     }
