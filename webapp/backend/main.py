@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, func
+from sqlalchemy import or_, and_, not_, func, case, select
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 import os
 import re
@@ -489,41 +489,177 @@ async def browse(path: str = "", current_user: models.User = Depends(get_current
 
     return {"path": path, "items": items}
 
+# --- Intelligent search -----------------------------------------------------
+#
+# A query is a sequence of tokens. Every positive token must match somewhere
+# (AND across tokens); each token is matched across all searchable columns
+# (OR across columns). A token may be quoted (contiguous phrase), prefixed with
+# `-` (exclusion), or scoped to one column (`author:harnum`). The structural
+# keys `path:`/`ext:`/`needs_review:` keep their old filter semantics.
+
+# Columns searched when a token has no explicit field scope.
+_SEARCH_ALL_COLUMNS = [
+    models.Book.title, models.Book.author, models.Book.description,
+    models.Book.publisher, models.Book.series, models.Book.tags,
+    models.Book.original_filename,
+]
+# Field scopes the user may name explicitly (`tag` is an alias for `tags`).
+_SEARCH_FIELD_COLUMNS = {
+    "title": models.Book.title,
+    "author": models.Book.author,
+    "description": models.Book.description,
+    "publisher": models.Book.publisher,
+    "series": models.Book.series,
+    "tags": models.Book.tags,
+}
+_SEARCH_FIELD_ALIASES = {"tag": "tags"}
+_STRUCTURAL_KEYS = {"path", "ext", "needs_review"}
+# Relevance weight of a scoped-field match (used by _relevance_score).
+_SEARCH_FIELD_WEIGHT = {
+    "title": 4, "author": 3, "publisher": 2, "series": 2, "tags": 2,
+    "description": 1,
+}
+
+_SEARCH_TOKEN_RE = re.compile(r'''
+    (?P<neg>-)?                          # optional exclusion marker
+    (?:(?P<field>[A-Za-z_]+):)?          # optional field scope
+    (?:
+        "(?P<dq>[^"]*)"                  # double-quoted phrase
+      | '(?P<sq>[^']*)'                  # single-quoted phrase
+      | (?P<word>[^\s"']+)               # bare word
+    )
+''', re.VERBOSE)
+
+
 def parse_search_query(q: str):
-    filters = {
-        "path": None,
-        "ext": None,
-        "needs_review": None,
-    }
+    """Tokenize a raw query string.
 
-    path_match = re.search(r'path:([^\s]+)', q)
-    if path_match:
-        filters["path"] = path_match.group(1).strip('"\'').lower()
-        q = q.replace(path_match.group(0), '')
+    Returns ``(terms, filters)`` where ``filters`` holds the structural
+    path/ext/needs_review filters and ``terms`` is a list of dicts:
+    ``{text, field, negate, is_phrase}`` (text is lowercased)."""
+    filters = {"path": None, "ext": None, "needs_review": None}
+    terms = []
 
-    ext_match = re.search(r'ext:([^\s]+)', q)
-    if ext_match:
-        filters["ext"] = ext_match.group(1).strip('"\'').lower()
-        if not filters["ext"].startswith('.'):
-            filters["ext"] = '.' + filters["ext"]
-        q = q.replace(ext_match.group(0), '')
+    for m in _SEARCH_TOKEN_RE.finditer(q or ""):
+        negate = m.group("neg") is not None
+        field = (m.group("field") or "").lower()
+        quoted = m.group("dq") is not None or m.group("sq") is not None
+        value = m.group("dq")
+        if value is None:
+            value = m.group("sq")
+        if value is None:
+            value = m.group("word") or ""
 
-    nr_match = re.search(r'needs_review:(\S+)', q)
-    if nr_match:
-        val = nr_match.group(1).strip('"\'').lower()
-        if val in ('1', 'true', 'yes'):
-            filters["needs_review"] = True
-        elif val in ('0', 'false', 'no'):
-            filters["needs_review"] = False
-        q = q.replace(nr_match.group(0), '')
+        if field in _STRUCTURAL_KEYS:
+            val = value.strip().lower()
+            if not val:
+                continue
+            if field == "path":
+                filters["path"] = val
+            elif field == "ext":
+                filters["ext"] = val if val.startswith(".") else "." + val
+            elif field == "needs_review":
+                if val in ("1", "true", "yes"):
+                    filters["needs_review"] = True
+                elif val in ("0", "false", "no"):
+                    filters["needs_review"] = False
+            continue
 
-    q = q.strip().lower()
-    return q, filters
+        scope = _SEARCH_FIELD_ALIASES.get(field, field)
+        if scope not in _SEARCH_FIELD_COLUMNS:
+            # Unknown `field:` prefix — treat the whole thing as literal text.
+            scope = None
+            if field:
+                value = m.group("field") + ":" + value
+
+        text = value.strip().lower()
+        if not text:
+            continue
+        terms.append({
+            "text": text,
+            "field": scope,
+            "negate": negate,
+            "is_phrase": quoted,
+        })
+
+    return terms, filters
+
+
+def _like_pattern(text: str, is_phrase: bool) -> str:
+    """Build a `%…%` LIKE pattern. SQL metacharacters in user text are escaped
+    (ESCAPE '\\'); for non-phrase tokens the user wildcards `*`/`?` are then
+    translated to SQL `%`/`_`."""
+    esc = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    if not is_phrase:
+        esc = esc.replace("*", "%").replace("?", "_")
+    return f"%{esc}%"
+
+
+def _col_expr(col):
+    """Case-folded, NULL-safe column expression for LIKE matching."""
+    return func.lower(func.coalesce(col, ""))
+
+
+def _term_condition(term: dict):
+    """SQL predicate for a single (positive) search term."""
+    pattern = _like_pattern(term["text"], term["is_phrase"])
+    if term["field"]:
+        col = _SEARCH_FIELD_COLUMNS[term["field"]]
+        return _col_expr(col).like(pattern, escape="\\")
+    return or_(*[
+        _col_expr(c).like(pattern, escape="\\") for c in _SEARCH_ALL_COLUMNS
+    ])
+
+
+def _relevance_score(terms: list):
+    """Build an ORDER-BY relevance expression, or None if there is nothing to
+    rank (no positive terms)."""
+    positive = [t for t in terms if not t["negate"]]
+    if not positive:
+        return None
+
+    score = None
+    for t in positive:
+        pattern = _like_pattern(t["text"], t["is_phrase"])
+        if t["field"]:
+            col = _SEARCH_FIELD_COLUMNS[t["field"]]
+            term_score = case(
+                (_col_expr(col).like(pattern, escape="\\"),
+                 _SEARCH_FIELD_WEIGHT.get(t["field"], 1)),
+                else_=0,
+            )
+        else:
+            term_score = case(
+                (_col_expr(models.Book.title).like(pattern, escape="\\"), 4),
+                (_col_expr(models.Book.author).like(pattern, escape="\\"), 3),
+                (or_(
+                    _col_expr(models.Book.publisher).like(pattern, escape="\\"),
+                    _col_expr(models.Book.series).like(pattern, escape="\\"),
+                    _col_expr(models.Book.tags).like(pattern, escape="\\"),
+                ), 2),
+                (_col_expr(models.Book.description).like(pattern, escape="\\"), 1),
+                else_=0,
+            )
+        score = term_score if score is None else score + term_score
+
+    # Bonus when the whole plain-text query appears contiguously in the title.
+    full = " ".join(
+        t["text"] for t in positive if t["field"] is None and not t["is_phrase"]
+    )
+    if full:
+        bonus_pat = _like_pattern(full, True)
+        score = score + case(
+            (_col_expr(models.Book.title).like(bonus_pat, escape="\\"), 50),
+            else_=0,
+        )
+    return score
+
 
 def _build_search_query(q: str, current_user: models.User, db: Session):
     """Shared query builder for /api/search and /api/search/hash_ids.
-    Returns the joined Book+BookLocation query with all filters applied."""
-    query_lower, filters = parse_search_query(q)
+    Returns ``(query, terms)`` — the joined Book+BookLocation query with all
+    filters applied, plus the parsed terms (for relevance ranking)."""
+    terms, filters = parse_search_query(q)
 
     query = db.query(models.Book, models.BookLocation).join(
         models.BookLocation, models.Book.id == models.BookLocation.hash_id
@@ -532,13 +668,12 @@ def _build_search_query(q: str, current_user: models.User, db: Session):
     if not current_user.is_admin:
         query = query.filter(models.Book.clearance <= (current_user.clearance or 0))
 
-    if query_lower:
-        like = f"%{query_lower}%"
-        query = query.filter(or_(
-            func.lower(models.Book.title).like(like),
-            func.lower(models.Book.author).like(like),
-            func.lower(models.Book.description).like(like),
-        ))
+    conds = []
+    for t in terms:
+        cond = _term_condition(t)
+        conds.append(not_(cond) if t["negate"] else cond)
+    if conds:
+        query = query.filter(and_(*conds))
 
     if filters["path"]:
         query = query.filter(
@@ -554,7 +689,7 @@ def _build_search_query(q: str, current_user: models.User, db: Session):
     if filters["needs_review"] is not None and current_user.is_admin:
         query = query.filter(models.Book.needs_review == filters["needs_review"])
 
-    return query
+    return query, terms
 
 
 @app.get("/api/search")
@@ -571,13 +706,29 @@ async def search(
     if not q:
         return {"matches": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0}
 
-    query = _build_search_query(q, current_user, db)
+    query, terms = _build_search_query(q, current_user, db)
 
     total = query.order_by(None).count()
     total_pages = (total + per_page - 1) // per_page
 
+    # Order by relevance, then average rating, then a stable tiebreak.
+    avg_rating = (
+        select(func.avg(models.BookRating.rating))
+        .where(models.BookRating.hash_id == models.Book.id)
+        .correlate(models.Book)
+        .scalar_subquery()
+    )
+    order_cols = []
+    score = _relevance_score(terms)
+    if score is not None:
+        order_cols.append(score.desc())
+    order_cols += [
+        avg_rating.desc().nulls_last(),
+        models.Book.title, models.Book.id, models.BookLocation.symlink_path,
+    ]
+
     results = (
-        query.order_by(models.Book.title, models.Book.id, models.BookLocation.symlink_path)
+        query.order_by(*order_cols)
         .offset((page - 1) * per_page)
         .limit(per_page)
         .all()
@@ -626,7 +777,7 @@ async def search_hash_ids(
     Used by the admin bulk-verify 'Select All' action."""
     if not q:
         return {"hash_ids": [], "total": 0}
-    query = _build_search_query(q, current_user, db)
+    query, _ = _build_search_query(q, current_user, db)
     rows = query.with_entities(models.Book.id).distinct().all()
     ids = [r[0] for r in rows]
     return {"hash_ids": ids, "total": len(ids)}

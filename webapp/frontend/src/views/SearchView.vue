@@ -236,6 +236,9 @@ const getFullUrl = (url: string) => {
   return api.defaults.baseURL?.replace('/api', '') + url
 }
 
+// Build a scoped query that searches for one author, e.g. author:"Jane Doe".
+const authorQuery = (author: string) => `author:"${(author || '').replace(/"/g, '')}"`
+
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const escapeHtml = (s: string) =>
@@ -245,11 +248,33 @@ const escapeHtml = (s: string) =>
    .replace(/"/g, '&quot;')
    .replace(/'/g, '&#39;')
 
+// Positive search tokens to highlight: quoted phrases and bare words, with any
+// `field:` prefix and `-`negation stripped (negated tokens are skipped).
+const searchTokens = computed<string[]>(() => {
+  const text = parsedSearch.value.text
+  if (!text) return []
+  const tokens: string[] = []
+  const re = /(-)?(?:[A-Za-z_]+:)?(?:"([^"]*)"|'([^']*)'|(\S+))/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    if (m[1]) continue // negated term — nothing to highlight
+    const val = (m[2] ?? m[3] ?? m[4] ?? '').trim()
+    if (val && val.replace(/[*?]/g, '').trim()) tokens.push(val)
+  }
+  return tokens
+})
+
+// Turn one token into a regex fragment, mapping the `*`/`?` wildcards.
+const tokenToRegex = (tok: string) =>
+  escapeRegex(tok).replace(/\\\*/g, '\\S*').replace(/\\\?/g, '\\S')
+
 const wrapMatches = (html: string) => {
-  const term = parsedSearch.value.text
-  if (!term || !html) return html || ''
+  const tokens = searchTokens.value
+  if (!tokens.length || !html) return html || ''
+  const pattern = tokens.map(tokenToRegex).filter(Boolean).join('|')
+  if (!pattern) return html
   return html.replace(
-    new RegExp(escapeRegex(term), 'gi'),
+    new RegExp(pattern, 'gi'),
     (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`
   )
 }
@@ -329,6 +354,11 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       <div class="max-w-md mx-auto text-left bg-gray-50 p-4 rounded-lg border border-gray-200 text-sm">
         <h3 class="font-semibold text-gray-700 mb-2">{{ $t('search.tips_title') }}</h3>
         <ul class="list-disc pl-5 space-y-1">
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">harnum music</code> {{ $t('search.tip_words') }}</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">"music theory"</code> {{ $t('search.tip_phrase') }}</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">theor*</code> {{ $t('search.tip_wildcard') }}</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">-grammar</code> {{ $t('search.tip_exclude') }}</li>
+           <li><code class="bg-gray-200 px-1 rounded text-gray-800">author:harnum</code> {{ $t('search.tip_field') }}</li>
            <li><code class="bg-gray-200 px-1 rounded text-gray-800">path:Law/</code> {{ $t('search.tip_path') }}</li>
            <li><code class="bg-gray-200 px-1 rounded text-gray-800">ext:djvu</code> {{ $t('search.tip_ext_or') }} <code class="bg-gray-200 px-1 rounded text-gray-800">ext:pdf</code> {{ $t('search.tip_ext') }}</li>
            <li>{{ $t('search.tip_combine') }} <code class="bg-gray-200 px-1 rounded text-gray-800">path:History/ ext:epub rome</code></li>
@@ -383,7 +413,12 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   <router-link :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
                     <span v-html="highlightText(match.title || formatFilename(match.name, match.is_dir))"></span>
                   </router-link>
-                  <p v-if="match.author" class="text-sm text-gray-700 mt-0.5" :title="match.author" v-html="highlightText(match.author)"></p>
+                  <router-link
+                    v-if="match.author"
+                    :to="{ name: 'search', query: { q: authorQuery(match.author) } }"
+                    class="block text-sm text-gray-700 mt-0.5 hover:text-blue-600 hover:underline"
+                    :title="$t('search.search_by_author', { author: match.author })"
+                  ><span v-html="highlightText(match.author)"></span></router-link>
                   <p v-if="match.title" class="text-xs text-gray-500 mt-0.5 break-all">{{ match.name }}</p>
                   <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-3" v-html="highlightHtml(match.description)"></p>
                 </div>

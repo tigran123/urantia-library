@@ -102,6 +102,13 @@ const performSearch = () => {
   }
 }
 
+// Keep the global search box in sync with the active search query, so a search
+// triggered elsewhere (e.g. clicking an author link) lands in the box ready to
+// be refined manually.
+watch(() => route.query.q, (q) => {
+  if (typeof q === 'string') searchQuery.value = q
+}, { immediate: true })
+
 const handleLogout = async () => {
   isProfileMenuOpen.value = false
   try {
@@ -259,6 +266,11 @@ const handleLogout = async () => {
         <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-4">{{ t('search.tips_title') }}</h3>
 
         <ul class="list-disc pl-5 space-y-3 text-sm text-gray-700 dark:text-gray-300">
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">harnum music</code> {{ t('search.tip_words') }}</li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">"music theory"</code> {{ t('search.tip_phrase') }}</li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">theor*</code> {{ t('search.tip_wildcard') }}</li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">-grammar</code> {{ t('search.tip_exclude') }}</li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">author:harnum</code> {{ t('search.tip_field') }}</li>
            <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:Law/</code> {{ t('search.tip_path') }}</li>
            <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:djvu</code> {{ t('search.tip_ext_or') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:pdf</code> {{ t('search.tip_ext') }}</li>
            <li>{{ t('search.tip_combine') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:History/ ext:epub rome</code></li>
