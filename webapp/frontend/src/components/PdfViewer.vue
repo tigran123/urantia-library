@@ -610,7 +610,9 @@ onBeforeUnmount(() => {
             <ChevronDoubleLeftIcon class="w-4 h-4" />
           </button>
         </div>
-        <nav class="flex-grow overflow-auto p-1 text-gray-800 dark:text-gray-200">
+        <!-- pb-16: clear the floating prev-page button so the last TOC entries
+             (and their expand arrows) stay tappable. -->
+        <nav class="flex-grow overflow-auto p-1 pb-16 text-gray-800 dark:text-gray-200">
           <p v-if="!toc.length" class="px-2 py-2 text-xs text-gray-500 dark:text-gray-400">{{ t('app.toc_empty') }}</p>
           <PdfTocNode
             v-for="(entry, i) in toc"
