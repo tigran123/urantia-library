@@ -623,13 +623,22 @@ def parse_search_query(q: str):
     return terms, filters
 
 
+def _escape_like(text: str) -> str:
+    """Escape SQL LIKE metacharacters in user text (used with ESCAPE '\\')."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _wildcard_escape(text: str) -> str:
+    """Escape LIKE metacharacters, then map the user wildcards `*`/`?` to the
+    SQL wildcards `%`/`_`."""
+    return _escape_like(text).replace("*", "%").replace("?", "_")
+
+
 def _like_pattern(text: str, is_phrase: bool) -> str:
     """Build a `%…%` LIKE pattern. SQL metacharacters in user text are escaped
     (ESCAPE '\\'); for non-phrase tokens the user wildcards `*`/`?` are then
     translated to SQL `%`/`_`."""
-    esc = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    if not is_phrase:
-        esc = esc.replace("*", "%").replace("?", "_")
+    esc = _escape_like(text) if is_phrase else _wildcard_escape(text)
     return f"%{esc}%"
 
 
@@ -714,14 +723,18 @@ def _build_search_query(q: str, current_user: models.User | None, db: Session):
         query = query.filter(and_(*conds))
 
     if filters["path"]:
+        # `*`/`?` in the path act as wildcards (e.g. path:Law/*2024).
+        pat = _wildcard_escape(filters["path"])
         query = query.filter(
-            func.lower(models.BookLocation.symlink_path).like(f"{filters['path']}%")
+            func.lower(models.BookLocation.symlink_path).like(f"{pat}%", escape="\\")
         )
 
     if filters["ext"]:
-        # parse_search_query normalizes ext to start with a dot.
+        # parse_search_query normalizes ext to start with a dot; `*`/`?` are
+        # wildcards, so `ext:*` matches every file with an extension.
+        pat = _wildcard_escape(filters["ext"])
         query = query.filter(
-            func.lower(models.BookLocation.symlink_path).like(f"%{filters['ext']}")
+            func.lower(models.BookLocation.symlink_path).like(f"%{pat}", escape="\\")
         )
 
     if filters["needs_review"] is not None and _is_admin(current_user):
