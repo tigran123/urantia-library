@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { XMarkIcon } from '@heroicons/vue/24/outline'
-import api from '../api'
+import api, { getMyNotificationPrefs, setMyNotificationPrefs, type NotificationPrefs } from '../api'
 import { userInitials } from '../userDisplay'
 import { useI18n } from 'vue-i18n'
 
@@ -25,8 +25,46 @@ const isUploading = ref(false)
 const tabs = computed(() => [
   { id: 'Personal Information', label: t('settings.personal_info') },
   { id: 'Avatar', label: t('settings.avatar') },
-  { id: 'Search', label: t('settings.search') }
+  { id: 'Search', label: t('settings.search') },
+  { id: 'Notifications', label: t('feedback.notif.section') },
 ])
+
+const notifPrefs = ref<NotificationPrefs>({
+  email_on_reply: true, email_on_status: true, email_weekly_summary: false,
+})
+const isSavingNotif = ref(false)
+const notifLoaded = ref(false)
+
+async function loadNotifPrefs() {
+  if (notifLoaded.value) return
+  try {
+    const r = await getMyNotificationPrefs()
+    notifPrefs.value = r.data
+  } finally {
+    notifLoaded.value = true
+  }
+}
+
+async function saveNotifPrefs() {
+  isSavingNotif.value = true
+  try {
+    await setMyNotificationPrefs(notifPrefs.value)
+    emit('close')
+  } catch {
+    alert('Failed to save settings')
+  } finally {
+    isSavingNotif.value = false
+  }
+}
+
+watch(activeTab, (v) => {
+  if (v === 'Notifications') loadNotifPrefs()
+})
+
+watch(() => props.isOpen, (open) => {
+  if (open && activeTab.value === 'Notifications') loadNotifPrefs()
+  if (!open) notifLoaded.value = false
+})
 
 const PER_PAGE_OPTIONS = [10, 25, 50, 100, 200]
 const searchPerPage = ref<number>(50)
@@ -191,6 +229,60 @@ const close = () => {
                 class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {{ isSavingSearch ? t('settings.saving') : t('settings.save') }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="activeTab === 'Notifications'">
+            <h4 class="text-md font-medium text-gray-900 dark:text-white mb-4">{{ t('feedback.notif.section') }}</h4>
+            <div class="space-y-4">
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input
+                  v-model="notifPrefs.email_on_reply"
+                  type="checkbox"
+                  class="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+                  :aria-label="t('feedback.notif.reply')"
+                />
+                <span class="flex-1">
+                  <span class="block text-sm font-medium text-gray-900 dark:text-gray-100">{{ t('feedback.notif.reply') }}</span>
+                  <span class="block text-xs text-gray-500 dark:text-gray-400">{{ t('feedback.notif.reply_hint') }}</span>
+                </span>
+              </label>
+
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input
+                  v-model="notifPrefs.email_on_status"
+                  type="checkbox"
+                  class="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+                  :aria-label="t('feedback.notif.status')"
+                />
+                <span class="flex-1">
+                  <span class="block text-sm font-medium text-gray-900 dark:text-gray-100">{{ t('feedback.notif.status') }}</span>
+                  <span class="block text-xs text-gray-500 dark:text-gray-400">{{ t('feedback.notif.status_hint') }}</span>
+                </span>
+              </label>
+
+              <label class="flex items-start gap-3 cursor-pointer opacity-60">
+                <input
+                  v-model="notifPrefs.email_weekly_summary"
+                  type="checkbox"
+                  disabled
+                  class="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+                  :aria-label="t('feedback.notif.weekly')"
+                />
+                <span class="flex-1">
+                  <span class="block text-sm font-medium text-gray-900 dark:text-gray-100">{{ t('feedback.notif.weekly') }}</span>
+                  <span class="block text-xs text-gray-500 dark:text-gray-400">{{ t('feedback.notif.weekly_hint') }}</span>
+                </span>
+              </label>
+            </div>
+            <div class="mt-6 flex justify-end">
+              <button
+                @click="saveNotifPrefs"
+                :disabled="isSavingNotif || !notifLoaded"
+                class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {{ isSavingNotif ? t('settings.saving') : t('settings.save') }}
               </button>
             </div>
           </div>

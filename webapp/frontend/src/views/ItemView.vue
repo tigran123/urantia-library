@@ -7,7 +7,7 @@ import api, {
   getComments, postComment, editComment, deleteComment,
   type IntegrityCheckResult, type IntegrityMode, type CommentNode,
 } from '../api'
-import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, FlagIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
 import { useI18n } from 'vue-i18n'
@@ -488,8 +488,25 @@ const submitReply = async () => {
             </template>
             <DocumentIcon v-else class="w-32 h-32 text-gray-300 dark:text-gray-600" />
           </div>
+          <div v-if="item.hash_id && currentUser" class="mt-4 flex justify-center">
+            <router-link
+              :to="{
+                name: 'feedback-compose',
+                query: {
+                  book: item.hash_id,
+                  cat: 'book',
+                  book_title: item.title || item.name,
+                  book_author: item.author || '',
+                },
+              }"
+              class="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50 hover:border-amber-400 dark:hover:border-amber-600 transition-colors"
+            >
+              <FlagIcon class="h-4 w-4" />
+              {{ t('feedback.report') }}
+            </router-link>
+          </div>
         </div>
-        
+
         <!-- Right Column: Metadata & Actions -->
         <div class="md:col-span-2 flex flex-col justify-center space-y-6">
           <div>

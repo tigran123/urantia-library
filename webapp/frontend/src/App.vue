@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon } from '@heroicons/vue/24/outline'
+import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon, ChatBubbleLeftRightIcon, InboxIcon } from '@heroicons/vue/24/outline'
 import api from './api'
 import { userInitials } from './userDisplay'
 import { useI18n } from 'vue-i18n'
@@ -211,6 +211,24 @@ const handleLogout = async () => {
                   <Cog6ToothIcon class="h-4 w-4" />
                   {{ t('app.settings') }}
                 </button>
+
+                <router-link
+                  :to="{ name: 'feedback-compose' }"
+                  @click="isProfileMenuOpen = false"
+                  class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 focus:outline-none"
+                >
+                  <ChatBubbleLeftRightIcon class="h-4 w-4" />
+                  {{ t('feedback.send') }}
+                </router-link>
+
+                <router-link
+                  :to="{ name: 'feedback-mine' }"
+                  @click="isProfileMenuOpen = false"
+                  class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 focus:outline-none"
+                >
+                  <InboxIcon class="h-4 w-4" />
+                  {{ t('feedback.my') }}
+                </router-link>
 
                 <router-link
                   v-if="currentUser?.is_admin"

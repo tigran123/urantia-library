@@ -264,3 +264,111 @@ class MoveResponse(BaseModel):
     moved: List[MoveItem] = []
     errors: List[dict] = []
     skipped: List[dict] = []
+
+
+# ==============================================================================
+# Feedback / contact-admin
+# ==============================================================================
+
+class FeedbackCreate(BaseModel):
+    category: str                                # one of _FEEDBACK_CATEGORIES
+    book_subcategory: Optional[str] = None
+    subject: str
+    body: str
+    book_hash_id: Optional[str] = None
+    book_page: Optional[int] = None
+    diag: Optional[dict] = None                  # sanitized server-side, never surfaced to the author
+    recipient_admin_ids: List[int] = []          # honoured only when sender is admin
+
+
+class FeedbackReply(BaseModel):
+    body: str
+    internal: bool = False                       # ignored for non-admin senders
+    new_status: Optional[str] = None             # admin may flip status atomically
+
+
+class FeedbackStatusUpdate(BaseModel):
+    status: str
+    archive: bool = False
+
+
+class FeedbackAssign(BaseModel):
+    assignee_id: Optional[int] = None            # null = unassign
+
+
+class FeedbackMessageNode(BaseModel):
+    id: int
+    kind: str                                    # 'message' | 'admin' | 'internal' | 'status'
+    author_name: str
+    is_admin: bool
+    is_own: bool
+    body: str
+    created_at: str
+
+
+class AdminBrief(BaseModel):
+    id: int
+    name: str
+    email: str
+
+
+class FeedbackRecipientBrief(BaseModel):
+    id: int
+    name: str
+    is_you: bool
+
+
+class FeedbackAttachmentBrief(BaseModel):
+    filename: str
+    url: str
+    bytes: int
+    content_type: str
+
+
+class FeedbackThreadSummary(BaseModel):
+    id: int
+    public_id: str
+    user_name: str
+    user_email: str
+    category: str
+    book_subcategory: Optional[str] = None
+    subject: str
+    status: str
+    book_hash_id: Optional[str] = None
+    book_title: Optional[str] = None
+    book_path: Optional[str] = None
+    recipients: List[FeedbackRecipientBrief] = []
+    is_broadcast: bool = True
+    reply_count: int = 0
+    has_unread: bool = False
+    archived: bool = False
+    created_at: str
+    updated_at: str
+
+
+class FeedbackThreadDetail(FeedbackThreadSummary):
+    body: str                                    # the original 'message' row
+    book_page: Optional[int] = None
+    diag: Optional[dict] = None                  # populated only when viewer.is_admin
+    attachment: Optional[FeedbackAttachmentBrief] = None
+    messages: List[FeedbackMessageNode] = []
+    assigned_admin_name: Optional[str] = None
+
+
+class NotificationPrefs(BaseModel):
+    email_on_reply: bool = True
+    email_on_status: bool = True
+    email_weekly_summary: bool = False
+
+
+class AdminFeedbackSettingsPayload(BaseModel):
+    digest_interval_hours: int                   # 0|1|3|6|12|24
+    min_batch_size: int                          # 1|3|5
+    urgent_bypass: bool
+    extra_recipients: List[str] = []
+
+
+class AdminFeedbackSettingsResponse(AdminFeedbackSettingsPayload):
+    last_digest_at: Optional[str] = None
+    next_eligible_at: Optional[str] = None
+    pending_count: int = 0

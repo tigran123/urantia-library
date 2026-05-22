@@ -126,3 +126,75 @@ class AppMeta(Base):
 
     key = Column(String, primary_key=True)
     value = Column(String, nullable=True)
+
+
+class FeedbackThread(Base):
+    __tablename__ = "feedback_threads"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    public_id         = Column(String, unique=True, index=True, nullable=False)
+    user_id           = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    category          = Column(String, nullable=False)
+    book_subcategory  = Column(String, nullable=True)
+    subject           = Column(String, nullable=False)
+    status            = Column(String, nullable=False, default="new", index=True)
+    book_hash_id      = Column(String, ForeignKey("books.id"), nullable=True, index=True)
+    book_page         = Column(Integer, nullable=True)
+    diag              = Column(Text, nullable=True)        # JSON string
+    assigned_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    digested_at       = Column(String, nullable=True, index=True)
+    archived_at       = Column(String, nullable=True)
+    created_at        = Column(String, nullable=False)
+    updated_at        = Column(String, nullable=False)
+
+
+class FeedbackRecipient(Base):
+    """Empty for a given thread ⇒ broadcast. Non-empty ⇒ directed."""
+    __tablename__ = "feedback_recipients"
+
+    thread_id = Column(Integer, ForeignKey("feedback_threads.id", ondelete="CASCADE"), primary_key=True)
+    admin_id  = Column(Integer, ForeignKey("users.id"), primary_key=True)
+
+
+class FeedbackMessage(Base):
+    __tablename__ = "feedback_messages"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    thread_id  = Column(Integer, ForeignKey("feedback_threads.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
+    kind       = Column(String, nullable=False)            # 'message' | 'admin' | 'internal' | 'status'
+    body       = Column(Text, nullable=False)
+    created_at = Column(String, nullable=False)
+
+
+class FeedbackAttachment(Base):
+    __tablename__ = "feedback_attachments"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    thread_id    = Column(Integer, ForeignKey("feedback_threads.id", ondelete="CASCADE"), nullable=False)
+    filename     = Column(String, nullable=False)
+    stored_path  = Column(String, nullable=False)
+    content_type = Column(String, nullable=False)
+    bytes        = Column(Integer, nullable=False)
+    created_at   = Column(String, nullable=False)
+
+
+class UserNotificationPrefs(Base):
+    __tablename__ = "user_notification_prefs"
+
+    user_id              = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    email_on_reply       = Column(Boolean, nullable=False, default=True)
+    email_on_status      = Column(Boolean, nullable=False, default=True)
+    email_weekly_summary = Column(Boolean, nullable=False, default=False)
+    updated_at           = Column(String, nullable=False)
+
+
+class AdminFeedbackSettings(Base):
+    __tablename__ = "admin_feedback_settings"
+
+    id                    = Column(Integer, primary_key=True)   # always 1
+    digest_interval_hours = Column(Integer, nullable=False, default=6)
+    min_batch_size        = Column(Integer, nullable=False, default=1)
+    urgent_bypass         = Column(Boolean, nullable=False, default=True)
+    extra_recipients      = Column(Text, nullable=False, default="")
+    updated_at            = Column(String, nullable=False)

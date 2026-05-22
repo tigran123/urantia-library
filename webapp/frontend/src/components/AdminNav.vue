@@ -1,6 +1,16 @@
 <script setup lang="ts">
+import { onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { feedbackActiveCount, refreshFeedbackActiveCount } from '../feedbackBadge'
+
 const { t } = useI18n({ useScope: 'global' })
+const route = useRoute()
+
+onMounted(refreshFeedbackActiveCount)
+// Also re-poll on navigation between admin pages — covers the case where
+// the count changed in a tab we'd already mounted AdminNav in.
+watch(() => route.path, refreshFeedbackActiveCount)
 </script>
 
 <template>
@@ -31,5 +41,19 @@ const { t } = useI18n({ useScope: 'global' })
       class="px-3 py-1.5 rounded-md text-sm font-medium"
       :class="$route.path.startsWith('/admin/comments') ? 'bg-blue-600 text-white' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
     >{{ t('admin.comments.tab') }}</router-link>
+    <router-link
+      to="/admin/feedback"
+      class="px-3 py-1.5 rounded-md text-sm font-medium inline-flex items-center gap-1.5"
+      :class="$route.path.startsWith('/admin/feedback') ? 'bg-blue-600 text-white' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+    >
+      {{ t('admin.feedback.tab') }}
+      <span
+        v-if="feedbackActiveCount > 0"
+        class="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold"
+        :class="$route.path.startsWith('/admin/feedback') ? 'bg-white text-blue-700' : 'bg-blue-600 text-white'"
+      >
+        {{ feedbackActiveCount }}
+      </span>
+    </router-link>
   </div>
 </template>

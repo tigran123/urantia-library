@@ -12,6 +12,11 @@ import AdminBooksView from '../views/AdminBooksView.vue'
 import AdminIntegrityView from '../views/AdminIntegrityView.vue'
 import AdminUploadView from '../views/AdminUploadView.vue'
 import AdminCommentsView from '../views/AdminCommentsView.vue'
+import FeedbackComposeView from '../views/FeedbackComposeView.vue'
+import MyFeedbackView from '../views/MyFeedbackView.vue'
+import FeedbackThreadView from '../views/FeedbackThreadView.vue'
+import AdminFeedbackView from '../views/AdminFeedbackView.vue'
+import AdminFeedbackSettingsView from '../views/AdminFeedbackSettingsView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -83,6 +88,32 @@ const router = createRouter({
       path: '/admin/comments',
       name: 'admin-comments',
       component: AdminCommentsView
+    },
+    {
+      path: '/feedback',
+      name: 'feedback-compose',
+      component: FeedbackComposeView
+    },
+    {
+      path: '/feedback/mine',
+      name: 'feedback-mine',
+      component: MyFeedbackView
+    },
+    {
+      path: '/feedback/:publicId',
+      name: 'feedback-thread',
+      component: FeedbackThreadView,
+      props: true
+    },
+    {
+      path: '/admin/feedback',
+      name: 'admin-feedback',
+      component: AdminFeedbackView
+    },
+    {
+      path: '/admin/feedback/settings',
+      name: 'admin-feedback-settings',
+      component: AdminFeedbackSettingsView
     }
   ]
 })

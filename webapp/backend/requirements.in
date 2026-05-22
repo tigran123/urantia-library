@@ -8,3 +8,8 @@ pyjwt
 pydantic[email]
 aiofiles
 python-multipart
+
+# Dev-only — needed for the pytest suite under tests/. Not imported by the
+# server at runtime.
+pytest
+httpx
