@@ -343,7 +343,7 @@ onBeforeUnmount(() => {
         <span v-if="bookTitle" class="font-semibold">{{ bookTitle }}</span>
         <span v-if="bookAuthors.length" class="ml-2 text-gray-500 dark:text-gray-400">— {{ bookAuthors.join(', ') }}</span>
       </div>
-      <div class="flex items-center gap-1 sm:gap-2 shrink-0">
+      <div class="flex flex-wrap items-center justify-end gap-1 sm:gap-2">
         <select
           :value="fontFamilyId"
           @change="onFontFamilyChange"

@@ -486,7 +486,7 @@ onBeforeUnmount(() => {
         <span>{{ t('djvu.of') }} {{ totalPages }}</span>
       </div>
 
-      <div class="flex items-center gap-1 sm:gap-2 shrink-0">
+      <div class="flex flex-wrap items-center justify-end gap-1 sm:gap-2">
         <button @click="zoomOut" :disabled="loadingPage" :title="t('app.zoom_out')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors disabled:opacity-50">
           <MagnifyingGlassMinusIcon class="h-5 w-5" />
         </button>

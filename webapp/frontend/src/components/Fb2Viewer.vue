@@ -313,12 +313,12 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Toolbar (hidden in immersive) -->
-    <div v-if="!immersive" class="w-full flex items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2 z-20">
-      <div class="text-sm text-gray-700 dark:text-gray-300 truncate">
+    <div v-if="!immersive" class="w-full flex flex-wrap items-center justify-between p-3 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 rounded-t-lg shadow-sm gap-2 z-20">
+      <div class="text-sm text-gray-700 dark:text-gray-300 truncate min-w-0">
         <span v-if="title" class="font-semibold">{{ title }}</span>
         <span v-if="authors.length" class="ml-2 text-gray-500 dark:text-gray-400">— {{ authors.join(', ') }}</span>
       </div>
-      <div class="flex items-center gap-2 shrink-0">
+      <div class="flex flex-wrap items-center justify-end gap-2">
         <select
           :value="fontFamilyId"
           @change="onFontFamilyChange"
