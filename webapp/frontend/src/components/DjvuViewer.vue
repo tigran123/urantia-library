@@ -13,6 +13,10 @@ import {
   ArrowsPointingInIcon,
   ArrowLongLeftIcon,
   ArrowLongRightIcon,
+  ArrowsRightLeftIcon,
+  ArrowsUpDownIcon,
+  MagnifyingGlassPlusIcon,
+  MagnifyingGlassMinusIcon,
 } from '@heroicons/vue/24/outline'
 import DjvuTocNode, { type DjvuOutlineNode } from './DjvuTocNode.vue'
 import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
@@ -41,6 +45,27 @@ const rightPage = ref<number | null>(null)
 const immersive = ref(false)
 const container = ref<HTMLElement | null>(null)
 
+// Zoom. 'width'/'height' re-fit the page to the container on every render and
+// on resize; 'custom' keeps the scale the user dialled in. Mirrors PdfViewer.
+const fitMode = ref<'width' | 'height' | 'custom'>('width')
+const customScale = ref(1)
+const renderedScale = ref(1)
+// Natural pixel size of each page image, and its on-screen size after scaling.
+const natL = ref<{ w: number; h: number }>({ w: 0, h: 0 })
+const natR = ref<{ w: number; h: number }>({ w: 0, h: 0 })
+const dispL = ref<{ w: number; h: number } | null>(null)
+const dispR = ref<{ w: number; h: number } | null>(null)
+// Fixed-width zoom readout: integer at/above 100%, one decimal below. The
+// constant string width matters — a variable-width label reflows the toolbar,
+// whose height feeds back into the fit-height scale and oscillates forever.
+const zoomPercent = computed(() =>
+  renderedScale.value >= 1
+    ? Math.round(renderedScale.value * 100).toString()
+    : (renderedScale.value * 100).toFixed(1))
+
+let resizeObs: ResizeObserver | null = null
+let resizeTimer: ReturnType<typeof setTimeout> | null = null
+
 const toc = ref<DjvuOutlineNode[]>([])
 const tocOpen = ref(false)
 
@@ -56,10 +81,8 @@ watch(immersive, (v) => {
 })
 
 // PgDn/PgUp scroll the viewport within the current page; only when already
-// at the bottom/top does the keypress flip to the next/prev page. Today the
-// image is fit-to-container so there is nothing to scroll and we always
-// turn the page — once Fit Width is added, this handler will start
-// scrolling first.
+// at the bottom/top does the keypress flip to the next/prev page (which then
+// lands at the top/bottom of the new page via nextPage/prevPage).
 const onKeyDown = (e: KeyboardEvent) => {
   if (!immersive.value) return
   const target = e.target as HTMLElement | null
@@ -106,6 +129,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
   document.body.style.overflow = ''
   document.documentElement.style.overflow = ''
+  resizeObs?.disconnect()
+  resizeObs = null
+  if (resizeTimer) clearTimeout(resizeTimer)
 })
 
 const saveProgress = async (page: number) => {
@@ -113,7 +139,13 @@ const saveProgress = async (page: number) => {
   try {
     await api.post('/progress', {
       hash_id: hashId.value,
-      location: JSON.stringify({ page: page, isDoublePage: isDoublePage.value, oddOnRight: oddOnRight.value })
+      location: JSON.stringify({
+        page: page,
+        isDoublePage: isDoublePage.value,
+        oddOnRight: oddOnRight.value,
+        fitMode: fitMode.value,
+        scale: customScale.value,
+      })
     })
   } catch (e) {
     console.error('Failed to save progress', e)
@@ -131,6 +163,12 @@ const loadProgress = async () => {
       }
       if (typeof data.oddOnRight === 'boolean') {
         oddOnRight.value = data.oddOnRight
+      }
+      if (data.fitMode === 'width' || data.fitMode === 'height' || data.fitMode === 'custom') {
+        fitMode.value = data.fitMode
+      }
+      if (typeof data.scale === 'number') {
+        customScale.value = data.scale
       }
       return parseInt(data.page)
     } catch {
@@ -190,6 +228,44 @@ const fetchPageData = async (page: number) => {
   return URL.createObjectURL(blob)
 }
 
+// Decode an image purely to read its natural pixel size. The blob URL is the
+// same one the <img> will use, so the browser keeps it cached — this is a
+// second decode of bytes already in memory, not a second network fetch.
+const loadImageDims = (url: string): Promise<{ w: number; h: number }> =>
+  new Promise((resolve) => {
+    if (!url) { resolve({ w: 0, h: 0 }); return }
+    const img = new Image()
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onerror = () => resolve({ w: 0, h: 0 })
+    img.src = url
+  })
+
+// Scale that fits the anchor page to the container per the active fit mode.
+const computeFitScale = (): number => {
+  const anchor = natL.value.w > 0 ? natL.value : natR.value
+  if (!container.value || anchor.w === 0 || anchor.h === 0) return 1
+  // Match the container padding (p-2 lg:p-4) and the gap-2 between two pages.
+  const padX = 32
+  const padY = 32
+  const gap = isDoublePage.value ? 8 : 0
+  if (fitMode.value === 'height') {
+    const h = container.value.clientHeight - padY
+    return Math.max(0.05, h / anchor.h)
+  }
+  const usableW = container.value.clientWidth - padX - gap
+  const perPage = isDoublePage.value ? usableW / 2 : usableW
+  return Math.max(0.05, perPage / anchor.w)
+}
+
+// Recompute each page's on-screen size from the current fit mode. Cheap, so
+// it runs on every render, on resize, and on every zoom/fit click.
+const applyFit = () => {
+  const scale = fitMode.value === 'custom' ? customScale.value : computeFitScale()
+  renderedScale.value = scale
+  dispL.value = natL.value.w ? { w: natL.value.w * scale, h: natL.value.h * scale } : null
+  dispR.value = natR.value.w ? { w: natR.value.w * scale, h: natR.value.h * scale } : null
+}
+
 // Snap an arbitrary page number to the spread that contains it. A spread may
 // have a null left slot (the lone cover in odd-right mode) or a null right
 // slot (a lone last page).
@@ -215,15 +291,21 @@ const fetchPage = async (page: number) => {
       sp.left !== null ? fetchPageData(sp.left) : Promise.resolve(''),
       sp.right !== null ? fetchPageData(sp.right) : Promise.resolve(''),
     ])
+    // Decode natural sizes before showing the page so the fit scale is known
+    // on the first paint — no flash of an unscaled image.
+    const [dimL, dimR] = await Promise.all([loadImageDims(imgL), loadImageDims(imgR)])
 
     if (imageUrl.value) URL.revokeObjectURL(imageUrl.value)
     if (imageUrl2.value) URL.revokeObjectURL(imageUrl2.value)
 
+    natL.value = dimL
+    natR.value = dimR
     imageUrl.value = imgL
     imageUrl2.value = imgR
     leftPage.value = sp.left
     rightPage.value = sp.right
     currentPage.value = sp.left ?? sp.right ?? page
+    applyFit()
     saveProgress(currentPage.value)
   } catch (err: any) {
     error.value = err.message || 'Failed to load page'
@@ -273,6 +355,30 @@ const toggleOddSide = () => {
   fetchPage(currentPage.value)
 }
 
+// Zoom/fit controls only resize the already-loaded page — no refetch.
+const zoomIn = () => {
+  customScale.value = Math.min(5, (fitMode.value === 'custom' ? customScale.value : renderedScale.value) * 1.2)
+  fitMode.value = 'custom'
+  applyFit()
+  saveProgress(currentPage.value)
+}
+const zoomOut = () => {
+  customScale.value = Math.max(0.05, (fitMode.value === 'custom' ? customScale.value : renderedScale.value) / 1.2)
+  fitMode.value = 'custom'
+  applyFit()
+  saveProgress(currentPage.value)
+}
+const fitWidth = () => {
+  fitMode.value = 'width'
+  applyFit()
+  saveProgress(currentPage.value)
+}
+const fitHeight = () => {
+  fitMode.value = 'height'
+  applyFit()
+  saveProgress(currentPage.value)
+}
+
 onMounted(() => {
   fetchMetadata()
 })
@@ -280,6 +386,18 @@ onMounted(() => {
 watch(() => props.source, () => {
   fetchMetadata()
 }, { deep: true })
+
+// Re-fit on container resize (the viewer has a CSS resize handle). Skipped in
+// custom zoom: that scale is the user's explicit choice, not container-driven.
+watch(container, (el) => {
+  if (!el || resizeObs) return
+  resizeObs = new ResizeObserver(() => {
+    if (fitMode.value === 'custom') return
+    if (resizeTimer) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(applyFit, 150)
+  })
+  resizeObs.observe(el)
+})
 </script>
 
 <template>
@@ -337,7 +455,40 @@ watch(() => props.source, () => {
           <span>{{ t('djvu.of') }} {{ totalPages }}</span>
         </div>
         
-        <div class="flex items-center space-x-2">
+        <div class="flex flex-wrap items-center justify-end gap-0.5 sm:gap-2">
+          <button @click="zoomOut" :disabled="loadingPage" :title="t('app.zoom_out')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors disabled:opacity-50">
+            <MagnifyingGlassMinusIcon class="h-5 w-5" />
+          </button>
+          <button
+            @click="fitWidth"
+            :disabled="loadingPage"
+            :title="t('app.fit_width')"
+            :class="[
+              'px-2 py-1 rounded transition-colors disabled:opacity-50',
+              fitMode === 'width'
+                ? 'bg-blue-500 text-white hover:bg-blue-600'
+                : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200'
+            ]"
+          >
+            <ArrowsRightLeftIcon class="h-5 w-5" />
+          </button>
+          <button
+            @click="fitHeight"
+            :disabled="loadingPage"
+            :title="t('app.fit_height')"
+            :class="[
+              'px-2 py-1 rounded transition-colors disabled:opacity-50',
+              fitMode === 'height'
+                ? 'bg-blue-500 text-white hover:bg-blue-600'
+                : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200'
+            ]"
+          >
+            <ArrowsUpDownIcon class="h-5 w-5" />
+          </button>
+          <span class="w-12 shrink-0 text-center text-sm text-gray-600 dark:text-gray-400 tabular-nums select-none">{{ zoomPercent }}%</span>
+          <button @click="zoomIn" :disabled="loadingPage" :title="t('app.zoom_in')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors disabled:opacity-50">
+            <MagnifyingGlassPlusIcon class="h-5 w-5" />
+          </button>
           <button
             @click="toggleViewMode"
             :disabled="loadingPage"
@@ -396,24 +547,33 @@ watch(() => props.source, () => {
           </nav>
         </aside>
 
-        <div ref="container" class="relative flex-grow min-w-0 overflow-auto flex items-center justify-center bg-gray-200 dark:bg-gray-900 p-2 lg:p-4">
+        <div ref="container" class="relative flex-grow min-w-0 overflow-auto bg-gray-200 dark:bg-gray-900 p-2 lg:p-4">
           <div v-if="loadingPage" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
           </div>
 
-          <div v-if="imageUrl || imageUrl2" class="flex flex-row items-center justify-center h-full w-full gap-1 md:gap-2">
+          <!-- w-fit + mx-auto: centers when the spread fits, clamps the left
+               margin to 0 when it overflows so both pages stay reachable by
+               horizontal scroll. -->
+          <div v-if="imageUrl || imageUrl2" class="flex flex-row items-start gap-1 md:gap-2 w-fit mx-auto">
             <img
               v-if="imageUrl"
               :src="imageUrl"
-              :class="['max-h-full object-contain shadow-md bg-white', isDoublePage ? 'max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)]' : 'max-w-full']"
+              :style="dispL ? { width: dispL.w + 'px', height: dispL.h + 'px' } : undefined"
+              class="shrink-0 object-contain shadow-md bg-white"
               alt="DjVu Page"
             />
             <!-- Odd-right cover: blank left half so the cover page sits on the right. -->
-            <div v-else-if="isDoublePage && imageUrl2" class="w-[calc(50%-0.125rem)] md:w-[calc(50%-0.25rem)] h-full shrink-0"></div>
+            <div
+              v-else-if="isDoublePage && imageUrl2 && dispR"
+              :style="{ width: dispR.w + 'px', height: dispR.h + 'px' }"
+              class="shrink-0"
+            ></div>
             <img
               v-if="isDoublePage && imageUrl2"
               :src="imageUrl2"
-              class="max-h-full max-w-[calc(50%-0.125rem)] md:max-w-[calc(50%-0.25rem)] object-contain shadow-md bg-white"
+              :style="dispR ? { width: dispR.w + 'px', height: dispR.h + 'px' } : undefined"
+              class="shrink-0 object-contain shadow-md bg-white"
               alt="DjVu Page 2"
             />
           </div>
@@ -421,8 +581,8 @@ watch(() => props.source, () => {
       </div>
 
       <!-- Immersive floating controls. Sit outside the scrolling viewer area
-           so they stay pinned to the viewport when zoom modes (fit-width)
-           later cause the page to overflow vertically. -->
+           so they stay pinned to the viewport when a zoom mode (fit-width, or
+           a custom scale) makes the page overflow vertically. -->
       <template v-if="immersive">
         <aside
           v-if="tocOpen"

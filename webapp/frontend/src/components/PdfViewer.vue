@@ -47,6 +47,13 @@ const error = ref('')
 const totalPages = ref(0)
 const currentPage = ref(1)
 const renderedScale = ref(1)
+// Fixed-width zoom readout: integer at/above 100%, one decimal below. The
+// constant string width matters — a variable-width label reflows the toolbar,
+// whose height feeds back into the fit scale and can oscillate forever.
+const zoomPercent = computed(() =>
+  renderedScale.value >= 1
+    ? Math.round(renderedScale.value * 100).toString()
+    : (renderedScale.value * 100).toFixed(1))
 const isDoublePage = ref(false)
 // Whether odd page numbers fall on the right (evince default): spreads run
 // [1] [2,3] [4,5]…. When false, odd pages fall on the left: [1,2] [3,4]….
@@ -113,12 +120,12 @@ const computeFitScale = (page: PDFPageProxy): number => {
   const gap = isDoublePage.value ? 8 : 0
   if (fitMode.value === 'height') {
     const h = container.value.clientHeight - padY
-    return Math.max(0.1, h / base.height)
+    return Math.max(0.05, h / base.height)
   }
   // fit-width
   const usableW = container.value.clientWidth - padX - gap
   const perPage = isDoublePage.value ? usableW / 2 : usableW
-  return Math.max(0.1, perPage / base.width)
+  return Math.max(0.05, perPage / base.width)
 }
 
 const renderOne = async (page: PDFPageProxy, canvasEl: HTMLCanvasElement, effective: number): Promise<RenderTask | null> => {
@@ -254,7 +261,7 @@ const zoomIn = () => {
   renderPage(currentPage.value)
 }
 const zoomOut = () => {
-  customScale.value = Math.max(0.2, (fitMode.value === 'custom' ? customScale.value : renderedScale.value) / 1.2)
+  customScale.value = Math.max(0.05, (fitMode.value === 'custom' ? customScale.value : renderedScale.value) / 1.2)
   fitMode.value = 'custom'
   renderPage(currentPage.value)
 }
@@ -486,7 +493,7 @@ onBeforeUnmount(() => {
         <span>{{ t('djvu.of') }} {{ totalPages }}</span>
       </div>
 
-      <div class="flex flex-wrap items-center justify-end gap-1 sm:gap-2">
+      <div class="flex flex-wrap items-center justify-end gap-0.5 sm:gap-2">
         <button @click="zoomOut" :disabled="loadingPage" :title="t('app.zoom_out')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors disabled:opacity-50">
           <MagnifyingGlassMinusIcon class="h-5 w-5" />
         </button>
@@ -516,7 +523,7 @@ onBeforeUnmount(() => {
         >
           <ArrowsUpDownIcon class="h-5 w-5" />
         </button>
-        <span class="px-1 text-sm text-gray-600 dark:text-gray-400 tabular-nums select-none">{{ Math.round(renderedScale * 100) }}%</span>
+        <span class="w-12 shrink-0 text-center text-sm text-gray-600 dark:text-gray-400 tabular-nums select-none">{{ zoomPercent }}%</span>
         <button @click="zoomIn" :disabled="loadingPage" :title="t('app.zoom_in')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors disabled:opacity-50">
           <MagnifyingGlassPlusIcon class="h-5 w-5" />
         </button>
