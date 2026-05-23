@@ -103,6 +103,7 @@ export interface LibraryStats {
   // Only present for signed-in viewers.
   total_users?: number
   online_users?: number
+  online_sessions?: number
 }
 
 export const getLibraryStats = () =>

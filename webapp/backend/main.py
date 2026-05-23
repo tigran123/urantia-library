@@ -568,8 +568,17 @@ async def library_stats(
                 if ts < cutoff:
                     del _last_seen[uid]
             online_users = len(_last_seen)
+        # Distinct active sessions within the same window. The footer suffix
+        # ("(N online in M sessions)") only renders when M > N, but the value
+        # is always returned so the frontend doesn't have to special-case it.
+        with _active_sessions_lock:
+            online_sessions = sum(
+                1 for s in _active_sessions.values()
+                if s.get("last_seen_at") and s["last_seen_at"] >= cutoff
+            )
         response["total_users"] = int(total_users)
         response["online_users"] = int(online_users)
+        response["online_sessions"] = int(online_sessions)
 
     return response
 

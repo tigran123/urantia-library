@@ -32,6 +32,7 @@ const messages = {
         languages: '{n} language | {n} languages',  // NBSP after {n}
         users: '{n} user | {n} users',  // NBSP after {n}
         online: '{n} online',  // NBSP after {n}
+        inSessions: 'in {m} session | in {m} sessions',  // NBSP after {m}
         addedThisWeek: '{n} added this week | {n} added this week',  // NBSP after {n}
       },
       download: 'Download',
@@ -572,6 +573,7 @@ const messages = {
         languages: '{n} язык | {n} языка | {n} языков',  // NBSP after {n}
         users: '{n} пользователь | {n} пользователя | {n} пользователей',  // NBSP after {n}
         online: '{n} онлайн',  // NBSP after {n}
+        inSessions: 'в {m} сессии | в {m} сессиях | в {m} сессиях',  // NBSP after {m}
         addedThisWeek: '{n} добавлено за неделю | {n} добавлено за неделю | {n} добавлено за неделю',  // NBSP after {n}
       },
       download: 'Скачать',

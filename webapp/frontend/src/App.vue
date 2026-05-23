@@ -373,7 +373,7 @@ const handleLogout = async () => {
         <span>{{ t('app.stats.languages', { n: nFmt(stats.total_languages) }, stats.total_languages) }}</span>
         <template v-if="stats.total_users !== undefined">
           <span class="mx-2">·</span>
-          <span>{{ t('app.stats.users', { n: nFmt(stats.total_users) }, stats.total_users) }} <span class="text-green-600 dark:text-green-400 font-medium">({{ t('app.stats.online', { n: nFmt(stats.online_users ?? 0) }) }})</span></span>
+          <span>{{ t('app.stats.users', { n: nFmt(stats.total_users) }, stats.total_users) }} <span class="text-green-600 dark:text-green-400 font-medium">({{ t('app.stats.online', { n: nFmt(stats.online_users ?? 0) }) }}<template v-if="(stats.online_sessions ?? 0) > (stats.online_users ?? 0)">{{ ' ' + t('app.stats.inSessions', { m: nFmt(stats.online_sessions ?? 0) }, stats.online_sessions ?? 0) }}</template>)</span></span>
         </template>
         <template v-if="stats.books_added_7d > 0">
           <span class="mx-2">·</span>
