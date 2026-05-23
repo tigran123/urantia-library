@@ -225,7 +225,13 @@ const onContentClick = (e: MouseEvent) => {
   if (noteHtml) showTooltipFor(target, noteHtml)
 }
 
-const onContentMouseOver = (e: MouseEvent) => {
+// Pointer events (gated on pointerType === 'mouse') instead of mouseover/out:
+// on touch, Android Chrome synthesizes mouseover at touchstart, which was
+// disturbing the selection lifecycle and suppressing the Copy floating
+// toolbar. Touch users get the footnote via tap (onContentClick); only mice
+// trigger the hover tooltip now.
+const onContentPointerEnter = (e: PointerEvent) => {
+  if (e.pointerType !== 'mouse') return
   const target = (e.target as HTMLElement | null)?.closest?.('a.fb2-note') as HTMLAnchorElement | null
   if (!target) return
   const noteId = (target.getAttribute('href') || '').slice(1)
@@ -233,10 +239,10 @@ const onContentMouseOver = (e: MouseEvent) => {
   if (noteHtml) showTooltipFor(target, noteHtml)
 }
 
-const onContentMouseOut = (e: MouseEvent) => {
+const onContentPointerLeave = (e: PointerEvent) => {
+  if (e.pointerType !== 'mouse') return
   const target = (e.target as HTMLElement | null)?.closest?.('a.fb2-note')
   if (!target) return
-  // Don't dismiss when the cursor crosses into the tooltip itself
   const related = e.relatedTarget as HTMLElement | null
   if (related?.closest?.('.fb2-tooltip')) return
   scheduleHideTooltip()
@@ -380,8 +386,8 @@ onBeforeUnmount(() => {
           :style="{ fontSize: `${fontScale}rem`, fontFamily }"
           v-html="html"
           @click="onContentClick"
-          @mouseover="onContentMouseOver"
-          @mouseout="onContentMouseOut"
+          @pointerover="onContentPointerEnter"
+          @pointerout="onContentPointerLeave"
         ></div>
       </div>
     </div>
@@ -447,6 +453,20 @@ onBeforeUnmount(() => {
 </template>
 
 <style>
+/* Explicit selection enablement. Browsers normally infer this from text
+   content, but on Android Chrome the floating Copy toolbar wouldn't appear
+   over selected FB2 text without these declarations; EPUB was unaffected
+   because epub.js renders into an iframe with its own selection context. */
+.fb2-content {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+  -webkit-touch-callout: default;
+}
+.fb2-content a {
+  cursor: pointer;
+}
+
 .fb2-content .fb2-section-title { font-weight: 600; margin: 1.5em 0 0.75em; }
 .fb2-content h2.fb2-section-title { font-size: 1.5em; }
 .fb2-content h3.fb2-section-title { font-size: 1.3em; }
