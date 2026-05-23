@@ -395,7 +395,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
     <template v-else>
       <!-- Grid View -->
-      <div v-if="viewMode === 'grid'" class="grid gap-6 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+      <div v-if="viewMode === 'grid'" class="grid gap-3 sm:gap-4 lg:gap-6 grid-cols-[repeat(auto-fill,minmax(140px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(130px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
         <template v-for="item in items" :key="item.name">
           <div
             class="relative group"
