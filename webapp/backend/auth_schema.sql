@@ -17,11 +17,11 @@ CREATE TABLE users (
 );
 
 CREATE TABLE registration_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, 
-    email VARCHAR UNIQUE NOT NULL, 
-    status VARCHAR, 
-    source VARCHAR, 
-    purpose VARCHAR, 
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email VARCHAR UNIQUE NOT NULL,
+    status VARCHAR,
+    source VARCHAR,
+    purpose VARCHAR,
     token VARCHAR UNIQUE
 );
 
