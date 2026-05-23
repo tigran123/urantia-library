@@ -84,6 +84,40 @@ const stats = ref<LibraryStats | null>(null)
 let statsTimer: number | null = null
 const STATS_POLL_MS = 120_000
 
+// Session-liveness heartbeat. Auth is stateless JWT in a cookie, so a session
+// terminated server-side (admin "Terminate", or the user being deactivated)
+// does not push anything to the browser. Without this poll the SPA would keep
+// showing a signed-in UI until the next API call happens to fail with 401 —
+// which on a static viewer page could be never.
+let meHeartbeatTimer: number | null = null
+const ME_HEARTBEAT_MS = 30_000
+
+const heartbeatCurrentUser = async () => {
+  // Guests get 401 on /me as their normal answer; nothing to watch for.
+  if (!currentUser.value || isAuthRoute.value) return
+  try {
+    const response = await api.get('/me')
+    currentUser.value = response.data
+  } catch (e: any) {
+    if (e.response?.status === 401) {
+      currentUser.value = null
+      if (!isAuthRoute.value) router.push({ name: 'login' })
+    }
+  }
+}
+
+const startMeHeartbeat = () => {
+  if (meHeartbeatTimer !== null) return
+  meHeartbeatTimer = window.setInterval(heartbeatCurrentUser, ME_HEARTBEAT_MS)
+}
+
+const stopMeHeartbeat = () => {
+  if (meHeartbeatTimer !== null) {
+    clearInterval(meHeartbeatTimer)
+    meHeartbeatTimer = null
+  }
+}
+
 const fetchStats = async () => {
   try {
     const r = await getLibraryStats()
@@ -113,9 +147,12 @@ const stopStatsPolling = () => {
 const onVisibilityChange = () => {
   if (document.hidden) {
     stopStatsPolling()
+    stopMeHeartbeat()
   } else {
     fetchStats()
     startStatsPolling()
+    heartbeatCurrentUser()
+    startMeHeartbeat()
   }
 }
 
@@ -124,12 +161,14 @@ onMounted(() => {
   window.addEventListener('keydown', onGlobalShortcut)
   fetchStats()
   startStatsPolling()
+  startMeHeartbeat()
   document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalShortcut)
   stopStatsPolling()
+  stopMeHeartbeat()
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 

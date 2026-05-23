@@ -93,6 +93,22 @@ _last_seen: dict[int, datetime] = {}
 _last_seen_lock = threading.Lock()
 ONLINE_WINDOW = timedelta(minutes=5)
 
+# Active JWT sessions, keyed by the token's `jti` claim. A request whose jti
+# is not here is treated as terminated (401), even if the JWT signature and
+# `exp` are still valid. The map is in-process only — a backend restart
+# wipes it and forces every cookie to re-login, which is the agreed
+# semantics.
+_active_sessions: dict[str, dict] = {}
+_active_sessions_lock = threading.Lock()
+
+
+def _purge_expired_sessions_locked() -> None:
+    """Drop entries whose `expires_at` is in the past. Caller holds the lock."""
+    now = datetime.now(timezone.utc)
+    expired = [k for k, v in _active_sessions.items() if v["expires_at"] <= now]
+    for k in expired:
+        _active_sessions.pop(k, None)
+
 
 def _seed_admin_feedback_settings() -> None:
     """Idempotent seed of the singleton admin_feedback_settings row."""
@@ -269,7 +285,8 @@ async def get_current_user(access_token: str = Cookie(None), db: Session = Depen
     try:
         payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        if email is None:
+        jti: str = payload.get("jti")
+        if email is None or jti is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     except jwt.PyJWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
@@ -277,8 +294,14 @@ async def get_current_user(access_token: str = Cookie(None), db: Session = Depen
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    now = datetime.now(timezone.utc)
+    with _active_sessions_lock:
+        sess = _active_sessions.get(jti)
+        if sess is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session terminated")
+        sess["last_seen_at"] = now
     with _last_seen_lock:
-        _last_seen[user.id] = datetime.now(timezone.utc)
+        _last_seen[user.id] = now
     return user
 
 
@@ -300,15 +323,22 @@ async def get_optional_user(
     try:
         payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        if email is None:
+        jti: str = payload.get("jti")
+        if email is None or jti is None:
             return None
     except jwt.PyJWTError:
         return None
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None or not user.is_active:
         return None
+    now = datetime.now(timezone.utc)
+    with _active_sessions_lock:
+        sess = _active_sessions.get(jti)
+        if sess is None:
+            return None
+        sess["last_seen_at"] = now
     with _last_seen_lock:
-        _last_seen[user.id] = datetime.now(timezone.utc)
+        _last_seen[user.id] = now
     return user
 
 
@@ -381,14 +411,28 @@ def _accessible_locations_query(db: Session, prefix: str, user: models.User | No
 
 
 @app.post("/api/login")
-async def login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
+async def login(request: Request, login_data: schemas.UserLogin, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == login_data.email).first()
     if not user or not verify_password(login_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     if not user.is_active:
         raise HTTPException(status_code=400, detail="User is not active")
 
-    access_token = create_access_token(data={"sub": user.email})
+    access_token, jti, expires_at = create_access_token(data={"sub": user.email})
+    now = datetime.now(timezone.utc)
+    with _active_sessions_lock:
+        _purge_expired_sessions_locked()
+        _active_sessions[jti] = {
+            "user_id": user.id,
+            "email": user.email,
+            "ip_address": request.client.host if request.client else None,
+            "user_agent": request.headers.get("user-agent"),
+            "created_at": now,
+            "last_seen_at": now,
+            # JWT `exp` was set with naive utcnow(); make it tz-aware so
+            # comparisons against datetime.now(timezone.utc) work.
+            "expires_at": expires_at.replace(tzinfo=timezone.utc),
+        }
     response = JSONResponse(content={"message": "Login successful"})
     response.set_cookie(
         key="access_token",
@@ -401,7 +445,7 @@ async def login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
     return response
 
 @app.post("/api/logout")
-async def logout(current_user: models.User | None = Depends(get_optional_user)):
+async def logout(access_token: str = Cookie(None)):
     response = JSONResponse(content={"message": "Logout successful"})
     # Cookie attributes must match those used in /api/login, otherwise the
     # browser ignores the Set-Cookie that's meant to clear it and the JWT
@@ -414,9 +458,29 @@ async def logout(current_user: models.User | None = Depends(get_optional_user)):
         secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
         samesite="lax",
     )
-    if current_user is not None:
-        with _last_seen_lock:
-            _last_seen.pop(current_user.id, None)
+    # Decode the cookie inline rather than going through get_optional_user —
+    # an already-terminated session must still be able to clear its own row,
+    # and the dep would refuse it.
+    if access_token:
+        try:
+            payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+            jti = payload.get("jti")
+            email = payload.get("sub")
+        except jwt.PyJWTError:
+            jti = None
+            email = None
+        if jti:
+            with _active_sessions_lock:
+                _active_sessions.pop(jti, None)
+        if email:
+            db_local = SessionLocal()
+            try:
+                u = db_local.query(models.User).filter(models.User.email == email).first()
+                if u is not None:
+                    with _last_seen_lock:
+                        _last_seen.pop(u.id, None)
+            finally:
+                db_local.close()
     return response
 
 @app.get("/api/me", response_model=schemas.UserResponse)
@@ -1058,6 +1122,59 @@ async def admin_list_users(
     db: Session = Depends(get_db),
 ):
     return db.query(models.User).order_by(models.User.email).all()
+
+
+def _current_jti(access_token: str | None) -> str | None:
+    """Decode `jti` from an access_token cookie without validating against the
+    session map. Used by admin handlers that need to know which session is
+    the caller's own (to guard against self-termination)."""
+    if not access_token:
+        return None
+    try:
+        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    return payload.get("jti")
+
+
+@app.get("/api/admin/sessions", response_model=List[schemas.AdminSessionSummary])
+async def admin_list_sessions(
+    access_token: str = Cookie(None),
+    _admin: models.User = Depends(require_admin),
+):
+    self_jti = _current_jti(access_token)
+    with _active_sessions_lock:
+        _purge_expired_sessions_locked()
+        rows = [
+            {
+                "jti": jti,
+                "user_id": s["user_id"],
+                "email": s["email"],
+                "ip_address": s["ip_address"],
+                "user_agent": s["user_agent"],
+                "created_at": s["created_at"].isoformat(),
+                "last_seen_at": s["last_seen_at"].isoformat(),
+                "is_self": jti == self_jti,
+            }
+            for jti, s in _active_sessions.items()
+        ]
+    rows.sort(key=lambda r: r["last_seen_at"], reverse=True)
+    return rows
+
+
+@app.delete("/api/admin/sessions/{jti}")
+async def admin_terminate_session(
+    jti: str,
+    access_token: str = Cookie(None),
+    _admin: models.User = Depends(require_admin),
+):
+    if jti == _current_jti(access_token):
+        raise HTTPException(status_code=400, detail="Refusing to terminate own session")
+    with _active_sessions_lock:
+        removed = _active_sessions.pop(jti, None)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"jti": jti, "terminated": True}
 
 
 @app.put("/api/admin/users/{user_id}/clearance", response_model=schemas.AdminUserSummary)

@@ -92,7 +92,29 @@ def app_ctx(monkeypatch):
 
     def client_for(email: str) -> TestClient:
         c = TestClient(main.app)
-        c.cookies.set("access_token", create_access_token({"sub": email}))
+        token, jti, expires_at = create_access_token({"sub": email})
+        # Backend auth deps require jti to be registered in the in-memory
+        # session map, so wire it up directly here.
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        # Look up user_id so the row mirrors what /api/login would insert.
+        db = TestSession()
+        try:
+            u = db.query(models.User).filter(models.User.email == email).first()
+            user_id = u.id if u else 0
+        finally:
+            db.close()
+        with main._active_sessions_lock:
+            main._active_sessions[jti] = {
+                "user_id": user_id,
+                "email": email,
+                "ip_address": "testclient",
+                "user_agent": "pytest",
+                "created_at": now,
+                "last_seen_at": now,
+                "expires_at": expires_at.replace(tzinfo=timezone.utc),
+            }
+        c.cookies.set("access_token", token)
         return c
 
     helpers = {

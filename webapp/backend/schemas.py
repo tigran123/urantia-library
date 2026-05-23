@@ -33,6 +33,16 @@ class UserClearanceUpdate(BaseModel):
     is_admin: Optional[bool] = None
     is_active: Optional[bool] = None
 
+class AdminSessionSummary(BaseModel):
+    jti: str
+    user_id: int
+    email: EmailStr
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    created_at: str
+    last_seen_at: str
+    is_self: bool
+
 class BookClearanceUpdate(BaseModel):
     clearance: int
 
