@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
+import type { PDFDocumentProxy, PDFPageProxy, RenderTask, PageViewport } from 'pdfjs-dist'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import {
@@ -20,6 +20,7 @@ import {
   ArrowsUpDownIcon,
   MagnifyingGlassPlusIcon,
   MagnifyingGlassMinusIcon,
+  Bars3BottomLeftIcon,
 } from '@heroicons/vue/24/outline'
 import PdfTocNode, { type PdfOutlineNode } from './PdfTocNode.vue'
 import { viewerUrls, sourceHashId, type ViewerSource } from './viewerSource'
@@ -33,10 +34,13 @@ const hashId = computed(() => sourceHashId(props.source))
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const canvas2 = ref<HTMLCanvasElement | null>(null)
+const textLayer = ref<HTMLElement | null>(null)
+const textLayer2 = ref<HTMLElement | null>(null)
 const container = ref<HTMLElement | null>(null)
 
 let pdfDoc: PDFDocumentProxy | null = null
 let activeTasks: RenderTask[] = []
+let activeTextLayers: pdfjsLib.TextLayer[] = []
 let resizeObs: ResizeObserver | null = null
 let resizeTimer: ReturnType<typeof setTimeout> | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -71,6 +75,7 @@ const customScale = ref(1)
 const toc = ref<PdfOutlineNode[]>([])
 const tocOpen = ref(false)
 const immersive = ref(false)
+const textSelectEnabled = ref(false)
 
 const saveProgress = () => {
   if (!hashId.value) return
@@ -85,6 +90,7 @@ const saveProgress = () => {
           scale: customScale.value,
           isDoublePage: isDoublePage.value,
           oddOnRight: oddOnRight.value,
+          textSelectEnabled: textSelectEnabled.value,
         }),
       })
     } catch (e) {
@@ -93,7 +99,7 @@ const saveProgress = () => {
   }, 500)
 }
 
-const loadProgress = async (): Promise<{ page: number; fitMode?: 'width' | 'height' | 'custom'; scale?: number; isDoublePage?: boolean; oddOnRight?: boolean } | null> => {
+const loadProgress = async (): Promise<{ page: number; fitMode?: 'width' | 'height' | 'custom'; scale?: number; isDoublePage?: boolean; oddOnRight?: boolean; textSelectEnabled?: boolean } | null> => {
   if (!hashId.value) return null
   try {
     const res = await api.get(`/progress/${encodeURIComponent(hashId.value)}`)
@@ -128,7 +134,7 @@ const computeFitScale = (page: PDFPageProxy): number => {
   return Math.max(0.05, perPage / base.width)
 }
 
-const renderOne = async (page: PDFPageProxy, canvasEl: HTMLCanvasElement, effective: number): Promise<RenderTask | null> => {
+const renderOne = async (page: PDFPageProxy, canvasEl: HTMLCanvasElement, effective: number): Promise<{ task: RenderTask; cssViewport: PageViewport } | null> => {
   const dpr = window.devicePixelRatio || 1
   const viewport = page.getViewport({ scale: effective * dpr })
   const cssViewport = page.getViewport({ scale: effective })
@@ -138,7 +144,37 @@ const renderOne = async (page: PDFPageProxy, canvasEl: HTMLCanvasElement, effect
   canvasEl.height = Math.floor(viewport.height)
   canvasEl.style.width = `${Math.floor(cssViewport.width)}px`
   canvasEl.style.height = `${Math.floor(cssViewport.height)}px`
-  return page.render({ canvasContext: ctx, viewport, canvas: canvasEl })
+  const task = page.render({ canvasContext: ctx, viewport, canvas: canvasEl })
+  return { task, cssViewport }
+}
+
+// Build the transparent, selectable text overlay aligned to the canvas. Only
+// runs for typeset PDFs — scanned/facsimile PDFs have no extractable text so
+// the layer renders empty (no spans, nothing selectable), which is correct.
+const renderTextLayerFor = async (
+  page: PDFPageProxy,
+  containerEl: HTMLElement,
+  cssViewport: PageViewport,
+) => {
+  containerEl.innerHTML = ''
+  // pdf.js v5's TextLayer reads `--total-scale-factor` (not `--scale-factor`,
+  // which was the v3/v4 name) on the container; every span's font-size is
+  // written as `calc(var(--text-scale-factor) * var(--font-height))`. The
+  // constructor also calls setLayerDimensions internally, which overwrites
+  // container width/height with calc(... * --total-scale-factor), so we don't
+  // set them ourselves.
+  containerEl.style.setProperty('--total-scale-factor', String(cssViewport.scale))
+  const layer = new pdfjsLib.TextLayer({
+    textContentSource: page.streamTextContent(),
+    container: containerEl,
+    viewport: cssViewport,
+  })
+  activeTextLayers.push(layer)
+  try {
+    await layer.render()
+  } catch (e: any) {
+    if (e?.name !== 'AbortException') throw e
+  }
 }
 
 // Size a canvas to match refPage's dimensions and leave it blank white — used
@@ -162,6 +198,12 @@ const cancelTasks = () => {
     try { t.cancel() } catch { /* already done */ }
   }
   activeTasks = []
+  for (const l of activeTextLayers) {
+    try { l.cancel() } catch { /* already done */ }
+  }
+  activeTextLayers = []
+  if (textLayer.value) textLayer.value.innerHTML = ''
+  if (textLayer2.value) textLayer2.value.innerHTML = ''
 }
 
 // Snap an arbitrary page number to the spread that contains it. A spread may
@@ -190,21 +232,38 @@ const renderPage = async (n: number) => {
     const effective = fitMode.value === 'custom' ? customScale.value : computeFitScale(scalePage)
     renderedScale.value = effective
 
+    let pageL: PDFPageProxy | null = null
+    let pageR: PDFPageProxy | null = null
+    let cssL: PageViewport | null = null
+    let cssR: PageViewport | null = null
+
     if (sp.left !== null) {
-      const pageL = sp.left === anchor ? scalePage : await pdfDoc.getPage(sp.left)
-      const tL = await renderOne(pageL, canvas.value, effective)
-      if (tL) activeTasks.push(tL)
+      pageL = sp.left === anchor ? scalePage : await pdfDoc.getPage(sp.left)
+      const r = await renderOne(pageL, canvas.value, effective)
+      if (r) { activeTasks.push(r.task); cssL = r.cssViewport }
     } else {
       // Odd-right cover: blank left half so the cover page sits on the right.
       renderBlank(canvas.value, scalePage, effective)
     }
     if (sp.right !== null && canvas2.value) {
-      const pageR = sp.right === anchor ? scalePage : await pdfDoc.getPage(sp.right)
-      const tR = await renderOne(pageR, canvas2.value, effective)
-      if (tR) activeTasks.push(tR)
+      pageR = sp.right === anchor ? scalePage : await pdfDoc.getPage(sp.right)
+      const r = await renderOne(pageR, canvas2.value, effective)
+      if (r) { activeTasks.push(r.task); cssR = r.cssViewport }
     }
 
     await Promise.all(activeTasks.map(t => t.promise))
+
+    if (textSelectEnabled.value) {
+      const jobs: Promise<unknown>[] = []
+      if (pageL && cssL && textLayer.value) {
+        jobs.push(renderTextLayerFor(pageL, textLayer.value, cssL))
+      }
+      if (pageR && cssR && textLayer2.value) {
+        jobs.push(renderTextLayerFor(pageR, textLayer2.value, cssR))
+      }
+      await Promise.all(jobs)
+    }
+
     leftPage.value = sp.left
     rightPage.value = sp.right
     currentPage.value = anchor
@@ -242,6 +301,13 @@ const toggleViewMode = () => {
 const toggleOddSide = () => {
   if (!isDoublePage.value) return
   oddOnRight.value = !oddOnRight.value
+  renderPage(currentPage.value)
+}
+const toggleTextSelect = () => {
+  textSelectEnabled.value = !textSelectEnabled.value
+  // Re-render so the text layer is built (or cleanly torn down) at the
+  // current scale. The canvas itself doesn't need to repaint, but reusing
+  // renderPage keeps page-spread / blank-cover bookkeeping in one place.
   renderPage(currentPage.value)
 }
 
@@ -308,6 +374,9 @@ const onKeyDown = (e: KeyboardEvent) => {
   if (!immersive.value) return
   const target = e.target as HTMLElement | null
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+  // Don't flip the page out from under an active text selection — Escape
+  // still passes through so the user can leave immersive mode.
+  if (e.key !== 'Escape' && (window.getSelection()?.toString().length ?? 0) > 0) return
   if (e.key === 'Escape') {
     e.preventDefault()
     immersive.value = false
@@ -383,6 +452,9 @@ const initPdf = async () => {
     }
     if (typeof saved?.oddOnRight === 'boolean') {
       oddOnRight.value = saved.oddOnRight
+    }
+    if (typeof saved?.textSelectEnabled === 'boolean') {
+      textSelectEnabled.value = saved.textSelectEnabled
     }
     const startPage = saved && saved.page >= 1 && saved.page <= totalPages.value ? saved.page : 1
     await renderPage(startPage)
@@ -545,6 +617,19 @@ onBeforeUnmount(() => {
           <ArrowLongRightIcon v-if="oddOnRight" class="h-5 w-5" />
           <ArrowLongLeftIcon v-else class="h-5 w-5" />
         </button>
+        <button
+          @click="toggleTextSelect"
+          :disabled="loadingPage"
+          :title="textSelectEnabled ? t('app.text_select_disable') : t('app.text_select_enable')"
+          :class="[
+            'px-2 py-1 rounded transition-colors disabled:opacity-50',
+            textSelectEnabled
+              ? 'bg-blue-500 text-white hover:bg-blue-600'
+              : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200'
+          ]"
+        >
+          <Bars3BottomLeftIcon class="h-5 w-5" />
+        </button>
         <button @click="toggleImmersive" :title="t('app.immersive_enter')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors">
           <ArrowsPointingOutIcon class="h-5 w-5" />
         </button>
@@ -589,12 +674,17 @@ onBeforeUnmount(() => {
              when content overflows so both pages are reachable by horizontal
              scroll (instead of being centered off-screen on both sides). -->
         <div class="flex flex-row items-start gap-2 w-fit mx-auto">
-          <canvas ref="canvas" class="shadow-md bg-white"></canvas>
-          <canvas
-            ref="canvas2"
+          <div class="page-wrap relative shadow-md bg-white">
+            <canvas ref="canvas"></canvas>
+            <div ref="textLayer" class="textLayer" v-show="textSelectEnabled"></div>
+          </div>
+          <div
+            class="page-wrap relative shadow-md bg-white"
             v-show="rightPage !== null"
-            class="shadow-md bg-white"
-          ></canvas>
+          >
+            <canvas ref="canvas2"></canvas>
+            <div ref="textLayer2" class="textLayer" v-show="textSelectEnabled"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -681,5 +771,72 @@ input[type=number]::-webkit-outer-spin-button {
 }
 input[type=number] {
   -moz-appearance: textfield;
+}
+
+/* Kill the inline-block descender gap so the .textLayer overlay sits exactly
+   on top of the canvas pixels (otherwise spans drift a few px downward). */
+.page-wrap { line-height: 0; }
+
+/* Minimal pdf.js v5 text-layer rules — cribbed from
+   pdfjs-dist/web/pdf_viewer.css (~885-1027) and trimmed to what selection
+   needs. The CSS-var cascade here is load-bearing: each span gets
+   `font-size: calc(var(--text-scale-factor) * var(--font-height))` and
+   `transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv))`
+   via pdf.js's emitted inline styles, and those formulas pull from the
+   variables defined here. Drop any of these rules and spans collapse to
+   ~1px slivers (the selection bug we hit first). `:deep()` is required
+   because pdf.js writes the spans dynamically, so Vue's scoped data
+   attribute is not present on them. */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 2;
+
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.textLayer :deep(span),
+.textLayer :deep(br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer :deep(> :not(.markedContent)),
+.textLayer :deep(.markedContent span:not(.markedContent)) {
+  z-index: 1;
+
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.textLayer :deep(.markedContent) {
+  display: contents;
+}
+.textLayer :deep(::selection) {
+  background: rgba(0, 100, 255, 0.3);
+}
+.textLayer :deep(br::selection) {
+  background: transparent;
+}
+.textLayer :deep(.endOfContent) {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
 }
 </style>
