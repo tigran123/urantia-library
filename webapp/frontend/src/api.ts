@@ -334,6 +334,90 @@ export const setAdminFeedbackSettings = (p: Omit<AdminFeedbackSettings,
 export const forceFeedbackDigest = () =>
   api.post<{ ok: true; sent: number }>('/admin/feedback/digest/force')
 
+// ---------- Annotations (highlights + notes) ----------
+
+export type AnnotationAnchor =
+  | { type: 'pdf';  page: number; start: { spanIndex: number; offset: number }; end: { spanIndex: number; offset: number } }
+  | { type: 'epub'; cfiRange: string }
+  | { type: 'html'; containerAnchor: number; startOffset: number; endOffset: number; endContainerAnchor?: number }
+
+export interface Annotation {
+  id: number
+  hash_id: string
+  author_id: number
+  author_name: string
+  anchor: AnnotationAnchor
+  selected_text: string
+  text_prefix: string | null
+  text_suffix: string | null
+  body: string | null
+  is_public: boolean
+  status: 'pending' | 'approved'
+  is_own: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AnnotationCreatePayload {
+  hash_id: string
+  anchor: AnnotationAnchor
+  selected_text: string
+  text_prefix?: string | null
+  text_suffix?: string | null
+  body?: string | null
+  is_public?: boolean
+}
+
+export interface AnnotationUpdatePayload {
+  anchor?: AnnotationAnchor
+  selected_text?: string
+  text_prefix?: string | null
+  text_suffix?: string | null
+  body?: string | null
+  is_public?: boolean
+}
+
+export interface AdminAnnotationItem {
+  id: number
+  hash_id: string
+  book_title: string | null
+  book_path: string | null
+  author_name: string
+  selected_text: string
+  body: string | null
+  created_at: string
+}
+
+export interface AdminAnnotationsPage {
+  annotations: AdminAnnotationItem[]
+  total: number
+  page: number
+  per_page: number
+  total_pages: number
+}
+
+export const getAnnotations = (hashId: string) =>
+  api.get<{ annotations: Annotation[] }>(
+    `/books/${encodeURIComponent(hashId)}/annotations`)
+
+export const createAnnotation = (payload: AnnotationCreatePayload) =>
+  api.post<Annotation>('/annotations', payload)
+
+export const updateAnnotation = (id: number, payload: AnnotationUpdatePayload) =>
+  api.put<Annotation>(`/annotations/${id}`, payload)
+
+export const deleteAnnotation = (id: number) =>
+  api.delete(`/annotations/${id}`)
+
+export const adminListAnnotations = (status: 'pending' | 'approved' = 'pending', page = 1, perPage = 50) =>
+  api.get<AdminAnnotationsPage>('/admin/annotations', { params: { status, page, per_page: perPage } })
+
+export const adminApproveAnnotation = (id: number) =>
+  api.post(`/admin/annotations/${id}/approve`)
+
+export const adminDeleteAnnotation = (id: number) =>
+  api.delete(`/admin/annotations/${id}`)
+
 // ---------- Notification prefs ----------
 
 export interface NotificationPrefs {

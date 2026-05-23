@@ -257,6 +257,57 @@ class AdminCommentItem(BaseModel):
     created_at: str
 
 
+class AnnotationCreate(BaseModel):
+    hash_id: str
+    anchor: dict                          # serialized as JSON in the column
+    selected_text: str
+    text_prefix: Optional[str] = None
+    text_suffix: Optional[str] = None
+    body: Optional[str] = None
+    is_public: bool = False
+
+
+class AnnotationUpdate(BaseModel):
+    """All fields optional — only supplied fields are touched. Editing body,
+    anchor, or is_public on a public annotation flips status back to 'pending'
+    (unless the editor is an admin)."""
+    anchor: Optional[dict] = None
+    selected_text: Optional[str] = None
+    text_prefix: Optional[str] = None
+    text_suffix: Optional[str] = None
+    body: Optional[str] = None
+    is_public: Optional[bool] = None
+
+
+class AnnotationOut(BaseModel):
+    id: int
+    hash_id: str
+    author_id: int
+    author_name: str
+    anchor: dict
+    selected_text: str
+    text_prefix: Optional[str] = None
+    text_suffix: Optional[str] = None
+    body: Optional[str] = None
+    is_public: bool
+    status: str                            # 'pending' | 'approved'
+    is_own: bool
+    created_at: str
+    updated_at: str
+
+
+class AdminAnnotationItem(BaseModel):
+    """A pending public annotation in the admin moderation queue."""
+    id: int
+    hash_id: str
+    book_title: Optional[str] = None
+    book_path: Optional[str] = None
+    author_name: str
+    selected_text: str
+    body: Optional[str] = None
+    created_at: str
+
+
 class MoveRequest(BaseModel):
     src: str
     dst: str

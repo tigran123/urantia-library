@@ -132,6 +132,31 @@ class AppMeta(Base):
     value = Column(String, nullable=True)
 
 
+class Annotation(Base):
+    """In-viewer annotation: highlight + optional note anchored to a text
+    selection in a book. Private annotations live with status='approved' (the
+    field only gates public visibility). Public annotations start as 'pending'
+    and an admin promotes them to 'approved'."""
+    __tablename__ = "annotations"
+    __table_args__ = (
+        Index("idx_annotations_hash_status", "hash_id", "status"),
+        Index("idx_annotations_user", "user_id"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    user_id       = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    hash_id       = Column(String, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    anchor        = Column(Text, nullable=False)          # JSON; per-format selector
+    selected_text = Column(Text, nullable=False)
+    text_prefix   = Column(Text, nullable=True)
+    text_suffix   = Column(Text, nullable=True)
+    body          = Column(Text, nullable=True)           # NULL = plain highlight
+    is_public     = Column(Boolean, nullable=False, default=False)
+    status        = Column(String, nullable=False, default="approved")
+    created_at    = Column(String, nullable=False)
+    updated_at    = Column(String, nullable=False)
+
+
 class FeedbackThread(Base):
     __tablename__ = "feedback_threads"
 

@@ -9,3 +9,15 @@
 body {
   @apply bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100;
 }
+
+mark.anno {
+  background-color: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 0;
+}
+mark.anno--mine  { background-color: rgba(255, 230, 0, 0.45); }
+mark.anno--other { background-color: rgba(255, 140, 0, 0.45); }
+mark.anno--mine:hover  { background-color: rgba(255, 230, 0, 0.7); }
+mark.anno--other:hover { background-color: rgba(255, 140, 0, 0.7); }

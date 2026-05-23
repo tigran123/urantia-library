@@ -23,6 +23,13 @@ import {
   Bars3BottomLeftIcon,
 } from '@heroicons/vue/24/outline'
 import PdfTocNode, { type PdfOutlineNode } from './PdfTocNode.vue'
+import AnnotationPopover from './AnnotationPopover.vue'
+import AnnotationsSidebar from './AnnotationsSidebar.vue'
+import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
+import { useAnnotations } from '../composables/useAnnotations'
+import { anchorFromSelection as pdfAnchorFromSelection, paintAnnotations as pdfPaintAnnotations } from '../lib/anchors/pdf'
+import { popoverPosition, type PopoverPosition } from '../lib/anchors/popoverPosition'
+import type { Annotation } from '../api'
 import { viewerUrls, sourceHashId, type ViewerSource } from './viewerSource'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
@@ -76,6 +83,189 @@ const toc = ref<PdfOutlineNode[]>([])
 const tocOpen = ref(false)
 const immersive = ref(false)
 const textSelectEnabled = ref(false)
+
+const annotationsApi = useAnnotations(hashId)
+const annoSidebarOpen = ref(false)
+
+interface PdfPending {
+  selectedText: string
+  prefix: string
+  suffix: string
+  anchor: { type: 'pdf'; page: number; start: { spanIndex: number; offset: number }; end: { spanIndex: number; offset: number } }
+}
+const annoPending = ref<PdfPending | null>(null)
+const annoExisting = ref<Annotation | null>(null)
+const annoPosition = ref<PopoverPosition | null>(null)
+
+const closeAnnoPopover = () => {
+  annoPending.value = null
+  annoExisting.value = null
+  annoPosition.value = null
+}
+
+const onAnnoClick = (id: number, ev: MouseEvent) => {
+  const found = annotationsApi.annotations.value.find(a => a.id === id) || null
+  annoExisting.value = found
+  annoPending.value = null
+  // Anchor popover beside the clicked mark using the page container as the
+  // reference frame.
+  const mark = (ev.target as HTMLElement | null)?.closest?.('mark.anno') as HTMLElement | null
+  if (mark && container.value) {
+    annoPosition.value = popoverPosition(mark.getBoundingClientRect(), container.value)
+  }
+}
+
+const paintTextLayerAnnotations = () => {
+  const list = annotationsApi.visible.value
+  if (textLayer.value && leftPage.value !== null) {
+    pdfPaintAnnotations(textLayer.value, list, { page: leftPage.value, onClick: onAnnoClick })
+  }
+  if (textLayer2.value && rightPage.value !== null) {
+    pdfPaintAnnotations(textLayer2.value, list, { page: rightPage.value, onClick: onAnnoClick })
+  }
+}
+
+const samePdfAnchor = (a: any, b: any): boolean =>
+  a?.type === 'pdf' && b?.type === 'pdf'
+  && a.page === b.page
+  && a.start?.spanIndex === b.start?.spanIndex && a.start?.offset === b.start?.offset
+  && a.end?.spanIndex === b.end?.spanIndex && a.end?.offset === b.end?.offset
+
+// Examine the current selection (if any) and open the popover. Either we
+// have an existing own annotation with this exact anchor (open in edit mode),
+// or we don't (open in create mode). Shared between the per-text-layer
+// mouseup hook and the document-wide selectionchange hook used for touch.
+const tryShowAnnotationPopoverFromSelection = () => {
+  if (!textSelectEnabled.value) return
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  let layer: HTMLElement | null = null
+  let page: number | null = null
+  if (textLayer.value && textLayer.value.contains(range.startContainer) && textLayer.value.contains(range.endContainer)) {
+    layer = textLayer.value
+    page = leftPage.value
+  } else if (textLayer2.value && textLayer2.value.contains(range.startContainer) && textLayer2.value.contains(range.endContainer)) {
+    layer = textLayer2.value
+    page = rightPage.value
+  }
+  if (!layer || page === null) return
+  if ((range.startContainer.parentElement || range.startContainer as HTMLElement | null)?.closest?.('.anno-popover')) return
+
+  const anchored = pdfAnchorFromSelection(layer, page, range)
+  if (!anchored) return
+
+  const scroll = container.value
+  if (!scroll) return
+  annoPosition.value = popoverPosition(range.getBoundingClientRect(), scroll)
+
+  // Dedup: if we already own an annotation with the same anchor, open it for
+  // editing rather than creating an unreachable duplicate.
+  const dup = annotationsApi.annotations.value.find(a =>
+    a.is_own && a.selected_text === anchored.selectedText && samePdfAnchor(a.anchor, anchored.anchor),
+  )
+  if (dup) {
+    annoExisting.value = dup
+    annoPending.value = null
+    return
+  }
+
+  annoPending.value = {
+    selectedText: anchored.selectedText,
+    prefix: anchored.prefix,
+    suffix: anchored.suffix,
+    anchor: anchored.anchor,
+  }
+  annoExisting.value = null
+}
+
+const onTextLayerMouseUp = (e: MouseEvent, _slot: 'left' | 'right') => {
+  if (!textSelectEnabled.value) return
+  const target = e.target as HTMLElement | null
+  if (target?.closest('.anno-popover')) return
+  if (target?.closest('mark.anno')) return
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+    if (!annoExisting.value) closeAnnoPopover()
+    return
+  }
+  tryShowAnnotationPopoverFromSelection()
+}
+
+// Catches touch-driven selection on Android (where mouseup doesn't fire) and
+// selection-handle adjustments after a desktop drag.
+let pdfSelDebounce: number | null = null
+const onPdfSelectionChange = () => {
+  if (pdfSelDebounce !== null) window.clearTimeout(pdfSelDebounce)
+  pdfSelDebounce = window.setTimeout(() => {
+    pdfSelDebounce = null
+    tryShowAnnotationPopoverFromSelection()
+  }, 350)
+}
+onMounted(() => document.addEventListener('selectionchange', onPdfSelectionChange))
+onBeforeUnmount(() => {
+  if (pdfSelDebounce !== null) window.clearTimeout(pdfSelDebounce)
+  document.removeEventListener('selectionchange', onPdfSelectionChange)
+})
+
+const onAnnoSaveCreate = async (payload: { body: string | null; isPublic: boolean }) => {
+  if (!annoPending.value) return
+  try {
+    await annotationsApi.create(annoPending.value.anchor, annoPending.value.selectedText, {
+      body: payload.body,
+      isPublic: payload.isPublic,
+      prefix: annoPending.value.prefix,
+      suffix: annoPending.value.suffix,
+    })
+    window.getSelection()?.removeAllRanges()
+    closeAnnoPopover()
+    paintTextLayerAnnotations()
+  } catch (e: any) {
+    console.error('Failed to save annotation', e)
+    alert(e.response?.data?.detail || e.message || 'Failed to save annotation')
+  }
+}
+
+const onAnnoUpdate = async (payload: { id: number; body: string | null; isPublic: boolean }) => {
+  try {
+    await annotationsApi.update(payload.id, { body: payload.body, is_public: payload.isPublic })
+    closeAnnoPopover()
+    paintTextLayerAnnotations()
+  } catch (e: any) {
+    console.error('Failed to update annotation', e)
+    alert(e.response?.data?.detail || e.message || 'Failed to update annotation')
+  }
+}
+
+const onAnnoDelete = async (id: number) => {
+  try {
+    await annotationsApi.remove(id)
+    closeAnnoPopover()
+    paintTextLayerAnnotations()
+  } catch (e: any) {
+    console.error('Failed to delete annotation', e)
+    alert(e.response?.data?.detail || e.message || 'Failed to delete annotation')
+  }
+}
+
+const onAnnoJump = (a: Annotation) => {
+  const anchor = a.anchor as { type: string; page: number }
+  if (anchor.type !== 'pdf') return
+  const onCurrentSpread = anchor.page === leftPage.value || anchor.page === rightPage.value
+  if (onCurrentSpread) {
+    annoExisting.value = a
+    annoPending.value = null
+    return
+  }
+  renderPage(anchor.page).then(() => {
+    annoExisting.value = a
+    annoPending.value = null
+  })
+}
+
+watch(() => annotationsApi.visible.value, () => {
+  paintTextLayerAnnotations()
+})
 
 const saveProgress = () => {
   if (!hashId.value) return
@@ -271,6 +461,7 @@ const renderPage = async (n: number) => {
     rightPage.value = sp.right
     currentPage.value = anchor
     saveProgress()
+    paintTextLayerAnnotations()
   } catch (e: any) {
     if (e?.name !== 'RenderingCancelledException') {
       error.value = e?.message || 'Render failed'
@@ -461,6 +652,8 @@ const initPdf = async () => {
     }
     const startPage = saved && saved.page >= 1 && saved.page <= totalPages.value ? saved.page : 1
     await renderPage(startPage)
+    await annotationsApi.load()
+    paintTextLayerAnnotations()
   } catch (e: any) {
     error.value = e?.message || 'Failed to load PDF'
   } finally {
@@ -633,6 +826,7 @@ onBeforeUnmount(() => {
         >
           <Bars3BottomLeftIcon class="h-5 w-5" />
         </button>
+        <AnnotationVisibilityToggle v-model="annotationsApi.visibility.value" />
         <button @click="toggleImmersive" :title="t('app.immersive_enter')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors">
           <ArrowsPointingOutIcon class="h-5 w-5" />
         </button>
@@ -667,6 +861,21 @@ onBeforeUnmount(() => {
             @navigate="onTocNavigate"
           />
         </nav>
+        <div v-if="tocOpen" class="shrink-0 border-t border-gray-200 dark:border-gray-700">
+          <button
+            @click="annoSidebarOpen = !annoSidebarOpen"
+            class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+          >
+            <span>{{ t('app.annotations') }} <span class="text-gray-400">({{ annotationsApi.visible.value.length }})</span></span>
+            <span>{{ annoSidebarOpen ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="annoSidebarOpen" class="max-h-64 overflow-auto p-1">
+            <AnnotationsSidebar
+              :annotations="annotationsApi.visible.value"
+              @jump="onAnnoJump"
+            />
+          </div>
+        </div>
       </aside>
 
       <div ref="container" class="relative flex-grow min-w-0 bg-gray-200 dark:bg-gray-900 overflow-auto p-2 lg:p-4">
@@ -679,16 +888,26 @@ onBeforeUnmount(() => {
         <div class="flex flex-row items-start gap-2 w-fit mx-auto">
           <div class="page-wrap relative shadow-md bg-white">
             <canvas ref="canvas"></canvas>
-            <div ref="textLayer" class="textLayer" v-show="textSelectEnabled"></div>
+            <div ref="textLayer" class="textLayer" v-show="textSelectEnabled" @mouseup="onTextLayerMouseUp($event, 'left')"></div>
           </div>
           <div
             class="page-wrap relative shadow-md bg-white"
             v-show="rightPage !== null"
           >
             <canvas ref="canvas2"></canvas>
-            <div ref="textLayer2" class="textLayer" v-show="textSelectEnabled"></div>
+            <div ref="textLayer2" class="textLayer" v-show="textSelectEnabled" @mouseup="onTextLayerMouseUp($event, 'right')"></div>
           </div>
         </div>
+        <AnnotationPopover
+          :pending="annoPending"
+          :existing="annoExisting"
+          :position="annoPosition"
+          :can-edit="annoExisting?.is_own ?? false"
+          @save="onAnnoSaveCreate"
+          @update="onAnnoUpdate"
+          @delete="onAnnoDelete"
+          @close="closeAnnoPopover"
+        />
       </div>
     </div>
 

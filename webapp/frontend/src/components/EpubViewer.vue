@@ -13,6 +13,13 @@ import {
   ArrowsPointingInIcon,
 } from '@heroicons/vue/24/outline'
 import EpubTocNode from './EpubTocNode.vue'
+import AnnotationPopover from './AnnotationPopover.vue'
+import AnnotationsSidebar from './AnnotationsSidebar.vue'
+import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
+import { useAnnotations } from '../composables/useAnnotations'
+import { anchorFromSelection as epubAnchorFromSelection, paintAnnotations as epubPaintAnnotations } from '../lib/anchors/epub'
+import { popoverPositionFromViewport, type PopoverPosition } from '../lib/anchors/popoverPosition'
+import type { Annotation } from '../api'
 import { viewerUrls, sourceHashId, type ViewerSource } from './viewerSource'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -34,6 +41,154 @@ const tocOpen = ref(true)
 const bookTitle = ref('')
 const bookAuthors = ref<string[]>([])
 const immersive = ref(false)
+
+const annotationsApi = useAnnotations(hashId)
+const annoSidebarOpen = ref(false)
+
+interface EpubPending {
+  selectedText: string
+  prefix: string
+  suffix: string
+  anchor: { type: 'epub'; cfiRange: string }
+}
+const annoPending = ref<EpubPending | null>(null)
+const annoExisting = ref<Annotation | null>(null)
+const annoPosition = ref<PopoverPosition | null>(null)
+
+const closeAnnoPopover = () => {
+  annoPending.value = null
+  annoExisting.value = null
+  annoPosition.value = null
+}
+
+// Compute the popover's anchor rect (in viewer-pane viewport coords) from a
+// Range that lives inside the EPUB iframe. The iframe's bounding rect gives
+// us the offset back into the parent doc.
+const positionFromIframeRange = (range: Range): PopoverPosition | null => {
+  if (!viewer.value) return null
+  const iframe = viewer.value.querySelector('iframe')
+  if (!iframe) return null
+  const ir = iframe.getBoundingClientRect()
+  const rr = range.getBoundingClientRect()
+  const rect = {
+    left: ir.left + rr.left,
+    right: ir.left + rr.right,
+    top: ir.top + rr.top,
+    bottom: ir.top + rr.bottom,
+    width: rr.width,
+    height: rr.height,
+  }
+  return popoverPositionFromViewport(rect, viewer.value)
+}
+
+const onAnnoClick = (id: number) => {
+  const found = annotationsApi.annotations.value.find(a => a.id === id) || null
+  annoExisting.value = found
+  annoPending.value = null
+  // Ask ePub.js for the CFI's range so we can anchor beside it. The range
+  // lives inside the current section iframe.
+  if (found && rendition) {
+    try {
+      const cfi = (found.anchor as { cfiRange?: string }).cfiRange
+      if (cfi) {
+        const range = (rendition as any).getRange?.(cfi)
+        if (range) annoPosition.value = positionFromIframeRange(range)
+      }
+    } catch { /* stale CFI */ }
+  }
+}
+
+const repaintEpubAnnotations = () => {
+  if (!rendition) return
+  epubPaintAnnotations(annotationsApi.visible.value, {
+    rendition,
+    onClick: onAnnoClick,
+  })
+}
+
+const onEpubSelected = (cfiRange: string, contents: any) => {
+  if (!rendition || !contents) return
+  // The iframe's selection still owns the Range we need for prefix/suffix.
+  const win = contents.window as Window | undefined
+  const sel = win?.getSelection?.()
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  const anchored = epubAnchorFromSelection(cfiRange, range)
+  if (!anchored) return
+
+  annoPosition.value = positionFromIframeRange(range)
+
+  // Dedup: same CFI range from the same user → open existing for editing.
+  const dup = annotationsApi.annotations.value.find(a => {
+    const aa = a.anchor as { type?: string; cfiRange?: string }
+    return a.is_own && aa.type === 'epub' && aa.cfiRange === anchored.anchor.cfiRange
+  })
+  if (dup) {
+    annoExisting.value = dup
+    annoPending.value = null
+    return
+  }
+
+  annoPending.value = {
+    selectedText: anchored.selectedText,
+    prefix: anchored.prefix,
+    suffix: anchored.suffix,
+    anchor: anchored.anchor,
+  }
+  annoExisting.value = null
+}
+
+const onAnnoSaveCreate = async (payload: { body: string | null; isPublic: boolean }) => {
+  if (!annoPending.value) return
+  try {
+    await annotationsApi.create(annoPending.value.anchor, annoPending.value.selectedText, {
+      body: payload.body,
+      isPublic: payload.isPublic,
+      prefix: annoPending.value.prefix,
+      suffix: annoPending.value.suffix,
+    })
+    closeAnnoPopover()
+    repaintEpubAnnotations()
+  } catch (e: any) {
+    console.error('Failed to save annotation', e)
+    alert(e.response?.data?.detail || e.message || 'Failed to save annotation')
+  }
+}
+
+const onAnnoUpdate = async (payload: { id: number; body: string | null; isPublic: boolean }) => {
+  try {
+    await annotationsApi.update(payload.id, { body: payload.body, is_public: payload.isPublic })
+    closeAnnoPopover()
+    repaintEpubAnnotations()
+  } catch (e: any) {
+    console.error('Failed to update annotation', e)
+    alert(e.response?.data?.detail || e.message || 'Failed to update annotation')
+  }
+}
+
+const onAnnoDelete = async (id: number) => {
+  try {
+    await annotationsApi.remove(id)
+    closeAnnoPopover()
+    repaintEpubAnnotations()
+  } catch (e: any) {
+    console.error('Failed to delete annotation', e)
+    alert(e.response?.data?.detail || e.message || 'Failed to delete annotation')
+  }
+}
+
+const onAnnoJump = (a: Annotation) => {
+  const anchor = a.anchor as { type: string; cfiRange: string }
+  if (anchor.type !== 'epub' || !anchor.cfiRange || !rendition) return
+  rendition.display(anchor.cfiRange).then(() => {
+    annoExisting.value = a
+    annoPending.value = null
+  }).catch(() => { /* stale CFI */ })
+}
+
+watch(() => annotationsApi.visible.value, () => {
+  repaintEpubAnnotations()
+})
 
 const FONT_SCALE_KEY = 'reader-font-scale'
 const FONT_FAMILY_KEY = 'reader-font-family'
@@ -256,7 +411,15 @@ const initEpub = async () => {
       saveTimeout = setTimeout(() => {
         saveProgress(location.start.cfi)
       }, 1000)
+      // ePub.js drops its highlight overlays whenever a section reloads, so
+      // re-paint after each navigation event.
+      repaintEpubAnnotations()
     })
+
+    rendition.on('selected', onEpubSelected)
+
+    await annotationsApi.load()
+    repaintEpubAnnotations()
 
     // Build the locations index in the background so percentageFromCfi works.
     // 1024 chars per location is epub.js's recommended granularity (~one page
@@ -380,6 +543,7 @@ onBeforeUnmount(() => {
         <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A−</button>
         <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A</button>
         <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A+</button>
+        <AnnotationVisibilityToggle v-model="annotationsApi.visibility.value" />
         <button @click="toggleImmersive" :title="t('app.immersive_enter')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">
           <ArrowsPointingOutIcon class="h-5 w-5" />
         </button>
@@ -415,10 +579,35 @@ onBeforeUnmount(() => {
             @navigate="onTocNavigate"
           />
         </nav>
+        <div v-if="tocOpen" class="shrink-0 border-t border-gray-200 dark:border-gray-700">
+          <button
+            @click="annoSidebarOpen = !annoSidebarOpen"
+            class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+          >
+            <span>{{ t('app.annotations') }} <span class="text-gray-400">({{ annotationsApi.visible.value.length }})</span></span>
+            <span>{{ annoSidebarOpen ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="annoSidebarOpen" class="max-h-64 overflow-auto p-1">
+            <AnnotationsSidebar
+              :annotations="annotationsApi.visible.value"
+              @jump="onAnnoJump"
+            />
+          </div>
+        </div>
       </aside>
 
       <div class="relative flex-grow min-w-0 bg-white dark:bg-gray-900 overflow-hidden">
         <div ref="viewer" class="absolute inset-0" :class="immersive ? 'p-0' : 'p-1 sm:p-4'"></div>
+        <AnnotationPopover
+          :pending="annoPending"
+          :existing="annoExisting"
+          :position="annoPosition"
+          :can-edit="annoExisting?.is_own ?? false"
+          @save="onAnnoSaveCreate"
+          @update="onAnnoUpdate"
+          @delete="onAnnoDelete"
+          @close="closeAnnoPopover"
+        />
 
         <!-- Immersive floating controls -->
         <template v-if="immersive">

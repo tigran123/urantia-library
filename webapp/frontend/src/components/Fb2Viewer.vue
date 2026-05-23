@@ -4,6 +4,11 @@ import api from '../api'
 import { useI18n } from 'vue-i18n'
 import { Bars3Icon, ChevronDoubleLeftIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
 import Fb2TocNode from './Fb2TocNode.vue'
+import AnnotationPopover from './AnnotationPopover.vue'
+import AnnotationsSidebar from './AnnotationsSidebar.vue'
+import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
+import { useAnnotations } from '../composables/useAnnotations'
+import { useHtmlAnnotationLayer } from '../composables/useHtmlAnnotationLayer'
 import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
 
 interface TocEntry {
@@ -72,6 +77,11 @@ const fontFamily = computed(
 )
 
 const scrollEl = ref<HTMLElement | null>(null)
+const contentEl = ref<HTMLElement | null>(null)
+
+const annotationsApi = useAnnotations(hashId)
+const annoLayer = useHtmlAnnotationLayer(scrollEl, contentEl, annotationsApi)
+const annoSidebarOpen = ref(false)
 
 const tooltip = ref<{ show: boolean; x: number; y: number; html: string }>({
   show: false, x: 0, y: 0, html: ''
@@ -282,6 +292,8 @@ const initFb2 = async () => {
       // the same anchor we just restored to.
       setTimeout(() => { restoring = false }, 250)
     }
+    await annotationsApi.load()
+    await annoLayer.repaintSoon()
   } catch (e: any) {
     error.value = e.response?.data?.detail || e.message || 'Failed to load FB2'
   } finally {
@@ -345,6 +357,7 @@ onBeforeUnmount(() => {
         <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A−</button>
         <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A</button>
         <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A+</button>
+        <AnnotationVisibilityToggle v-model="annotationsApi.visibility.value" />
         <button
           @click="toggleImmersive"
           :title="t('app.immersive_enter')"
@@ -383,14 +396,31 @@ onBeforeUnmount(() => {
             @navigate="onTocNavigate"
           />
         </nav>
+        <div v-if="tocOpen" class="shrink-0 border-t border-gray-200 dark:border-gray-700">
+          <button
+            @click="annoSidebarOpen = !annoSidebarOpen"
+            class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+          >
+            <span>{{ t('app.annotations') }} <span class="text-gray-400">({{ annotationsApi.visible.value.length }})</span></span>
+            <span>{{ annoSidebarOpen ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="annoSidebarOpen" class="max-h-64 overflow-auto p-1">
+            <AnnotationsSidebar
+              :annotations="annotationsApi.visible.value"
+              @jump="annoLayer.jumpTo"
+            />
+          </div>
+        </div>
       </aside>
 
       <div
         ref="scrollEl"
         @scroll.passive="onScroll"
-        class="fb2-scroll flex-grow min-w-0 overflow-y-auto bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        @mouseup="annoLayer.onSelectionEnd($event)"
+        class="fb2-scroll relative flex-grow min-w-0 overflow-y-auto bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
       >
         <div
+          ref="contentEl"
           class="fb2-content w-full px-6 py-8 leading-relaxed"
           :style="{ fontSize: `${fontScale}rem`, fontFamily }"
           v-html="html"
@@ -398,6 +428,16 @@ onBeforeUnmount(() => {
           @pointerover="onContentPointerEnter"
           @pointerout="onContentPointerLeave"
         ></div>
+        <AnnotationPopover
+          :pending="annoLayer.pending.value"
+          :existing="annoLayer.existing.value"
+          :position="annoLayer.position.value"
+          :can-edit="annoLayer.existing.value?.is_own ?? false"
+          @save="annoLayer.onSaveCreate"
+          @update="annoLayer.onUpdate"
+          @delete="annoLayer.onDelete"
+          @close="annoLayer.closePopover"
+        />
       </div>
     </div>
 

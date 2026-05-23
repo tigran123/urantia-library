@@ -4433,6 +4433,290 @@ async def admin_delete_comment(comment_id: int, _admin: models.User = Depends(re
 
 
 # ==============================================================================
+# Annotations (in-viewer highlights + notes)
+# ==============================================================================
+# A highlight is anchored to a text selection. Two visibility modes:
+#   - private (is_public=0): only the author sees it, status is always 'approved'.
+#   - public  (is_public=1): visible to other users only when status='approved'.
+# Public annotations enter moderation as 'pending'; an admin promotes them. An
+# author editing the body or anchor of a public annotation flips it back to
+# 'pending'. Same clearance gate as comments — public notes on a restricted
+# book are invisible to users without sufficient clearance.
+
+_ANNOTATION_BODY_MAX_LEN = 5000
+_ANNOTATION_SELECTED_MAX_LEN = 2000
+_ANNOTATION_CONTEXT_MAX_LEN = 256
+
+
+def _annotation_to_dict(row: models.Annotation, names: dict[int, str], viewer_id: int | None) -> dict:
+    try:
+        anchor = json.loads(row.anchor) if row.anchor else {}
+    except json.JSONDecodeError:
+        anchor = {}
+    return {
+        "id": row.id,
+        "hash_id": row.hash_id,
+        "author_id": row.user_id,
+        "author_name": names.get(row.user_id, "user"),
+        "anchor": anchor,
+        "selected_text": row.selected_text,
+        "text_prefix": row.text_prefix,
+        "text_suffix": row.text_suffix,
+        "body": row.body,
+        "is_public": bool(row.is_public),
+        "status": row.status,
+        "is_own": row.user_id == viewer_id,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+@app.get("/api/books/{hash_id}/annotations")
+async def get_annotations(
+    hash_id: str,
+    current_user: models.User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    if not _is_admin(current_user) and _book_clearance(hash_id, db) > _clearance_of(current_user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    uid = current_user.id if current_user else None
+    # Visible to viewer: own (any status) + others' public-and-approved.
+    visible = and_(
+        models.Annotation.is_public == True,  # noqa: E712
+        models.Annotation.status == "approved",
+    )
+    if uid is not None:
+        visible = or_(visible, models.Annotation.user_id == uid)
+
+    rows = db.query(models.Annotation).filter(
+        models.Annotation.hash_id == hash_id,
+        visible,
+    ).order_by(models.Annotation.created_at).all()
+
+    author_ids = {r.user_id for r in rows}
+    names: dict[int, str] = {}
+    if author_ids:
+        names = {
+            u_id: _author_name(email, real_name)
+            for u_id, email, real_name in db.query(
+                models.User.id, models.User.email, models.User.real_name
+            ).filter(models.User.id.in_(author_ids)).all()
+        }
+
+    return {"annotations": [_annotation_to_dict(r, names, uid) for r in rows]}
+
+
+def _validate_annotation_payload(
+    selected_text: str | None,
+    body: str | None,
+    text_prefix: str | None,
+    text_suffix: str | None,
+) -> None:
+    if selected_text is not None:
+        if not selected_text.strip():
+            raise HTTPException(status_code=400, detail="Selection is empty")
+        if len(selected_text) > _ANNOTATION_SELECTED_MAX_LEN:
+            raise HTTPException(status_code=400, detail="Selection is too long")
+    if body is not None and len(body) > _ANNOTATION_BODY_MAX_LEN:
+        raise HTTPException(status_code=400, detail="Note is too long")
+    if text_prefix is not None and len(text_prefix) > _ANNOTATION_CONTEXT_MAX_LEN:
+        raise HTTPException(status_code=400, detail="Context prefix is too long")
+    if text_suffix is not None and len(text_suffix) > _ANNOTATION_CONTEXT_MAX_LEN:
+        raise HTTPException(status_code=400, detail="Context suffix is too long")
+
+
+@app.post("/api/annotations")
+async def create_annotation(
+    payload: schemas.AnnotationCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_admin and _book_clearance(payload.hash_id, db) > (current_user.clearance or 0):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not db.query(models.Book.id).filter(models.Book.id == payload.hash_id).first():
+        raise HTTPException(status_code=404, detail="Book not found")
+    _validate_annotation_payload(payload.selected_text, payload.body, payload.text_prefix, payload.text_suffix)
+
+    now = _now_iso()
+    # Private annotations skip the queue; public ones from non-admins start pending.
+    status_value = "approved" if (not payload.is_public or current_user.is_admin) else "pending"
+    row = models.Annotation(
+        user_id=current_user.id,
+        hash_id=payload.hash_id,
+        anchor=json.dumps(payload.anchor or {}, ensure_ascii=False),
+        selected_text=payload.selected_text,
+        text_prefix=payload.text_prefix,
+        text_suffix=payload.text_suffix,
+        body=(payload.body or None),
+        is_public=bool(payload.is_public),
+        status=status_value,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    names = {current_user.id: _author_name(current_user.email, current_user.real_name)}
+    return _annotation_to_dict(row, names, current_user.id)
+
+
+@app.put("/api/annotations/{annotation_id}")
+async def update_annotation(
+    annotation_id: int,
+    payload: schemas.AnnotationUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.Annotation).filter(models.Annotation.id == annotation_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+    if row.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    _validate_annotation_payload(payload.selected_text, payload.body, payload.text_prefix, payload.text_suffix)
+
+    content_changed = False
+    if payload.anchor is not None:
+        row.anchor = json.dumps(payload.anchor, ensure_ascii=False)
+        content_changed = True
+    if payload.selected_text is not None:
+        row.selected_text = payload.selected_text
+        content_changed = True
+    if payload.text_prefix is not None:
+        row.text_prefix = payload.text_prefix
+    if payload.text_suffix is not None:
+        row.text_suffix = payload.text_suffix
+    if payload.body is not None:
+        row.body = payload.body or None
+        content_changed = True
+    if payload.is_public is not None and bool(payload.is_public) != bool(row.is_public):
+        row.is_public = bool(payload.is_public)
+        content_changed = True
+
+    # Public annotation edits by non-admins re-enter moderation.
+    if row.is_public and content_changed and not current_user.is_admin:
+        row.status = "pending"
+    elif not row.is_public:
+        row.status = "approved"
+
+    row.updated_at = _now_iso()
+    db.commit()
+    db.refresh(row)
+    names = {row.user_id: _author_name(current_user.email, current_user.real_name)} \
+        if row.user_id == current_user.id else {}
+    if row.user_id not in names:
+        author = db.query(models.User).filter(models.User.id == row.user_id).first()
+        if author:
+            names[row.user_id] = _author_name(author.email, author.real_name)
+    return _annotation_to_dict(row, names, current_user.id)
+
+
+@app.delete("/api/annotations/{annotation_id}")
+async def delete_annotation(
+    annotation_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.Annotation).filter(models.Annotation.id == annotation_id).first()
+    if not row:
+        return {"message": "Removed"}
+    if row.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    db.delete(row)
+    db.commit()
+    return {"message": "Removed"}
+
+
+# ---------- Admin: annotation moderation ----------
+
+@app.get("/api/admin/annotations")
+async def admin_list_annotations(
+    status: str = "pending",
+    page: int = 1,
+    per_page: int = 50,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    page = max(page, 1)
+    per_page = max(1, min(per_page, 200))
+
+    q = db.query(models.Annotation).filter(models.Annotation.is_public == True)  # noqa: E712
+    if status in ("pending", "approved"):
+        q = q.filter(models.Annotation.status == status)
+
+    total = q.order_by(None).count()
+    rows = (
+        q.order_by(models.Annotation.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    book_ids = {r.hash_id for r in rows}
+    titles = dict(db.query(models.Book.id, models.Book.title).filter(
+        models.Book.id.in_(book_ids)).all()) if book_ids else {}
+    paths: dict[str, str] = {}
+    if book_ids:
+        for hid, sp in db.query(
+            models.BookLocation.hash_id, models.BookLocation.symlink_path
+        ).filter(models.BookLocation.hash_id.in_(book_ids)).all():
+            paths.setdefault(hid, sp)
+    user_ids = {r.user_id for r in rows}
+    names = {uid: _author_name(email, real_name) for uid, email, real_name in db.query(
+        models.User.id, models.User.email, models.User.real_name
+    ).filter(models.User.id.in_(user_ids)).all()} if user_ids else {}
+
+    return {
+        "annotations": [
+            {
+                "id": r.id,
+                "hash_id": r.hash_id,
+                "book_title": titles.get(r.hash_id),
+                "book_path": paths.get(r.hash_id),
+                "author_name": names.get(r.user_id, "user"),
+                "selected_text": r.selected_text,
+                "body": r.body,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
+    }
+
+
+@app.post("/api/admin/annotations/{annotation_id}/approve")
+async def admin_approve_annotation(
+    annotation_id: int,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.Annotation).filter(models.Annotation.id == annotation_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+    row.status = "approved"
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"id": row.id, "status": row.status}
+
+
+@app.delete("/api/admin/annotations/{annotation_id}")
+async def admin_delete_annotation(
+    annotation_id: int,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    row = db.query(models.Annotation).filter(models.Annotation.id == annotation_id).first()
+    if row:
+        db.delete(row)
+        db.commit()
+    return {"message": "Removed"}
+
+
+# ==============================================================================
 # Feedback / Contact-admin
 # ==============================================================================
 # Sibling to the comments system: user→admin tickets with status workflow,

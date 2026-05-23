@@ -133,6 +133,27 @@ CREATE TABLE app_meta (
     value TEXT
 );
 
+-- In-viewer annotations: highlights and notes anchored to a text selection.
+-- Private annotations are stored with status='approved' (the field only gates
+-- public visibility). When a user creates or edits a *public* annotation it
+-- starts/returns to status='pending' so it goes through moderation.
+CREATE TABLE annotations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    hash_id         VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    anchor          TEXT    NOT NULL,                    -- JSON; per-format selector (pdf/epub/html)
+    selected_text   TEXT    NOT NULL,                    -- snapshot of the highlighted text
+    text_prefix     TEXT,                                -- ~64 chars before, re-anchor fallback
+    text_suffix     TEXT,                                -- ~64 chars after, re-anchor fallback
+    body            TEXT,                                -- note text; NULL = plain highlight
+    is_public       BOOLEAN NOT NULL DEFAULT 0,
+    status          VARCHAR NOT NULL DEFAULT 'approved', -- 'pending' | 'approved'
+    created_at      TEXT    NOT NULL,                    -- ISO-8601 UTC
+    updated_at      TEXT    NOT NULL
+);
+CREATE INDEX idx_annotations_hash_status ON annotations(hash_id, status);
+CREATE INDEX idx_annotations_user        ON annotations(user_id);
+
 -- ==============================================================================
 -- 6. Feedback / Contact-admin
 -- ==============================================================================

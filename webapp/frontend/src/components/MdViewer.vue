@@ -4,6 +4,11 @@ import api from '../api'
 import { useI18n } from 'vue-i18n'
 import { Bars3Icon, ChevronDoubleLeftIcon, CodeBracketIcon, DocumentTextIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
 import MdTocNode from './MdTocNode.vue'
+import AnnotationPopover from './AnnotationPopover.vue'
+import AnnotationsSidebar from './AnnotationsSidebar.vue'
+import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
+import { useAnnotations } from '../composables/useAnnotations'
+import { useHtmlAnnotationLayer } from '../composables/useHtmlAnnotationLayer'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
 import { viewerUrls, viewerParams, sourceHashId, sourceFilename, type ViewerSource } from './viewerSource'
@@ -76,6 +81,11 @@ const fontFamily = computed(
 const isTxt = computed(() => sourceFilename(props.source).toLowerCase().endsWith('.txt'))
 
 const scrollEl = ref<HTMLElement | null>(null)
+const contentEl = ref<HTMLElement | null>(null)
+
+const annotationsApi = useAnnotations(hashId)
+const annoLayer = useHtmlAnnotationLayer(scrollEl, contentEl, annotationsApi)
+const annoSidebarOpen = ref(false)
 
 let saveTimeout: ReturnType<typeof setTimeout> | null = null
 let restoring = false
@@ -245,6 +255,8 @@ const initMd = async () => {
       lastSavedAnchor = saved
       setTimeout(() => { restoring = false }, 250)
     }
+    await annotationsApi.load()
+    await annoLayer.repaintSoon()
   } catch (e: any) {
     error.value = e.response?.data?.detail || e.message || 'Failed to load file'
   } finally {
@@ -319,6 +331,7 @@ onBeforeUnmount(() => {
         <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A−</button>
         <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A</button>
         <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A+</button>
+        <AnnotationVisibilityToggle v-model="annotationsApi.visibility.value" />
         <button
           @click="toggleImmersive"
           :title="t('app.immersive_enter')"
@@ -358,15 +371,32 @@ onBeforeUnmount(() => {
             @navigate="onTocNavigate"
           />
         </nav>
+        <div v-if="tocOpen" class="shrink-0 border-t border-gray-200 dark:border-gray-700">
+          <button
+            @click="annoSidebarOpen = !annoSidebarOpen"
+            class="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+          >
+            <span>{{ t('app.annotations') }} <span class="text-gray-400">({{ annotationsApi.visible.value.length }})</span></span>
+            <span>{{ annoSidebarOpen ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="annoSidebarOpen" class="max-h-64 overflow-auto p-1">
+            <AnnotationsSidebar
+              :annotations="annotationsApi.visible.value"
+              @jump="annoLayer.jumpTo"
+            />
+          </div>
+        </div>
       </aside>
 
       <div
         ref="scrollEl"
         @scroll.passive="onScroll"
-        class="md-scroll flex-grow min-w-0 overflow-y-auto bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        @mouseup="annoLayer.onSelectionEnd($event)"
+        class="md-scroll relative flex-grow min-w-0 overflow-y-auto bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
       >
         <div
           v-if="!rawMode"
+          ref="contentEl"
           class="md-content w-full max-w-4xl mx-auto px-6 py-8 leading-relaxed"
           :class="{ 'md-content--txt': isTxt }"
           :style="{ fontSize: `${fontScale}rem`, fontFamily }"
@@ -378,6 +408,16 @@ onBeforeUnmount(() => {
           class="md-raw w-full max-w-4xl mx-auto px-6 py-8 whitespace-pre-wrap break-words"
           :style="{ fontSize: `${fontScale}rem`, fontFamily }"
         >{{ raw }}</pre>
+        <AnnotationPopover
+          :pending="annoLayer.pending.value"
+          :existing="annoLayer.existing.value"
+          :position="annoLayer.position.value"
+          :can-edit="annoLayer.existing.value?.is_own ?? false"
+          @save="annoLayer.onSaveCreate"
+          @update="annoLayer.onUpdate"
+          @delete="annoLayer.onDelete"
+          @close="annoLayer.closePopover"
+        />
       </div>
     </div>
 
