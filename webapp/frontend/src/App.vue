@@ -2,14 +2,14 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon, ChatBubbleLeftRightIcon, InboxIcon } from '@heroicons/vue/24/outline'
-import api from './api'
+import api, { getLibraryStats, type LibraryStats } from './api'
 import { userInitials } from './userDisplay'
 import { useI18n } from 'vue-i18n'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import ThemeSwitcher from './components/ThemeSwitcher.vue'
 import SettingsModal from './components/SettingsModal.vue'
 
-const { t } = useI18n({ useScope: 'global' })
+const { t, n: nFmt } = useI18n({ useScope: 'global' })
 
 const searchQuery = ref('')
 const showSearchTips = ref(false)
@@ -80,13 +80,57 @@ const onGlobalShortcut = (e: KeyboardEvent) => {
   })
 }
 
+const stats = ref<LibraryStats | null>(null)
+let statsTimer: number | null = null
+const STATS_POLL_MS = 120_000
+
+const fetchStats = async () => {
+  try {
+    const r = await getLibraryStats()
+    stats.value = r.data
+  } catch {
+    // Silent: footer just stays empty on transient errors.
+  }
+}
+
+// Auth state changes (login, logout, session expiry) flip which fields the
+// /api/library-stats endpoint returns — refetch so the footer updates without
+// a manual page reload.
+watch(currentUser, () => { fetchStats() })
+
+const startStatsPolling = () => {
+  if (statsTimer !== null) return
+  statsTimer = window.setInterval(fetchStats, STATS_POLL_MS)
+}
+
+const stopStatsPolling = () => {
+  if (statsTimer !== null) {
+    clearInterval(statsTimer)
+    statsTimer = null
+  }
+}
+
+const onVisibilityChange = () => {
+  if (document.hidden) {
+    stopStatsPolling()
+  } else {
+    fetchStats()
+    startStatsPolling()
+  }
+}
+
 onMounted(() => {
   fetchCurrentUser()
   window.addEventListener('keydown', onGlobalShortcut)
+  fetchStats()
+  startStatsPolling()
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalShortcut)
+  stopStatsPolling()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 
 const currentBrowsePath = computed(() => {
@@ -281,8 +325,23 @@ const handleLogout = async () => {
       <router-view />
     </main>
 
-    <footer class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-6 text-center text-sm text-gray-500 dark:text-gray-400 mt-auto">
-      {{ t('app.footer') }}
+    <footer v-if="!isAuthRoute" class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-6 text-center text-sm text-gray-500 dark:text-gray-400 mt-auto">
+      <template v-if="stats">
+        <span>{{ t('app.stats.books', { n: nFmt(stats.total_books) }, stats.total_books) }}</span>
+        <span class="mx-2">·</span>
+        <span>{{ t('app.stats.directories', { n: nFmt(stats.total_directories) }, stats.total_directories) }}</span>
+        <span class="mx-2">·</span>
+        <span>{{ t('app.stats.languages', { n: nFmt(stats.total_languages) }, stats.total_languages) }}</span>
+        <template v-if="stats.total_users !== undefined">
+          <span class="mx-2">·</span>
+          <span>{{ t('app.stats.users', { n: nFmt(stats.total_users) }, stats.total_users) }} <span class="text-green-600 dark:text-green-400 font-medium">({{ t('app.stats.online', { n: nFmt(stats.online_users ?? 0) }) }})</span></span>
+        </template>
+        <template v-if="stats.books_added_7d > 0">
+          <span class="mx-2">·</span>
+          <span>{{ t('app.stats.addedThisWeek', { n: nFmt(stats.books_added_7d) }, stats.books_added_7d) }}</span>
+        </template>
+      </template>
+      <span v-else>&nbsp;</span>
     </footer>
 
     <!-- Search Tips Modal -->

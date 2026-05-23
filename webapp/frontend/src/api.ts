@@ -93,6 +93,21 @@ export const cancelIntegrityJob = (jobId: string) =>
 export const searchHashIds = (q: string) =>
   api.get<{ hash_ids: string[]; total: number }>('/search/hash_ids', { params: { q } })
 
+// ---------- Library stats (footer) ----------
+
+export interface LibraryStats {
+  total_books: number
+  total_directories: number
+  total_languages: number
+  books_added_7d: number
+  // Only present for signed-in viewers.
+  total_users?: number
+  online_users?: number
+}
+
+export const getLibraryStats = () =>
+  api.get<LibraryStats>('/library-stats')
+
 // ---------- Ratings & comments ----------
 
 export interface CommentNode {

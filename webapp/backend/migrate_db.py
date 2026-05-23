@@ -3,7 +3,7 @@ import os
 import sys
 
 def migrate():
-    db_path = os.path.join(os.path.dirname(__file__), "auth.db")
+    db_path = "/Books/.data/db/lib.db"
     if not os.path.exists(db_path):
         print(f"Error: Database file not found at {db_path}")
         sys.exit(1)

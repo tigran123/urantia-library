@@ -87,7 +87,11 @@ FEEDBACK_ATTACHMENT_DIR = os.environ.get(
     "FEEDBACK_ATTACHMENT_DIR", os.path.join(DATA_DIR, "feedback_attachments")
 )
 os.makedirs(FEEDBACK_ATTACHMENT_DIR, exist_ok=True)
-_TOPDIR_SKIPLIST = {".claude", ".antigravitycli", ".vscode", ".data", "CLAUDE.md", "GEMINI.md", "urantia-library", "avatars"}
+_TOPDIR_SKIPLIST = {".claude", ".antigravitycli", ".vscode", ".data", "CLAUDE.md", "GEMINI.md", "urantia-library"}
+
+_last_seen: dict[int, datetime] = {}
+_last_seen_lock = threading.Lock()
+ONLINE_WINDOW = timedelta(minutes=5)
 
 
 def _seed_admin_feedback_settings() -> None:
@@ -273,6 +277,8 @@ async def get_current_user(access_token: str = Cookie(None), db: Session = Depen
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    with _last_seen_lock:
+        _last_seen[user.id] = datetime.now(timezone.utc)
     return user
 
 
@@ -301,6 +307,8 @@ async def get_optional_user(
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None or not user.is_active:
         return None
+    with _last_seen_lock:
+        _last_seen[user.id] = datetime.now(timezone.utc)
     return user
 
 
@@ -393,9 +401,22 @@ async def login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
     return response
 
 @app.post("/api/logout")
-async def logout():
+async def logout(current_user: models.User | None = Depends(get_optional_user)):
     response = JSONResponse(content={"message": "Logout successful"})
-    response.delete_cookie(key="access_token")
+    # Cookie attributes must match those used in /api/login, otherwise the
+    # browser ignores the Set-Cookie that's meant to clear it and the JWT
+    # keeps validating — which would leave the user counted as "online" until
+    # the 5 min idle window elapses (or forever, if their tab keeps polling).
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
+        samesite="lax",
+    )
+    if current_user is not None:
+        with _last_seen_lock:
+            _last_seen.pop(current_user.id, None)
     return response
 
 @app.get("/api/me", response_model=schemas.UserResponse)
@@ -408,6 +429,86 @@ async def get_me(current_user: models.User = Depends(get_current_user)):
         "is_admin": bool(current_user.is_admin),
         "clearance": int(current_user.clearance or 0),
     }
+
+
+@app.get("/api/library-stats")
+async def library_stats(
+    current_user: models.User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    clearance = _clearance_of(current_user)
+
+    accessible_books = (
+        db.query(models.Book)
+        .join(models.BookLocation, models.BookLocation.hash_id == models.Book.id)
+        .filter(models.Book.clearance <= clearance)
+    )
+
+    total_books = accessible_books.with_entities(func.count(func.distinct(models.Book.id))).scalar() or 0
+
+    top_dir_expr = case(
+        (models.BookLocation.symlink_path.like("%/%"),
+         func.substr(models.BookLocation.symlink_path, 1,
+                     func.instr(models.BookLocation.symlink_path, "/") - 1)),
+        else_=models.BookLocation.symlink_path,
+    )
+    top_dir_rows = (
+        db.query(top_dir_expr)
+        .join(models.Book, models.Book.id == models.BookLocation.hash_id)
+        .filter(models.Book.clearance <= clearance)
+        .distinct()
+        .all()
+    )
+    total_directories = sum(
+        1 for (d,) in top_dir_rows if d and d not in _TOPDIR_SKIPLIST
+    )
+
+    language_rows = (
+        accessible_books.with_entities(models.Book.languages).distinct().all()
+    )
+    languages: set[str] = set()
+    for (langs,) in language_rows:
+        if not langs:
+            continue
+        for piece in langs.split(","):
+            piece = piece.strip().lower()
+            if piece:
+                languages.add(piece)
+    total_languages = len(languages)
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - ONLINE_WINDOW
+    week_ago_iso = (now - timedelta(days=7)).isoformat()
+    books_added_7d = (
+        accessible_books.with_entities(func.count(func.distinct(models.Book.id)))
+        .filter(models.Book.import_date > week_ago_iso)
+        .scalar() or 0
+    )
+
+    response: dict[str, int] = {
+        "total_books": int(total_books),
+        "total_directories": int(total_directories),
+        "total_languages": int(total_languages),
+        "books_added_7d": int(books_added_7d),
+    }
+
+    # User counts are only exposed to signed-in viewers.
+    if current_user is not None:
+        total_users = (
+            db.query(func.count(models.User.id))
+            .filter(models.User.is_active.is_(True))
+            .scalar() or 0
+        )
+        with _last_seen_lock:
+            for uid, ts in list(_last_seen.items()):
+                if ts < cutoff:
+                    del _last_seen[uid]
+            online_users = len(_last_seen)
+        response["total_users"] = int(total_users)
+        response["online_users"] = int(online_users)
+
+    return response
+
 
 @app.put("/api/users/me/settings", response_model=schemas.UserResponse)
 async def update_settings(
@@ -425,8 +526,9 @@ async def update_settings(
     db.refresh(current_user)
     return current_user
 
-os.makedirs("avatars", exist_ok=True)
-app.mount("/api/avatars", StaticFiles(directory="avatars"), name="avatars")
+AVATAR_DIR = os.path.join(DATA_DIR, "avatars")
+os.makedirs(AVATAR_DIR, exist_ok=True)
+app.mount("/api/avatars", StaticFiles(directory=AVATAR_DIR), name="avatars")
 
 @app.post("/api/users/me/avatar", response_model=schemas.UserResponse)
 async def upload_avatar(file: UploadFile = File(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -435,7 +537,7 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
 
     ext = file.filename.split(".")[-1]
     filename = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
-    filepath = os.path.join("avatars", filename)
+    filepath = os.path.join(AVATAR_DIR, filename)
 
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)

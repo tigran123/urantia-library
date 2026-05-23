@@ -22,7 +22,18 @@ const messages = {
       bookshelf_desc: 'Your saved books, directories, and documents.',
       bookshelf_empty: 'Your bookshelf is empty.',
       bookshelf_signin: 'Sign in to use your bookshelf.',
-      footer: '© 2026 Urantia Library',
+      // IMPORTANT: every label below uses a non-breaking space (U+00A0)
+      // between {n} and the following word. Do NOT replace it with an
+      // ordinary space — it keeps "5 users", "2 online", etc. from
+      // breaking across two lines on narrow screens.
+      stats: {
+        books: '{n} book | {n} books',  // NBSP after {n}
+        directories: '{n} directory | {n} directories',  // NBSP after {n}
+        languages: '{n} language | {n} languages',  // NBSP after {n}
+        users: '{n} user | {n} users',  // NBSP after {n}
+        online: '{n} online',  // NBSP after {n}
+        addedThisWeek: '{n} added this week | {n} added this week',  // NBSP after {n}
+      },
       download: 'Download',
       download_signin: 'Sign in to download',
       bytes: 'bytes',
@@ -537,7 +548,18 @@ const messages = {
       bookshelf_desc: 'Ваши сохранённые книги, директории и документы.',
       bookshelf_empty: 'Ваша полка пуста.',
       bookshelf_signin: 'Войдите, чтобы пользоваться полкой.',
-      footer: '© 2026 Библиотека Урантии',
+      // IMPORTANT: every label below uses a non-breaking space (U+00A0)
+      // between {n} and the following word. Do NOT replace it with an
+      // ordinary space — it keeps "5 users", "2 online", etc. from
+      // breaking across two lines on narrow screens.
+      stats: {
+        books: '{n} книга | {n} книги | {n} книг',  // NBSP after {n}
+        directories: '{n} директория | {n} директории | {n} директорий',  // NBSP after {n}
+        languages: '{n} язык | {n} языка | {n} языков',  // NBSP after {n}
+        users: '{n} пользователь | {n} пользователя | {n} пользователей',  // NBSP after {n}
+        online: '{n} онлайн',  // NBSP after {n}
+        addedThisWeek: '{n} добавлено за неделю | {n} добавлено за неделю | {n} добавлено за неделю',  // NBSP after {n}
+      },
       download: 'Скачать',
       download_signin: 'Войдите, чтобы скачать',
       bytes: 'байт',
@@ -1035,9 +1057,21 @@ const messages = {
 
 const savedLocale = localStorage.getItem('locale') || 'en'
 
+function russianPlural(choice: number): number {
+  if (choice === 0) return 2
+  const teen = choice % 100 >= 11 && choice % 100 <= 14
+  const mod10 = choice % 10
+  if (!teen && mod10 === 1) return 0
+  if (!teen && mod10 >= 2 && mod10 <= 4) return 1
+  return 2
+}
+
 export const i18n = createI18n({
   legacy: false, // Set to false to use Composition API
   locale: savedLocale,
   fallbackLocale: 'en',
   messages,
+  pluralRules: {
+    ru: russianPlural,
+  },
 })

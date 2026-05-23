@@ -22,4 +22,4 @@ rm -rf /Books/.data \
 
 export PYTHONUNBUFFERED=1
 
-/Books/urantia-library/migrate_library.py --src /Books-full --target /Books --db /Books/urantia-library/webapp/backend/auth.db --exclude-file=/Books-full/exclude.txt
+/Books/urantia-library/migrate_library.py --src /Books-full --target /Books --db /Books/.data/db/lib.db --exclude-file=/Books-full/exclude.txt
