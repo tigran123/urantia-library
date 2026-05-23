@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import api, { startIntegrityJob, type IntegrityMode } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
-const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
+const currentUser = inject<Ref<{ is_admin?: boolean, email?: string } | null>>('currentUser', ref(null))
 const router = useRouter()
 
 const selectMode = ref(false)
@@ -228,6 +228,25 @@ onMounted(() => {
 
 watch(() => route.params.path, (newPath) => {
   loadPath(newPath as string)
+})
+
+// Re-fetch when the signed-in identity changes. The path watcher above only
+// fires on navigation, so a logout that leaves the route unchanged (e.g.
+// signing out while at the library root) would otherwise leave the previous
+// user's filtered listing — and their favorites — on screen. On sign-out we
+// always reload root, matching handleLogout's navigation: re-fetching the
+// stale subdir path here would otherwise race the route watcher and surface
+// a 403 from clearance-gated subdirectories.
+watch(() => currentUser.value?.email ?? null, () => {
+  if (currentUser.value) {
+    loadFavorites()
+    loadDirFavorites()
+    loadPath(currentPath.value)
+  } else {
+    favoriteIds.value = new Set()
+    dirFavorites.value = new Set()
+    loadPath('')
+  }
 })
 
 const getBreadcrumbs = () => {

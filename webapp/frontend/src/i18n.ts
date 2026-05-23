@@ -17,7 +17,7 @@ const messages = {
       title: 'Urantia Library',
       search_placeholder: 'Search library...',
       settings: 'Settings',
-      logout: 'Logout',
+      logout: 'Sign Out',
       bookshelf: 'My Bookshelf',
       bookshelf_desc: 'Your saved books, directories, and documents.',
       bookshelf_empty: 'Your bookshelf is empty.',
