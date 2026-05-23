@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, Text, ForeignKey, UniqueConstraint, Index
+from sqlalchemy import Boolean, Column, Float, Integer, String, Text, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.sql import text
 from database import Base
 import uuid
@@ -52,6 +52,10 @@ class ReadingProgress(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
     location = Column(String, nullable=False)
+    # 0.0..1.0; NULL when the viewer can't compute a meaningful position
+    # (e.g. raw-mode text/image viewers). Surfaced on /api/favorites so the
+    # bookshelf can render a progress bar.
+    percent = Column(Float, nullable=True)
 
 class Book(Base):
     __tablename__ = "books"

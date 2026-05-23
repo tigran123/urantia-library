@@ -139,6 +139,16 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden relative" :class="{ 'opacity-60': !match.path }">
                 <DocumentIcon class="absolute h-6 w-6 text-gray-400 dark:text-gray-600 z-0" />
                 <img :src="getFullUrl(`/api/covers/${match.hash_id}`)" @error="($event.target as HTMLImageElement).style.display = 'none'" class="relative z-10 w-full h-full object-contain bg-gray-100 dark:bg-gray-900" />
+                <div
+                  v-if="typeof match.percent === 'number' && match.percent > 0"
+                  class="absolute bottom-0 left-0 right-0 h-1 bg-gray-300/70 dark:bg-gray-700/70 z-20"
+                  :title="`${Math.round(match.percent * 100)}%`"
+                >
+                  <div
+                    class="h-full bg-blue-500 dark:bg-blue-400"
+                    :style="{ width: `${Math.max(2, Math.round(match.percent * 100))}%` }"
+                  ></div>
+                </div>
               </div>
               <div class="flex-1 min-w-0 pr-8" :class="{ 'opacity-60': !match.path }">
                 <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="match.title || match.original_filename">{{ match.title || formatFilename(match.original_filename || '', false) }}</p>

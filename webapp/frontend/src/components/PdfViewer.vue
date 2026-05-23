@@ -92,6 +92,9 @@ const saveProgress = () => {
           oddOnRight: oddOnRight.value,
           textSelectEnabled: textSelectEnabled.value,
         }),
+        percent: totalPages.value > 0
+          ? Math.min(1, currentPage.value / totalPages.value)
+          : null,
       })
     } catch (e) {
       console.error('Failed to save progress', e)

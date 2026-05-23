@@ -3923,6 +3923,17 @@ async def get_favorites(current_user: models.User | None = Depends(get_optional_
         q = q.filter(models.Book.clearance <= (current_user.clearance or 0))
     results = q.all()
 
+    # Pull reading progress for this user's favorites in a single query and
+    # attach percent to each item — avoids N+1.
+    progress_map: dict[str, float | None] = {}
+    if results:
+        hash_ids = {fav.hash_id for fav, _, _ in results}
+        for rp in db.query(models.ReadingProgress).filter(
+            models.ReadingProgress.user_id == current_user.id,
+            models.ReadingProgress.hash_id.in_(hash_ids),
+        ).all():
+            progress_map[rp.hash_id] = rp.percent
+
     fav_dict = {}
     for fav, book, loc in results:
         if fav.id not in fav_dict:
@@ -3933,7 +3944,8 @@ async def get_favorites(current_user: models.User | None = Depends(get_optional_
                 "author": book.author,
                 "description": book.description,
                 "original_filename": book.original_filename,
-                "path": loc.symlink_path if loc else None
+                "path": loc.symlink_path if loc else None,
+                "percent": progress_map.get(fav.hash_id),
             }
 
     return {"items": list(fav_dict.values())}
@@ -4057,8 +4069,11 @@ async def get_progress(hash_id: str, current_user: models.User | None = Depends(
 
 @app.post("/api/progress", response_model=schemas.ReadingProgressResponse)
 async def update_progress(prog: schemas.ReadingProgressCreate, current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    pct = prog.percent
+    if pct is not None:
+        pct = max(0.0, min(1.0, float(pct)))
     if current_user is None:  # guest — accept silently, nothing is persisted
-        return {"id": 0, "user_id": 0, "hash_id": prog.hash_id, "location": prog.location}
+        return {"id": 0, "user_id": 0, "hash_id": prog.hash_id, "location": prog.location, "percent": pct}
     if not _is_admin(current_user) and _book_clearance(prog.hash_id, db) > _clearance_of(current_user):
         raise HTTPException(status_code=403, detail="Forbidden")
     existing = db.query(models.ReadingProgress).filter(
@@ -4067,11 +4082,13 @@ async def update_progress(prog: schemas.ReadingProgressCreate, current_user: mod
     ).first()
     if existing:
         existing.location = prog.location
+        if pct is not None:
+            existing.percent = pct
         db.commit()
         db.refresh(existing)
         return existing
 
-    new_prog = models.ReadingProgress(user_id=current_user.id, hash_id=prog.hash_id, location=prog.location)
+    new_prog = models.ReadingProgress(user_id=current_user.id, hash_id=prog.hash_id, location=prog.location, percent=pct)
     db.add(new_prog)
     db.commit()
     db.refresh(new_prog)

@@ -102,10 +102,23 @@ const onFontFamilyChange = (e: Event) => {
   reflowAtCurrentLocation(() => { fontFamilyId.value = v })
 }
 
+// True once `book.locations.generate()` has finished — only then does
+// `percentageFromCfi` return a meaningful book-wide position. Generation runs
+// in the background after the EPUB is displayed so it doesn't block the first
+// paint.
+let locationsReady = false
+
 const saveProgress = async (cfi: string) => {
   if (!cfi || !hashId.value) return
+  let percent: number | null = null
+  if (locationsReady && book) {
+    try {
+      const p = book.locations.percentageFromCfi(cfi)
+      if (Number.isFinite(p)) percent = Math.max(0, Math.min(1, p))
+    } catch { /* stale CFI / not in locations index */ }
+  }
   try {
-    await api.post('/progress', { hash_id: hashId.value, location: cfi })
+    await api.post('/progress', { hash_id: hashId.value, location: cfi, percent })
   } catch (e) {
     console.error('Failed to save progress', e)
   }
@@ -244,6 +257,18 @@ const initEpub = async () => {
         saveProgress(location.start.cfi)
       }, 1000)
     })
+
+    // Build the locations index in the background so percentageFromCfi works.
+    // 1024 chars per location is epub.js's recommended granularity (~one page
+    // of text). Can take a few seconds on large books — runs detached so the
+    // first paint isn't blocked. Once ready, re-save with the now-known
+    // percent so the bookshelf bar updates without waiting for the user to
+    // turn a page.
+    book.locations.generate(1024).then(() => {
+      locationsReady = true
+      const cfi = currentCfi()
+      if (cfi) saveProgress(cfi)
+    }).catch(() => { /* malformed epub — leave percent as null */ })
 
     // After a window resize, epub.js leaves its paginator in an inconsistent
     // state — Prev/Next stop working until reload. Forward the new size and

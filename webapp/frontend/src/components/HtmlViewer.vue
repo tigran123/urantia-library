@@ -77,6 +77,14 @@ let saveTimeout: ReturnType<typeof setTimeout> | null = null
 let restoring = false
 let lastSavedAnchor = -1
 
+const scrollPercent = (): number | null => {
+  const c = scrollEl.value
+  if (!c) return null
+  const max = c.scrollHeight - c.clientHeight
+  if (max <= 0) return null
+  return Math.max(0, Math.min(1, c.scrollTop / max))
+}
+
 const saveProgress = async (anchor: number) => {
   if (anchor === lastSavedAnchor) return
   if (!hashId.value) return
@@ -84,7 +92,8 @@ const saveProgress = async (anchor: number) => {
   try {
     await api.post('/progress', {
       hash_id: hashId.value,
-      location: JSON.stringify({ anchor })
+      location: JSON.stringify({ anchor }),
+      percent: scrollPercent(),
     })
   } catch (e) {
     console.error('Failed to save HTML progress', e)

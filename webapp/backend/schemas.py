@@ -193,12 +193,14 @@ class DirectoryFavoriteResponse(BaseModel):
 class ReadingProgressCreate(BaseModel):
     hash_id: str
     location: str
+    percent: Optional[float] = None
 
 class ReadingProgressResponse(BaseModel):
     id: int
     user_id: int
     hash_id: str
     location: str
+    percent: Optional[float] = None
 
     class Config:
         from_attributes = True

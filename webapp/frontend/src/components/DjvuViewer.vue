@@ -145,7 +145,10 @@ const saveProgress = async (page: number) => {
         oddOnRight: oddOnRight.value,
         fitMode: fitMode.value,
         scale: customScale.value,
-      })
+      }),
+      percent: totalPages.value > 0
+        ? Math.min(1, page / totalPages.value)
+        : null,
     })
   } catch (e) {
     console.error('Failed to save progress', e)

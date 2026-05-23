@@ -77,6 +77,7 @@ CREATE TABLE reading_progress (
     user_id INTEGER NOT NULL REFERENCES users(id),
     hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     location VARCHAR NOT NULL,
+    percent REAL,                       -- 0.0..1.0; NULL when not computable
     UNIQUE(user_id, hash_id)
 );
 
