@@ -1,0 +1,21 @@
+[Unit]
+Description=Urantia Library nightly DB backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=tigran
+Group=tigran
+WorkingDirectory=/Books/
+ExecStart=/Books/urantia-library/webapp/backend/scripts/nightly_backup.sh
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/Books/.data/
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes

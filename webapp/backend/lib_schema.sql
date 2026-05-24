@@ -240,3 +240,9 @@ CREATE TABLE admin_feedback_settings (
     extra_recipients         TEXT NOT NULL DEFAULT '',     -- comma-separated extra admin emails
     updated_at               TEXT NOT NULL
 );
+
+-- Schema version stamp. The runner at webapp/backend/migrate.py reads this
+-- and applies any numbered files in webapp/backend/migrations/ whose number
+-- is greater than the stored value. The backend refuses to start unless this
+-- equals EXPECTED_SCHEMA_VERSION in database.py.
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '1');

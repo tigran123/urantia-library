@@ -1,0 +1,12 @@
+[Unit]
+Description=Run nightly DB backup for Urantia Library
+Requires=urantia-library-backup.service
+
+[Timer]
+# 03:00 UTC every day. Persistent so a missed run (machine off) fires on boot.
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+Unit=urantia-library-backup.service
+
+[Install]
+WantedBy=timers.target

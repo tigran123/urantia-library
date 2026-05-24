@@ -26,12 +26,13 @@ from datetime import datetime, timezone, timedelta
 from fastapi.middleware.cors import CORSMiddleware
 import models
 import schemas
-from database import engine, get_db, SessionLocal
+from database import engine, get_db, SessionLocal, verify_schema_version
 from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 import email_utils
 import jwt
 
 models.Base.metadata.create_all(bind=engine)
+verify_schema_version(engine)
 
 app = FastAPI()
 

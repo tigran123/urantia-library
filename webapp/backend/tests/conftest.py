@@ -51,6 +51,16 @@ def app_ctx(monkeypatch):
     import models
     models.Base.metadata.create_all(bind=test_engine)
 
+    # The in-memory test DB doesn't go through lib_schema.sql, so the
+    # schema_version row that initdb.sh writes isn't there. Stamp it at
+    # the current expected version so main's verify_schema_version passes.
+    from sqlalchemy import text as _sql_text
+    with test_engine.begin() as _c:
+        _c.execute(_sql_text(
+            f"INSERT OR IGNORE INTO app_meta(key,value) "
+            f"VALUES ('schema_version','{database.EXPECTED_SCHEMA_VERSION}')"
+        ))
+
     # Re-import main fresh so its _seed_admin_feedback_settings runs against
     # the in-memory DB. If already imported in the process we still need to
     # re-bind its get_db dep target and re-seed.
