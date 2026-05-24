@@ -322,7 +322,7 @@ const wrapMatches = (html: string) => {
   if (!pattern) return html
   return html.replace(
     new RegExp(pattern, 'gi'),
-    (m: string) => `<mark class='bg-yellow-200'>${m}</mark>`
+    (m: string) => `<mark class='bg-yellow-200 dark:bg-yellow-700/60'>${m}</mark>`
   )
 }
 
@@ -345,10 +345,10 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
 <template>
   <div class="space-y-6">
-    <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700">
       <div class="flex items-center justify-between gap-2 mb-2">
-        <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <MagnifyingGlassIcon class="h-6 w-6 text-blue-600" />
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+          <MagnifyingGlassIcon class="h-6 w-6 text-blue-600 dark:text-blue-400" />
           {{ $t('search.title') }}
         </h1>
         <div class="flex items-center gap-2">
@@ -373,8 +373,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             @click="toggleSelectMode()"
             class="p-1.5 rounded-md transition-colors border text-sm font-medium flex items-center gap-1"
             :class="selectMode
-              ? 'bg-emerald-100 text-emerald-700 border-emerald-300 hover:bg-emerald-200'
-              : 'text-gray-500 border-transparent hover:text-emerald-600 hover:bg-gray-100'"
+              ? 'bg-emerald-100 text-emerald-700 border-emerald-300 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-700 dark:hover:bg-emerald-900/50'
+              : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
             :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
           >
             <ShieldCheckIcon class="h-5 w-5" />
@@ -383,20 +383,20 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         </div>
       </div>
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap">
-        <p class="text-gray-500">
+        <p class="text-gray-500 dark:text-gray-400">
           <template v-if="searched">
             {{ $t('search.found_results_count', { count: total }) }}
           </template>
           <template v-else>
             {{ $t('search.results_for_label') }}
           </template>
-          <span v-if="parsedSearch.text" class="font-semibold text-gray-900">&nbsp;"{{ parsedSearch.text }}"</span>
+          <span v-if="parsedSearch.text" class="font-semibold text-gray-900 dark:text-gray-100">&nbsp;"{{ parsedSearch.text }}"</span>
           <span v-else class="italic">&nbsp;{{ $t('search.all_items') }}</span>
         </p>
         <div v-if="parsedSearch.filters.length > 0" class="flex flex-wrap gap-2 mt-2 sm:mt-0 sm:ml-2">
-          <span v-for="filter in parsedSearch.filters" :key="filter.key" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
+          <span v-for="filter in parsedSearch.filters" :key="filter.key" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-200 dark:border-blue-800">
             <span class="font-bold">{{ filter.key }}:</span> {{ filter.value }}
-            <button @click="removeFilter(filter.fullMatch)" class="ml-1 text-blue-600 hover:text-blue-900 focus:outline-none">
+            <button @click="removeFilter(filter.fullMatch)" class="ml-1 text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-200 focus:outline-none">
               <XMarkIcon class="h-3 w-3" />
             </button>
           </span>
@@ -405,71 +405,71 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
     </div>
 
     <div v-if="loading" class="flex justify-center items-center py-20">
-      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
     </div>
 
-    <div v-else-if="error" class="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200">
+    <div v-else-if="error" class="bg-red-50 text-red-600 p-4 rounded-lg border border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800">
       {{ error }}
     </div>
 
-    <div v-else-if="searched && matches.length === 0" class="text-center py-20 text-gray-500 bg-white rounded-lg border border-gray-100 shadow-sm">
-      <MagnifyingGlassIcon class="mx-auto h-12 w-12 text-gray-300 mb-3" />
+    <div v-else-if="searched && matches.length === 0" class="text-center py-20 text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm">
+      <MagnifyingGlassIcon class="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-3" />
       <p class="text-lg mb-6">{{ $t('search.no_matches') }}</p>
 
-      <div class="max-w-md mx-auto text-left bg-gray-50 p-4 rounded-lg border border-gray-200 text-sm">
-        <h3 class="font-semibold text-gray-700 mb-2">{{ $t('search.tips_title') }}</h3>
+      <div class="max-w-md mx-auto text-left bg-gray-50 dark:bg-gray-900 p-4 rounded-lg border border-gray-200 dark:border-gray-700 text-sm">
+        <h3 class="font-semibold text-gray-700 dark:text-gray-300 mb-2">{{ $t('search.tips_title') }}</h3>
         <ul class="list-disc pl-5 space-y-1">
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">harnum music</code> {{ $t('search.tip_words') }}</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">"music theory"</code> {{ $t('search.tip_phrase') }}</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">theor*</code> {{ $t('search.tip_wildcard') }}</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">-grammar</code> {{ $t('search.tip_exclude') }}</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">author:harnum</code> {{ $t('search.tip_field') }}</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">path:Law/</code> {{ $t('search.tip_path') }}</li>
-           <li><code class="bg-gray-200 px-1 rounded text-gray-800">ext:djvu</code> {{ $t('search.tip_ext_or') }} <code class="bg-gray-200 px-1 rounded text-gray-800">ext:pdf</code> {{ $t('search.tip_ext') }}</li>
-           <li>{{ $t('search.tip_combine') }} <code class="bg-gray-200 px-1 rounded text-gray-800">path:History/ ext:epub rome</code></li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">harnum music</code> {{ $t('search.tip_words') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">"music theory"</code> {{ $t('search.tip_phrase') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">theor*</code> {{ $t('search.tip_wildcard') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">-grammar</code> {{ $t('search.tip_exclude') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">author:harnum</code> {{ $t('search.tip_field') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">path:Law/</code> {{ $t('search.tip_path') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">ext:djvu</code> {{ $t('search.tip_ext_or') }} <code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">ext:pdf</code> {{ $t('search.tip_ext') }}</li>
+           <li>{{ $t('search.tip_combine') }} <code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">path:History/ ext:epub rome</code></li>
         </ul>
       </div>
     </div>
 
     <div v-else-if="matches.length > 0" class="space-y-3">
-      <div v-if="totalPages > 1" class="px-4 py-3 bg-white rounded-lg border border-gray-100 shadow-sm flex items-center justify-between text-sm">
+      <div v-if="totalPages > 1" class="px-4 py-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm flex items-center justify-between text-sm">
         <button
           @click="goToPage(currentPage - 1)"
           :disabled="currentPage <= 1"
-          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+          class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
         >
           ← {{ $t('search.previous') }}
         </button>
-        <span class="text-gray-500">{{ $t('search.page_of', { page: currentPage, total: totalPages }) }}</span>
+        <span class="text-gray-500 dark:text-gray-400">{{ $t('search.page_of', { page: currentPage, total: totalPages }) }}</span>
         <button
           @click="goToPage(currentPage + 1)"
           :disabled="currentPage >= totalPages"
-          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+          class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
         >
           {{ $t('search.next') }} →
         </button>
       </div>
 
       <!-- List View -->
-      <ul v-if="viewMode === 'list'" class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden divide-y divide-gray-100">
+      <ul v-if="viewMode === 'list'" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden divide-y divide-gray-100 dark:divide-gray-700">
         <li
           v-for="match in matches"
           :key="match.path"
-          class="hover:bg-gray-50 transition-colors p-4 group"
-          :class="selectMode && match.hash_id && isSelected(match.hash_id) ? 'bg-emerald-50' : ''"
+          class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors p-4 group"
+          :class="selectMode && match.hash_id && isSelected(match.hash_id) ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''"
           @click.capture="onItemClickCapture(match.hash_id, $event)"
         >
           <div class="relative flex gap-4">
             <!-- Selection indicator -->
             <div v-if="selectMode && match.hash_id" class="flex-shrink-0 self-center pointer-events-none">
               <CheckCircleIconSolid v-if="isSelected(match.hash_id)" class="h-6 w-6 text-emerald-500" />
-              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-500" />
             </div>
             <!-- Icon/Cover -->
             <div class="flex-shrink-0">
-               <div class="h-16 w-12 flex items-center justify-center bg-gray-100 rounded shadow-sm overflow-hidden border border-gray-200">
+               <div class="h-16 w-12 flex items-center justify-center bg-gray-100 dark:bg-gray-900 rounded shadow-sm overflow-hidden border border-gray-200 dark:border-gray-700">
                  <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" class="w-full h-full object-contain" />
-                 <DocumentIcon v-else class="h-6 w-6 text-gray-400" />
+                 <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
                </div>
             </div>
 
@@ -477,30 +477,30 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             <div class="flex-1 min-w-0 pr-12">
               <div class="flex items-start justify-between">
                 <div>
-                  <router-link :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
+                  <router-link :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 dark:text-blue-400 hover:underline break-words">
                     <span v-html="highlightText(match.title || formatFilename(match.name, match.is_dir))"></span>
                   </router-link>
                   <router-link
                     v-if="match.author"
                     :to="{ name: 'search', query: { q: authorQuery(match.author) } }"
-                    class="block text-sm text-gray-700 mt-0.5 hover:text-blue-600 hover:underline"
+                    class="block text-sm text-gray-700 dark:text-gray-300 mt-0.5 hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
                     :title="$t('search.search_by_author', { author: match.author })"
                   ><span v-html="highlightText(match.author)"></span></router-link>
-                  <p v-if="match.title" class="text-xs text-gray-500 mt-0.5 break-all">{{ match.name }}</p>
-                  <p v-if="match.description" class="text-sm text-gray-600 mt-1 line-clamp-3" v-html="highlightHtml(match.description)"></p>
+                  <p v-if="match.title" class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-all">{{ match.name }}</p>
+                  <p v-if="match.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="highlightHtml(match.description)"></p>
                 </div>
               </div>
 
-              <div class="mt-2 text-xs text-gray-400 flex items-center gap-2 flex-wrap">
+              <div class="mt-2 text-xs text-gray-400 dark:text-gray-500 flex items-center gap-2 flex-wrap">
                  <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" />
-                 <span v-if="match.rating_count" class="text-gray-300">·</span>
+                 <span v-if="match.rating_count" class="text-gray-300 dark:text-gray-600">·</span>
                  <span v-if="fileTypeLabel(match.name)" class="font-semibold">{{ fileTypeLabel(match.name) }}</span>
                  <span v-if="fileTypeLabel(match.name) && match.size != null">·</span>
                  <span v-if="match.size != null">{{ formatBytes(match.size) }}</span>
-                 <span v-if="fileTypeLabel(match.name) || match.size != null" class="text-gray-300">·</span>
+                 <span v-if="fileTypeLabel(match.name) || match.size != null" class="text-gray-300 dark:text-gray-600">·</span>
                  <span class="flex items-center gap-1">
                    {{ $t('app.location') }}
-                   <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 hover:underline">
+                   <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 dark:hover:text-blue-400 hover:underline">
                      /{{ match.parent_dir || 'Root' }}
                    </router-link>
                  </span>
@@ -535,7 +535,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               class="absolute top-2 left-1/2 -translate-x-1/2 z-20 p-1 rounded-full bg-white/90 dark:bg-gray-900/90 border border-gray-200 dark:border-gray-700 shadow-sm pointer-events-none"
             >
               <CheckCircleIconSolid v-if="isSelected(match.hash_id)" class="h-6 w-6 text-emerald-500" />
-              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-500" />
             </div>
             <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(match.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
               <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" :class="gridCls.icon" />
@@ -565,19 +565,19 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         </template>
       </div>
 
-      <div v-if="totalPages > 1" class="px-4 py-3 bg-white rounded-lg border border-gray-100 shadow-sm flex items-center justify-between text-sm">
+      <div v-if="totalPages > 1" class="px-4 py-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm flex items-center justify-between text-sm">
         <button
           @click="goToPage(currentPage - 1)"
           :disabled="currentPage <= 1"
-          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+          class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
         >
           ← {{ $t('search.previous') }}
         </button>
-        <span class="text-gray-500">{{ $t('search.page_of', { page: currentPage, total: totalPages }) }}</span>
+        <span class="text-gray-500 dark:text-gray-400">{{ $t('search.page_of', { page: currentPage, total: totalPages }) }}</span>
         <button
           @click="goToPage(currentPage + 1)"
           :disabled="currentPage >= totalPages"
-          class="px-3 py-1.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
+          class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none"
         >
           {{ $t('search.next') }} →
         </button>
@@ -587,9 +587,9 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
     <!-- Bulk action bar for admin select mode -->
     <div
       v-if="selectMode"
-      class="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-40 flex flex-wrap items-center gap-3 bg-white border border-gray-200 rounded-xl shadow-lg px-4 py-3"
+      class="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-40 flex flex-wrap items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg px-4 py-3"
     >
-      <span class="text-sm font-medium text-gray-700">
+      <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
         {{ t('admin.integrity.selected_count', { count: selected.size }) }}
       </span>
       <button
@@ -611,20 +611,20 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       <button
         @click="clearSelection()"
         :disabled="!selected.size"
-        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
       >
         {{ t('admin.integrity.clear_selection') }}
       </button>
       <button
         @click="selectAllGlobal()"
         :disabled="!total || selectingAll"
-        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {{ t('admin.integrity.select_all_count', { count: total }) }}
       </button>
       <button
         @click="toggleSelectMode()"
-        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 flex items-center gap-1"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1"
       >
         <XMarkIconOutline class="h-4 w-4" />
         {{ t('admin.integrity.exit_select_mode') }}
