@@ -199,9 +199,28 @@ const currentBrowsePath = computed(() => {
   return '';
 })
 
+// Set by onSearchEnter when Enter is pressed on a physical keyboard, so
+// performSearch can leave focus alone. Defaults to false so non-keyboard
+// submits (tapping the magnifier) also dismiss any on-screen keyboard.
+let lastEnterFromPhysicalKey = false
+
+// Heuristic: Android/iOS soft keyboards leave `event.code` empty for Enter,
+// while a real key (USB/Bluetooth) populates it with 'Enter' or 'NumpadEnter'.
+const onSearchEnter = (e: KeyboardEvent) => {
+  lastEnterFromPhysicalKey = !!e.code
+}
+
 const performSearch = () => {
+  const fromPhysical = lastEnterFromPhysicalKey
+  lastEnterFromPhysicalKey = false
   if (searchQuery.value.trim()) {
     router.push({ name: 'search', query: { q: searchQuery.value } })
+    if (!fromPhysical) {
+      // Blur to dismiss the on-screen keyboard on touch devices. A no-op on
+      // desktop, since focus only matters when a soft keyboard is up.
+      searchInputDesktop.value?.blur()
+      searchInputMobile.value?.blur()
+    }
   }
 }
 
@@ -252,6 +271,7 @@ const handleLogout = async () => {
                 ref="searchInputDesktop"
                 v-model="searchQuery"
                 type="search"
+                @keydown.enter="onSearchEnter"
                 class="block w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 :placeholder="t('app.search_placeholder')"
               />
@@ -361,6 +381,7 @@ const handleLogout = async () => {
             ref="searchInputMobile"
             v-model="searchQuery"
             type="search"
+            @keydown.enter="onSearchEnter"
             class="block w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
             :placeholder="t('app.search_placeholder')"
           />

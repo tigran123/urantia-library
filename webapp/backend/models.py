@@ -78,6 +78,7 @@ class Book(Base):
     last_verified_mode = Column(String, nullable=True)
     last_verified_error = Column(String, nullable=True)
     import_date = Column(String, nullable=False)
+    size = Column(Integer, nullable=True)
 
 class BookLocation(Base):
     __tablename__ = "book_locations"

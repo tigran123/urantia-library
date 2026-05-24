@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import api, { startIntegrityJob, searchHashIds, type IntegrityMode } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
-import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon, FolderIcon, ArrowUpIcon, ArrowDownIcon, ScaleIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
 import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultiple } from '../composables/useGridItemSize'
@@ -143,6 +143,44 @@ const goToPage = (page: number) => {
   router.push({ name: 'search', query: { ...route.query, page: String(page) } })
 }
 
+type SortMode = 'relevance' | 'size' | 'directory'
+type SortDir = 'asc' | 'desc'
+
+const sortMode = computed<SortMode>(() => {
+  const s = route.query.sort as string
+  return s === 'size' || s === 'directory' ? s : 'relevance'
+})
+const sortDir = computed<SortDir>(() => (route.query.dir === 'asc' ? 'asc' : 'desc'))
+
+// The direction toggle is only meaningful for size/directory; the UI hides it
+// when relevance is active so users never see a no-op control.
+const directionMeaningful = computed(() => sortMode.value !== 'relevance')
+
+const setSort = (next: SortMode) => {
+  if (next === sortMode.value) return
+  const q: Record<string, string> = { ...(route.query as Record<string, string>), page: '1' }
+  if (next === 'relevance') {
+    delete q.sort
+    delete q.dir
+  } else {
+    q.sort = next
+    // Pick a sensible default direction the first time someone enters this
+    // mode: desc for size (largest first — facsimiles), asc for directory
+    // (alphabetical). Existing dir wins so the toggle isn't clobbered when
+    // bouncing back to a mode the user already configured.
+    if (!route.query.dir) q.dir = next === 'size' ? 'desc' : 'asc'
+  }
+  router.push({ name: 'search', query: q })
+}
+
+const toggleSortDir = () => {
+  if (!directionMeaningful.value) return
+  router.push({
+    name: 'search',
+    query: { ...(route.query as Record<string, string>), page: '1', dir: sortDir.value === 'asc' ? 'desc' : 'asc' },
+  })
+}
+
 const parsedSearch = computed(() => {
   const q = (route.query.q as string) || ''
   let text = q
@@ -234,7 +272,12 @@ const doSearch = async (q: string, page: number) => {
   searched.value = true
 
   try {
-    const res = await api.get('/search', { params: { q, page, per_page: effectivePerPage.value } })
+    const params: Record<string, any> = { q, page, per_page: effectivePerPage.value }
+    if (sortMode.value !== 'relevance') {
+      params.sort = sortMode.value
+      params.dir = sortDir.value
+    }
+    const res = await api.get('/search', { params })
     matches.value = res.data.matches
     total.value = res.data.total ?? 0
     totalPages.value = res.data.total_pages ?? 0
@@ -256,7 +299,7 @@ onUnmounted(() => {
   if (resizeTimer !== null) window.clearTimeout(resizeTimer)
 })
 
-watch(() => [route.query.q, route.query.page], () => {
+watch(() => [route.query.q, route.query.page, route.query.sort, route.query.dir], () => {
   doSearch(route.query.q as string, currentPage.value)
 })
 
@@ -329,6 +372,33 @@ const wrapMatches = (html: string) => {
 const highlightText = (text: string) => wrapMatches(escapeHtml(text || ''))
 const highlightHtml = (html: string) => wrapMatches(html || '')
 
+// Interleave directory-header markers with matches so list and grid views can
+// share one v-for loop. In non-directory modes this is just the flat match
+// list. Backend orders by symlink_path in directory mode, so same-parent
+// items are already contiguous — one pass with a running counter suffices.
+type FlatRow =
+  | { kind: 'header'; dir: string; count: number }
+  | { kind: 'match'; match: any }
+const flatRows = computed<FlatRow[]>(() => {
+  if (sortMode.value !== 'directory') {
+    return matches.value.map(m => ({ kind: 'match', match: m }))
+  }
+  const rows: FlatRow[] = []
+  let header: { kind: 'header'; dir: string; count: number } | null = null
+  for (const m of matches.value) {
+    if (!header || header.dir !== m.parent_dir) {
+      header = { kind: 'header', dir: m.parent_dir, count: 0 }
+      rows.push(header)
+    }
+    header.count++
+    rows.push({ kind: 'match', match: m })
+  }
+  return rows
+})
+
+const rowKey = (row: FlatRow, idx: number): string =>
+  row.kind === 'header' ? `h:${idx}:${row.dir}` : row.match.path
+
 const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) => {
   if (isDir || name.length <= maxLength) return name;
   const extIndex = name.lastIndexOf('.');
@@ -351,7 +421,42 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <MagnifyingGlassIcon class="h-6 w-6 text-blue-600 dark:text-blue-400" />
           {{ $t('search.title') }}
         </h1>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="inline-flex bg-gray-100 dark:bg-gray-800 p-1 rounded-lg" role="group" :aria-label="$t('search.sort_label')">
+            <button
+              @click="setSort('relevance')"
+              :class="['px-2 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1', sortMode === 'relevance' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+              :title="$t('search.sort_relevance')"
+            >
+              <MagnifyingGlassIcon class="h-4 w-4" />
+              <span class="hidden sm:inline">{{ $t('search.sort_relevance') }}</span>
+            </button>
+            <button
+              @click="setSort('size')"
+              :class="['px-2 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1', sortMode === 'size' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+              :title="$t('search.sort_size')"
+            >
+              <ScaleIcon class="h-4 w-4" />
+              <span class="hidden sm:inline">{{ $t('search.sort_size') }}</span>
+            </button>
+            <button
+              @click="setSort('directory')"
+              :class="['px-2 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1', sortMode === 'directory' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+              :title="$t('search.sort_directory')"
+            >
+              <FolderIcon class="h-4 w-4" />
+              <span class="hidden sm:inline">{{ $t('search.sort_directory') }}</span>
+            </button>
+          </div>
+          <button
+            v-if="directionMeaningful"
+            @click="toggleSortDir()"
+            class="p-1.5 rounded-md transition-colors bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+            :title="sortDir === 'asc' ? $t('search.sort_asc') : $t('search.sort_desc')"
+          >
+            <ArrowUpIcon v-if="sortDir === 'asc'" class="h-4 w-4" />
+            <ArrowDownIcon v-else class="h-4 w-4" />
+          </button>
           <div class="inline-flex bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
             <button
               @click="viewMode = 'grid'"
@@ -452,79 +557,108 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
       <!-- List View -->
       <ul v-if="viewMode === 'list'" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden divide-y divide-gray-100 dark:divide-gray-700">
-        <li
-          v-for="match in matches"
-          :key="match.path"
-          class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors p-4 group"
-          :class="selectMode && match.hash_id && isSelected(match.hash_id) ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''"
-          @click.capture="onItemClickCapture(match.hash_id, $event)"
-        >
-          <div class="relative flex gap-4">
-            <!-- Selection indicator -->
-            <div v-if="selectMode && match.hash_id" class="flex-shrink-0 self-center pointer-events-none">
-              <CheckCircleIconSolid v-if="isSelected(match.hash_id)" class="h-6 w-6 text-emerald-500" />
-              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-500" />
-            </div>
-            <!-- Icon/Cover -->
-            <div class="flex-shrink-0">
-               <div class="h-16 w-12 flex items-center justify-center bg-gray-100 dark:bg-gray-900 rounded shadow-sm overflow-hidden border border-gray-200 dark:border-gray-700">
-                 <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" class="w-full h-full object-contain" />
-                 <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
-               </div>
-            </div>
-
-            <!-- Details -->
-            <div class="flex-1 min-w-0 pr-12">
-              <div class="flex items-start justify-between">
-                <div>
-                  <router-link :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 dark:text-blue-400 hover:underline break-words">
-                    <span v-html="highlightText(match.title || formatFilename(match.name, match.is_dir))"></span>
-                  </router-link>
-                  <router-link
-                    v-if="match.author"
-                    :to="{ name: 'search', query: { q: authorQuery(match.author) } }"
-                    class="block text-sm text-gray-700 dark:text-gray-300 mt-0.5 hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
-                    :title="$t('search.search_by_author', { author: match.author })"
-                  ><span v-html="highlightText(match.author)"></span></router-link>
-                  <p v-if="match.title" class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-all">{{ match.name }}</p>
-                  <p v-if="match.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="highlightHtml(match.description)"></p>
+        <template v-for="(row, idx) in flatRows" :key="rowKey(row, idx)">
+          <li
+            v-if="row.kind === 'header'"
+            class="bg-gray-50 dark:bg-gray-900/60 px-4 py-2 flex items-center gap-2 text-sm sticky top-0 z-10"
+          >
+            <FolderIcon class="h-4 w-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+            <router-link
+              :to="`/browse/${row.dir}`"
+              class="font-mono text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:underline truncate"
+            >/{{ row.dir || 'Root' }}</router-link>
+            <span class="text-xs text-gray-500 dark:text-gray-400 ml-auto flex-shrink-0">
+              {{ $t('search.group_items_count', { count: row.count }) }}
+            </span>
+          </li>
+          <template v-else v-for="match in [row.match]" :key="match.path">
+            <li
+              class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors p-4 group"
+              :class="selectMode && match.hash_id && isSelected(match.hash_id) ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''"
+              @click.capture="onItemClickCapture(match.hash_id, $event)"
+            >
+              <div class="relative flex gap-4">
+                <!-- Selection indicator -->
+                <div v-if="selectMode && match.hash_id" class="flex-shrink-0 self-center pointer-events-none">
+                  <CheckCircleIconSolid v-if="isSelected(match.hash_id)" class="h-6 w-6 text-emerald-500" />
+                  <CheckCircleIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-500" />
                 </div>
-              </div>
+                <!-- Icon/Cover -->
+                <div class="flex-shrink-0">
+                   <div class="h-16 w-12 flex items-center justify-center bg-gray-100 dark:bg-gray-900 rounded shadow-sm overflow-hidden border border-gray-200 dark:border-gray-700">
+                     <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" class="w-full h-full object-contain" />
+                     <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
+                   </div>
+                </div>
 
-              <div class="mt-2 text-xs text-gray-400 dark:text-gray-500 flex items-center gap-2 flex-wrap">
-                 <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" />
-                 <span v-if="match.rating_count" class="text-gray-300 dark:text-gray-600">·</span>
-                 <span v-if="fileTypeLabel(match.name)" class="font-semibold">{{ fileTypeLabel(match.name) }}</span>
-                 <span v-if="fileTypeLabel(match.name) && match.size != null">·</span>
-                 <span v-if="match.size != null">{{ formatBytes(match.size) }}</span>
-                 <span v-if="fileTypeLabel(match.name) || match.size != null" class="text-gray-300 dark:text-gray-600">·</span>
-                 <span class="flex items-center gap-1">
-                   {{ $t('app.location') }}
-                   <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 dark:hover:text-blue-400 hover:underline">
-                     /{{ match.parent_dir || 'Root' }}
-                   </router-link>
-                 </span>
-              </div>
-            </div>
+                <!-- Details -->
+                <div class="flex-1 min-w-0 pr-12">
+                  <div class="flex items-start justify-between">
+                    <div>
+                      <router-link :to="`/item/${match.path}`" class="text-lg font-medium text-blue-600 dark:text-blue-400 hover:underline break-words">
+                        <span v-html="highlightText(match.title || formatFilename(match.name, match.is_dir))"></span>
+                      </router-link>
+                      <router-link
+                        v-if="match.author"
+                        :to="{ name: 'search', query: { q: authorQuery(match.author) } }"
+                        class="block text-sm text-gray-700 dark:text-gray-300 mt-0.5 hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+                        :title="$t('search.search_by_author', { author: match.author })"
+                      ><span v-html="highlightText(match.author)"></span></router-link>
+                      <p v-if="match.title" class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-all">{{ match.name }}</p>
+                      <p v-if="match.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="highlightHtml(match.description)"></p>
+                    </div>
+                  </div>
 
-            <!-- Bookmark Button -->
-            <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(match.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(match.hash_id) }" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-              <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" class="h-5 w-5" />
-              <BookmarkIcon v-else class="h-5 w-5" />
-            </button>
-            <button
-              v-if="currentUser?.is_admin && match.hash_id"
-              @click.prevent="editBookClearance(match, $event)"
-              class="absolute right-10 top-1 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
-              :title="t('admin.edit_clearance_tooltip')"
-            >🔒 {{ match.clearance ?? 0 }}</button>
-          </div>
-        </li>
+                  <div class="mt-2 text-xs text-gray-400 dark:text-gray-500 flex items-center gap-2 flex-wrap">
+                     <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" />
+                     <span v-if="match.rating_count" class="text-gray-300 dark:text-gray-600">·</span>
+                     <span v-if="fileTypeLabel(match.name)" class="font-semibold">{{ fileTypeLabel(match.name) }}</span>
+                     <span v-if="fileTypeLabel(match.name) && match.size != null">·</span>
+                     <span v-if="match.size != null">{{ formatBytes(match.size) }}</span>
+                     <span v-if="fileTypeLabel(match.name) || match.size != null" class="text-gray-300 dark:text-gray-600">·</span>
+                     <span class="flex items-center gap-1">
+                       {{ $t('app.location') }}
+                       <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 dark:hover:text-blue-400 hover:underline">
+                         /{{ match.parent_dir || 'Root' }}
+                       </router-link>
+                     </span>
+                  </div>
+                </div>
+
+                <!-- Bookmark Button -->
+                <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(match.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(match.hash_id) }" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+                  <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" class="h-5 w-5" />
+                  <BookmarkIcon v-else class="h-5 w-5" />
+                </button>
+                <button
+                  v-if="currentUser?.is_admin && match.hash_id"
+                  @click.prevent="editBookClearance(match, $event)"
+                  class="absolute right-10 top-1 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
+                  :title="t('admin.edit_clearance_tooltip')"
+                >🔒 {{ match.clearance ?? 0 }}</button>
+              </div>
+            </li>
+          </template>
+        </template>
       </ul>
 
       <!-- Grid View -->
       <div v-if="viewMode === 'grid'" :class="['grid', GRID_CLASSES[gridItemSize]]">
-        <template v-for="match in matches" :key="match.path">
+        <template v-for="(row, idx) in flatRows" :key="rowKey(row, idx)">
+          <div
+            v-if="row.kind === 'header'"
+            class="col-span-full flex items-center gap-2 px-2 py-1 mt-2 first:mt-0 border-b border-gray-200 dark:border-gray-700"
+          >
+            <FolderIcon class="h-4 w-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+            <router-link
+              :to="`/browse/${row.dir}`"
+              class="font-mono text-sm text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:underline truncate"
+            >/{{ row.dir || 'Root' }}</router-link>
+            <span class="text-xs text-gray-500 dark:text-gray-400 ml-auto flex-shrink-0">
+              {{ $t('search.group_items_count', { count: row.count }) }}
+            </span>
+          </div>
+          <template v-else v-for="match in [row.match]" :key="match.path">
           <div
             class="relative group"
             :class="selectMode && match.hash_id && isSelected(match.hash_id) ? 'ring-2 ring-emerald-500 rounded-xl' : ''"
@@ -562,6 +696,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" class="mt-1" />
             </router-link>
           </div>
+          </template>
         </template>
       </div>
 

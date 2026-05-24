@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response, UploadFile, File, Query
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_, not_, func, case, select
@@ -951,6 +951,8 @@ async def search(
     q: str = "",
     page: int = 1,
     per_page: int = 50,
+    sort: str = Query("relevance", pattern="^(relevance|size|directory)$"),
+    direction: str = Query("desc", alias="dir", pattern="^(asc|desc)$"),
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
@@ -958,28 +960,44 @@ async def search(
     per_page = max(1, min(per_page, 200))
 
     if not q:
-        return {"matches": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0}
+        return {"matches": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0,
+                "sort": sort, "dir": direction}
 
     query, terms = _build_search_query(q, current_user, db)
 
     total = query.order_by(None).count()
     total_pages = (total + per_page - 1) // per_page
 
-    # Order by relevance, then average rating, then a stable tiebreak.
-    avg_rating = (
-        select(func.avg(models.BookRating.rating))
-        .where(models.BookRating.hash_id == models.Book.id)
-        .correlate(models.Book)
-        .scalar_subquery()
-    )
-    order_cols = []
-    score = _relevance_score(terms)
-    if score is not None:
-        order_cols.append(score.desc())
-    order_cols += [
-        avg_rating.desc().nulls_last(),
-        models.Book.title, models.Book.id, models.BookLocation.symlink_path,
-    ]
+    # Build ORDER BY. `direction` only meaningfully affects size and directory;
+    # relevance is always score-desc with a stable tiebreak.
+    asc = direction == "asc"
+    order_cols: list = []
+    if sort == "size":
+        size_col = models.Book.size
+        order_cols.append((size_col.asc() if asc else size_col.desc()).nulls_last())
+        order_cols += [models.Book.title, models.Book.id, models.BookLocation.symlink_path]
+    elif sort == "directory":
+        # Lexicographic ordering on the full path puts same-parent siblings
+        # adjacent (their shared prefix sorts together), and within a group
+        # falls back to filename order — exactly what we want for multi-volume
+        # sets. No SQL dirname() needed.
+        path_col = models.BookLocation.symlink_path
+        order_cols.append(path_col.asc() if asc else path_col.desc())
+        order_cols.append(models.Book.id)
+    else:
+        avg_rating = (
+            select(func.avg(models.BookRating.rating))
+            .where(models.BookRating.hash_id == models.Book.id)
+            .correlate(models.Book)
+            .scalar_subquery()
+        )
+        score = _relevance_score(terms)
+        if score is not None:
+            order_cols.append(score.desc())
+        order_cols += [
+            avg_rating.desc().nulls_last(),
+            models.Book.title, models.Book.id, models.BookLocation.symlink_path,
+        ]
 
     results = (
         query.order_by(*order_cols)
@@ -993,10 +1011,10 @@ async def search(
         sym_path = loc.symlink_path
         cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{book.id}.jpg")
         cover_url = f"/api/covers/{book.id}" if os.path.exists(cover_fs_path) else None
-        try:
-            size = os.path.getsize(os.path.join(BOOKS_DIR, sym_path))
-        except OSError:
-            size = None
+        # books.size is populated at upload time and by backfill_sizes.py; a NULL
+        # here means a row that hasn't been backfilled yet (rare). Falling back
+        # to os.path.getsize would re-introduce the per-request stat we just
+        # eliminated, so just return None and let the frontend hide the size.
         matches.append({
             "name": os.path.basename(sym_path),
             "is_dir": False,
@@ -1008,7 +1026,7 @@ async def search(
             "author": book.author,
             "description": book.description,
             "clearance": int(book.clearance or 0),
-            "size": size,
+            "size": book.size,
         })
 
     stats = _rating_stats(db, [m["hash_id"] for m in matches])
@@ -1023,6 +1041,8 @@ async def search(
         "per_page": per_page,
         "total": total,
         "total_pages": total_pages,
+        "sort": sort,
+        "dir": direction,
     }
 
 
@@ -2474,6 +2494,10 @@ async def admin_commit_book(
     # 4. Register in DB.
     meta = payload.metadata.model_dump(exclude_unset=True)
     title = meta.get("title") or os.path.splitext(filename)[0]
+    try:
+        vault_size = os.path.getsize(vault_path)
+    except OSError:
+        vault_size = None  # backfill_sizes.py will pick it up
     book = models.Book(
         id=file_hash,
         title=title,
@@ -2489,6 +2513,7 @@ async def admin_commit_book(
         needs_review=bool(payload.needs_review),
         clearance=int(payload.clearance),
         import_date=_now_iso(),
+        size=vault_size,
     )
     db.add(book)
     db.add(models.BookLocation(hash_id=file_hash, symlink_path=rel_path))

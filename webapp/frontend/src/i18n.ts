@@ -154,7 +154,14 @@ const messages = {
       page_of: 'Page {page} of {total}',
       previous: 'Previous',
       next: 'Next',
-      got_it: 'Got it'
+      got_it: 'Got it',
+      sort_label: 'Sort',
+      sort_relevance: 'Relevance',
+      sort_size: 'Size',
+      sort_directory: 'Directory',
+      sort_asc: 'Ascending',
+      sort_desc: 'Descending',
+      group_items_count: '{count} items'
     },
     settings: {
       title: 'Settings',
@@ -720,7 +727,14 @@ const messages = {
       page_of: 'Страница {page} из {total}',
       previous: 'Назад',
       next: 'Вперёд',
-      got_it: 'Понятно'
+      got_it: 'Понятно',
+      sort_label: 'Сортировка',
+      sort_relevance: 'Соответствие',
+      sort_size: 'Размер',
+      sort_directory: 'Директория',
+      sort_asc: 'По возрастанию',
+      sort_desc: 'По убыванию',
+      group_items_count: 'элементов: {count}'
     },
     settings: {
       title: 'Настройки',
