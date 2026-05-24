@@ -146,6 +146,10 @@ const fetchStats = async () => {
   }
 }
 
+// Lets admin panels (e.g. Sessions Refresh) drive a footer refresh so the
+// online-users / in-sessions count can't visibly disagree with the table.
+provide('refreshStats', fetchStats)
+
 // Auth state changes (login, logout, session expiry) flip which fields the
 // /api/library-stats endpoint returns — refetch so the footer updates without
 // a manual page reload.

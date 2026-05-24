@@ -9,6 +9,7 @@ const { t } = useI18n({ useScope: 'global' })
 
 type CurrentUser = { email: string, is_admin?: boolean } | null
 const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
+const refreshStats = inject<() => void>('refreshStats', () => {})
 const router = useRouter()
 
 type AdminUser = {
@@ -71,6 +72,8 @@ const loadSessions = async () => {
   } finally {
     sessionsLoading.value = false
   }
+  // Keep the footer's online-users / in-sessions count in sync with the table.
+  refreshStats()
 }
 
 const terminateSession = async (s: AdminSession) => {
