@@ -159,7 +159,7 @@ const messages = {
     settings: {
       title: 'Settings',
       personal_info: 'Personal Information',
-      avatar: 'Avatar',
+      avatar: 'Photo',
       search: 'Search',
       results_per_page: 'Results per page',
       results_per_page_help: 'Number of search results shown on each page.',
@@ -170,8 +170,18 @@ const messages = {
       full_name_help: 'Shown next to your comments instead of your email address. Leave blank to use your email.',
       profile_picture: 'Profile Picture',
       choose_photo: 'Choose profile photo',
+      choose_file: 'Choose file',
+      no_file_chosen: 'No file chosen',
       uploading: 'Uploading...',
-      save_avatar: 'Save Avatar'
+      save_avatar: 'Save Photo',
+      appearance: 'Appearance',
+      grid_item_size: 'Grid item size',
+      grid_item_size_help: 'Controls how large items appear in the grid view when browsing the library.',
+      grid_size: {
+        small: 'Small',
+        normal: 'Normal',
+        large: 'Large'
+      }
     },
     feedback: {
       title: 'Feedback',
@@ -715,7 +725,7 @@ const messages = {
     settings: {
       title: 'Настройки',
       personal_info: 'Личная информация',
-      avatar: 'Аватар',
+      avatar: 'Фото',
       search: 'Поиск',
       results_per_page: 'Результатов на странице',
       results_per_page_help: 'Количество результатов поиска на одной странице.',
@@ -726,8 +736,18 @@ const messages = {
       full_name_help: 'Отображается рядом с вашими комментариями вместо адреса электронной почты. Оставьте пустым, чтобы использовать почту.',
       profile_picture: 'Фото профиля',
       choose_photo: 'Выбрать фото',
+      choose_file: 'Выбрать файл',
+      no_file_chosen: 'Файл не выбран',
       uploading: 'Загрузка...',
-      save_avatar: 'Сохранить аватар'
+      save_avatar: 'Сохранить фото',
+      appearance: 'Внешний вид',
+      grid_item_size: 'Размер элементов в сетке',
+      grid_item_size_help: 'Определяет размер элементов в режиме сетки при просмотре библиотеки.',
+      grid_size: {
+        small: 'Мелкий',
+        normal: 'Обычный',
+        large: 'Крупный'
+      }
     },
     feedback: {
       title: 'Обратная связь',

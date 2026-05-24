@@ -4,6 +4,7 @@ import { XMarkIcon } from '@heroicons/vue/24/outline'
 import api, { getMyNotificationPrefs, setMyNotificationPrefs, type NotificationPrefs } from '../api'
 import { userInitials } from '../userDisplay'
 import { useI18n } from 'vue-i18n'
+import { gridItemSize, type GridItemSize } from '../composables/useGridItemSize'
 
 const { t } = useI18n()
 
@@ -21,13 +22,21 @@ const activeTab = ref('Avatar')
 const selectedFile = ref<File | null>(null)
 const previewUrl = ref<string | null>(null)
 const isUploading = ref(false)
+const fileInput = ref<HTMLInputElement | null>(null)
 
 const tabs = computed(() => [
   { id: 'Personal Information', label: t('settings.personal_info') },
   { id: 'Avatar', label: t('settings.avatar') },
+  { id: 'Appearance', label: t('settings.appearance') },
   { id: 'Search', label: t('settings.search') },
   { id: 'Notifications', label: t('feedback.notif.section') },
 ])
+
+const GRID_SIZE_OPTIONS: { id: GridItemSize; cols: string; count: number }[] = [
+  { id: 'small',  cols: 'grid-cols-6', count: 6 },
+  { id: 'normal', cols: 'grid-cols-4', count: 4 },
+  { id: 'large',  cols: 'grid-cols-3', count: 3 },
+]
 
 const notifPrefs = ref<NotificationPrefs>({
   email_on_reply: true, email_on_status: true, email_weekly_summary: false,
@@ -233,6 +242,43 @@ const close = () => {
             </div>
           </div>
 
+          <div v-if="activeTab === 'Appearance'">
+            <h4 class="text-md font-medium text-gray-900 dark:text-white mb-4">{{ t('settings.appearance') }}</h4>
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+              {{ t('settings.grid_item_size') }}
+            </label>
+            <div class="space-y-3">
+              <label
+                v-for="opt in GRID_SIZE_OPTIONS"
+                :key="opt.id"
+                :class="[
+                  'flex items-center gap-4 p-3 border rounded-lg cursor-pointer transition-colors',
+                  gridItemSize === opt.id
+                    ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                    : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                ]"
+              >
+                <input
+                  type="radio"
+                  :value="opt.id"
+                  v-model="gridItemSize"
+                  class="h-4 w-4 text-blue-600 border-gray-300 dark:border-gray-600 focus:ring-blue-500"
+                />
+                <span class="w-16 shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {{ t(`settings.grid_size.${opt.id}`) }}
+                </span>
+                <div :class="['grid gap-1 flex-1 max-w-[220px]', opt.cols]" aria-hidden="true">
+                  <div
+                    v-for="i in opt.count"
+                    :key="i"
+                    class="aspect-[3/4] bg-gray-300 dark:bg-gray-600 rounded-sm"
+                  ></div>
+                </div>
+              </label>
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">{{ t('settings.grid_item_size_help') }}</p>
+          </div>
+
           <div v-if="activeTab === 'Notifications'">
             <h4 class="text-md font-medium text-gray-900 dark:text-white mb-4">{{ t('feedback.notif.section') }}</h4>
             <div class="space-y-4">
@@ -301,23 +347,26 @@ const close = () => {
                   <span class="text-gray-500 dark:text-gray-300 text-2xl font-semibold">{{ userInitials(user) }}</span>
                 </div>
               </div>
-              <label class="block">
-                <span class="sr-only">{{ t('settings.choose_photo') }}</span>
+              <div class="flex items-center gap-3">
                 <input
+                  ref="fileInput"
                   type="file"
                   @change="handleFileChange"
                   accept="image/png, image/jpeg, image/gif, image/webp"
-                  class="block w-full text-sm text-gray-500 dark:text-gray-400
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-md file:border-0
-                    file:text-sm file:font-semibold
-                    file:bg-blue-50 file:text-blue-700
-                    hover:file:bg-blue-100
-                    dark:file:bg-blue-900/30 dark:file:text-blue-300
-                    dark:hover:file:bg-blue-900/50
-                    cursor-pointer"
+                  class="sr-only"
+                  :aria-label="t('settings.choose_photo')"
                 />
-              </label>
+                <button
+                  type="button"
+                  @click="fileInput?.click()"
+                  class="px-4 py-2 rounded-md text-sm font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {{ t('settings.choose_file') }}
+                </button>
+                <span class="text-sm text-gray-500 dark:text-gray-400 truncate" :title="selectedFile?.name || ''">
+                  {{ selectedFile?.name || t('settings.no_file_chosen') }}
+                </span>
+              </div>
             </div>
             <div class="mt-6 flex justify-end">
               <button

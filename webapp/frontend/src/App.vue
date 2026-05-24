@@ -58,7 +58,26 @@ watch(isAuthRoute, (newVal) => {
 // If the user has text selected in an editable field we yield to the native
 // cut behaviour.
 const onGlobalShortcut = (e: KeyboardEvent) => {
-  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'x') return
+  if (!(e.ctrlKey || e.metaKey)) return
+  const key = e.key.toLowerCase()
+
+  // Ctrl/Cmd+, opens Settings. Chrome does not bind this shortcut, so
+  // preventDefault is enough. Gated on signed-in users (the Settings entry
+  // in the profile menu is only shown when signed in) and skipped on auth
+  // routes where the modal isn't mounted.
+  if (key === ',') {
+    if (isAuthRoute.value || !currentUser.value) return
+    e.preventDefault()
+    isSettingsModalOpen.value = true
+    return
+  }
+
+  // Ctrl/Cmd+X clears the global search box and focuses it. We skip the
+  // admin-books page so that view's own handler (which targets its local
+  // search box) wins, and skip auth routes where the global search isn't
+  // mounted. If the user has text selected in an editable field we yield to
+  // the native cut behaviour.
+  if (key !== 'x') return
   if (route.name === 'admin-books' || isAuthRoute.value) return
   const active = document.activeElement as HTMLElement | null
   const inEditable = !!active && (

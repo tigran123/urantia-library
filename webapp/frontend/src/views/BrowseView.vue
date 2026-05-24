@@ -89,6 +89,7 @@ const editBookClearance = async (item: any, event: Event) => {
 import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
+import { gridItemSize, GRID_CLASSES } from '../composables/useGridItemSize'
 
 const route = useRoute()
 const items = ref<any[]>([])
@@ -194,6 +195,20 @@ const deleteDirectory = async (path: string, name: string, event?: Event) => {
 
 watch(viewMode, (newMode) => {
   localStorage.setItem('viewMode', newMode)
+})
+
+const gridCls = computed(() => {
+  const small = gridItemSize.value === 'small'
+  return {
+    card: small ? 'p-2' : 'p-4',
+    coverMargin: small ? 'mb-2' : 'mb-3',
+    iconBtn: small ? 'p-1' : 'p-1.5',
+    icon: small ? 'h-3.5 w-3.5' : 'h-5 w-5',
+    badge: small ? 'px-1 text-[10px]' : 'px-1.5 py-0.5 text-xs',
+    title: small ? 'text-xs' : 'text-sm',
+    subtitle: small ? 'text-[11px]' : 'text-xs',
+    bigIcon: small ? 'h-10 w-10' : 'h-16 w-16',
+  }
 })
 
 const formatBytes = (bytes: number, decimals = 2) => {
@@ -414,7 +429,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
 
     <template v-else>
       <!-- Grid View -->
-      <div v-if="viewMode === 'grid'" class="grid gap-3 sm:gap-4 lg:gap-6 grid-cols-[repeat(auto-fill,minmax(140px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(130px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+      <div v-if="viewMode === 'grid'" :class="['grid', GRID_CLASSES[gridItemSize]]">
         <template v-for="item in items" :key="item.name">
           <div
             class="relative group"
@@ -428,65 +443,65 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <CheckCircleIconSolid v-if="isSelected(item.hash_id)" class="h-6 w-6 text-emerald-500" />
               <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
             </div>
-            <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-              <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
-              <BookmarkIcon v-else class="h-5 w-5" />
+            <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(item.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+              <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" :class="gridCls.icon" />
+              <BookmarkIcon v-else :class="gridCls.icon" />
             </button>
             <button
               v-if="currentUser?.is_admin && item.hash_id"
               @click.prevent="editBookClearance(item, $event)"
-              class="absolute top-2 left-2 z-10 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
+              :class="['absolute top-2 left-2 z-10 rounded font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800', gridCls.badge]"
               :title="t('admin.edit_clearance_tooltip')"
             >🔒 {{ item.clearance ?? 0 }}</button>
             <button
               v-if="currentUser?.is_admin && item.is_dir"
               @click.prevent="deleteDirectory(item.path, item.name, $event)"
-              class="absolute top-2 left-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 dark:hover:text-red-400 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600"
+              :class="['absolute top-2 left-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 dark:hover:text-red-400 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn]"
               :title="t('admin.delete_directory')"
             >
-              <TrashIcon class="h-5 w-5" />
+              <TrashIcon :class="gridCls.icon" />
             </button>
-            <button v-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-              <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
-              <BookmarkIcon v-else class="h-5 w-5" />
+            <button v-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, dirFavorites.has(item.path) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+              <BookmarkIconSolid v-if="dirFavorites.has(item.path)" :class="gridCls.icon" />
+              <BookmarkIcon v-else :class="gridCls.icon" />
             </button>
             <template v-if="item.is_dir">
-              <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
-                <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
-                  <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
+              <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500', gridCls.card]">
+                <div :class="['aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors', gridCls.coverMargin]">
+                  <FolderIcon :class="[gridCls.bigIcon, 'text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400']" />
                 </div>
-                <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
+                <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words']" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
+                <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
               </a>
-              <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500">
-                <div class="aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg mb-3 group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors">
-                  <FolderIcon class="h-16 w-16 text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400" />
+              <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500', gridCls.card]">
+                <div :class="['aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors', gridCls.coverMargin]">
+                  <FolderIcon :class="[gridCls.bigIcon, 'text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400']" />
                 </div>
-                <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-                <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
+                <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words']" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
+                <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
               </router-link>
             </template>
 
-            <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex flex-col items-center p-4 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500">
-              <div class="aspect-[3/4] w-full mb-3 rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900 relative">
+            <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500', gridCls.card]">
+              <div :class="['aspect-[3/4] w-full rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900 relative', gridCls.coverMargin]">
                 <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
-                <DocumentIcon v-else class="h-16 w-16 text-gray-300 dark:text-gray-600" />
+                <DocumentIcon v-else :class="[gridCls.bigIcon, 'text-gray-300 dark:text-gray-600']" />
                 <button
                   @click.prevent.stop="downloadItem(item, $event)"
-                  class="absolute bottom-2 left-2 z-10 p-1.5 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm border border-gray-100 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:text-blue-500"
+                  :class="['absolute bottom-2 left-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm border border-gray-100 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:text-blue-500', gridCls.iconBtn]"
                   :title="$t('app.download')"
                 >
-                  <ArrowDownTrayIcon class="h-5 w-5" />
+                  <ArrowDownTrayIcon :class="gridCls.icon" />
                 </button>
                 <span
                   v-if="fileTypeLabel(item.name)"
-                  class="absolute bottom-2 right-2 z-10 px-1.5 py-0.5 rounded text-xs font-mono font-semibold bg-gray-800/80 text-white backdrop-blur-sm"
+                  :class="['absolute bottom-2 right-2 z-10 rounded font-mono font-semibold bg-gray-800/80 text-white backdrop-blur-sm', gridCls.badge]"
                 >{{ fileTypeLabel(item.name) }}</span>
               </div>
-              <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words line-clamp-2" :title="item.title || item.name">{{ item.title || formatFilename(item.name, item.is_dir) }}</h3>
-              <p v-if="item.author" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate font-bold italic" :title="item.author">{{ item.author }}</p>
+              <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words line-clamp-2']" :title="item.title || item.name">{{ item.title || formatFilename(item.name, item.is_dir) }}</h3>
+              <p v-if="item.author" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate font-bold italic']" :title="item.author">{{ item.author }}</p>
               <StarRating v-if="item.rating_count" :rating="item.avg_rating" :count="item.rating_count" class="mt-1" />
-              <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3" :title="item.description" v-html="item.description"></p>
+              <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
             </router-link>
           </div>
         </template>
