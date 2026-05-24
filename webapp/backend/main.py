@@ -993,6 +993,10 @@ async def search(
         sym_path = loc.symlink_path
         cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{book.id}.jpg")
         cover_url = f"/api/covers/{book.id}" if os.path.exists(cover_fs_path) else None
+        try:
+            size = os.path.getsize(os.path.join(BOOKS_DIR, sym_path))
+        except OSError:
+            size = None
         matches.append({
             "name": os.path.basename(sym_path),
             "is_dir": False,
@@ -1004,6 +1008,7 @@ async def search(
             "author": book.author,
             "description": book.description,
             "clearance": int(book.clearance or 0),
+            "size": size,
         })
 
     stats = _rating_stats(db, [m["hash_id"] for m in matches])

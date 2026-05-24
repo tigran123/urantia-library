@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed, inject, type Ref } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api, { startIntegrityJob, searchHashIds, type IntegrityMode } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
-import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline } from '@heroicons/vue/24/outline'
+import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
+import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultiple } from '../composables/useGridItemSize'
+import { formatBytes, fileTypeLabel } from '../lib/itemFormat'
 
 const route = useRoute()
 const router = useRouter()
@@ -104,12 +106,37 @@ const editBookClearance = async (match: any, event: Event) => {
     alert(err.response?.data?.detail || err.message)
   }
 }
-const perPage = computed(() => currentUser.value?.search_per_page ?? DEFAULT_PER_PAGE)
+const targetPerPage = computed(() => currentUser.value?.search_per_page ?? DEFAULT_PER_PAGE)
 const total = ref(0)
 const totalPages = ref(0)
 const currentPage = computed(() => {
   const p = parseInt((route.query.page as string) || '1', 10)
   return isNaN(p) || p < 1 ? 1 : p
+})
+
+const savedSearchViewMode = localStorage.getItem('searchViewMode')
+const viewMode = ref<'grid' | 'list'>(savedSearchViewMode === 'grid' ? 'grid' : 'list')
+watch(viewMode, (v) => { localStorage.setItem('searchViewMode', v) })
+
+// Debounced window width so the resize listener doesn't thrash effectivePerPage
+// (which would refetch on every pixel of resize). We only care about crossing
+// Tailwind breakpoints, which is rare enough that a 200ms debounce is plenty.
+const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024)
+let resizeTimer: number | null = null
+const onResize = () => {
+  if (resizeTimer !== null) window.clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(() => {
+    windowWidth.value = window.innerWidth
+  }, 200)
+}
+
+// In grid mode, round the user's preferred per_page to the nearest multiple of
+// columns so the last row is never half-empty. In list mode, pass the user's
+// preference through unchanged.
+const effectivePerPage = computed(() => {
+  if (viewMode.value !== 'grid') return targetPerPage.value
+  const cols = estimateGridCols(windowWidth.value, gridItemSize.value)
+  return roundToRowMultiple(targetPerPage.value, cols)
 })
 
 const goToPage = (page: number) => {
@@ -207,7 +234,7 @@ const doSearch = async (q: string, page: number) => {
   searched.value = true
 
   try {
-    const res = await api.get('/search', { params: { q, page, per_page: perPage.value } })
+    const res = await api.get('/search', { params: { q, page, per_page: effectivePerPage.value } })
     matches.value = res.data.matches
     total.value = res.data.total ?? 0
     totalPages.value = res.data.total_pages ?? 0
@@ -220,7 +247,13 @@ const doSearch = async (q: string, page: number) => {
 
 onMounted(() => {
   loadFavorites()
+  window.addEventListener('resize', onResize)
   doSearch(route.query.q as string, currentPage.value)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
+  if (resizeTimer !== null) window.clearTimeout(resizeTimer)
 })
 
 watch(() => [route.query.q, route.query.page], () => {
@@ -232,7 +265,11 @@ watch(() => route.query.q, () => {
   selected.value = new Set()
 })
 
-watch(perPage, () => {
+// Effective per_page can change when: the user toggles list/grid, picks a new
+// search_per_page in Settings, picks a new gridItemSize in Settings, or
+// resizes across a Tailwind breakpoint (debounced). Any of these resets to
+// page 1 and refetches.
+watch(effectivePerPage, () => {
   if (!searched.value) return
   if (currentPage.value !== 1) {
     router.replace({ name: 'search', query: { ...route.query, page: '1' } })
@@ -314,18 +351,36 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <MagnifyingGlassIcon class="h-6 w-6 text-blue-600" />
           {{ $t('search.title') }}
         </h1>
-        <button
-          v-if="currentUser?.is_admin"
-          @click="toggleSelectMode()"
-          class="p-1.5 rounded-md transition-colors border text-sm font-medium flex items-center gap-1"
-          :class="selectMode
-            ? 'bg-emerald-100 text-emerald-700 border-emerald-300 hover:bg-emerald-200'
-            : 'text-gray-500 border-transparent hover:text-emerald-600 hover:bg-gray-100'"
-          :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
-        >
-          <ShieldCheckIcon class="h-5 w-5" />
-          <span class="hidden sm:inline">{{ t('admin.integrity.select_mode') }}</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <div class="inline-flex bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
+            <button
+              @click="viewMode = 'grid'"
+              :class="['p-1.5 rounded-md transition-colors', viewMode === 'grid' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+              :title="$t('app.grid_view')"
+            >
+              <Squares2X2Icon class="h-5 w-5" />
+            </button>
+            <button
+              @click="viewMode = 'list'"
+              :class="['p-1.5 rounded-md transition-colors', viewMode === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+              :title="$t('app.list_view')"
+            >
+              <ListBulletIcon class="h-5 w-5" />
+            </button>
+          </div>
+          <button
+            v-if="currentUser?.is_admin"
+            @click="toggleSelectMode()"
+            class="p-1.5 rounded-md transition-colors border text-sm font-medium flex items-center gap-1"
+            :class="selectMode
+              ? 'bg-emerald-100 text-emerald-700 border-emerald-300 hover:bg-emerald-200'
+              : 'text-gray-500 border-transparent hover:text-emerald-600 hover:bg-gray-100'"
+            :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
+          >
+            <ShieldCheckIcon class="h-5 w-5" />
+            <span class="hidden sm:inline">{{ t('admin.integrity.select_mode') }}</span>
+          </button>
+        </div>
       </div>
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap">
         <p class="text-gray-500">
@@ -376,8 +431,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       </div>
     </div>
 
-    <div v-else-if="matches.length > 0" class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden">
-      <div v-if="totalPages > 1" class="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between text-sm">
+    <div v-else-if="matches.length > 0" class="space-y-3">
+      <div v-if="totalPages > 1" class="px-4 py-3 bg-white rounded-lg border border-gray-100 shadow-sm flex items-center justify-between text-sm">
         <button
           @click="goToPage(currentPage - 1)"
           :disabled="currentPage <= 1"
@@ -394,7 +449,9 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           {{ $t('search.next') }} →
         </button>
       </div>
-      <ul class="divide-y divide-gray-100">
+
+      <!-- List View -->
+      <ul v-if="viewMode === 'list'" class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden divide-y divide-gray-100">
         <li
           v-for="match in matches"
           :key="match.path"
@@ -437,6 +494,10 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <div class="mt-2 text-xs text-gray-400 flex items-center gap-2 flex-wrap">
                  <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" />
                  <span v-if="match.rating_count" class="text-gray-300">·</span>
+                 <span v-if="fileTypeLabel(match.name)" class="font-semibold">{{ fileTypeLabel(match.name) }}</span>
+                 <span v-if="fileTypeLabel(match.name) && match.size != null">·</span>
+                 <span v-if="match.size != null">{{ formatBytes(match.size) }}</span>
+                 <span v-if="fileTypeLabel(match.name) || match.size != null" class="text-gray-300">·</span>
                  <span class="flex items-center gap-1">
                    {{ $t('app.location') }}
                    <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 hover:underline">
@@ -460,7 +521,51 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           </div>
         </li>
       </ul>
-      <div v-if="totalPages > 1" class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between text-sm">
+
+      <!-- Grid View -->
+      <div v-if="viewMode === 'grid'" :class="['grid', GRID_CLASSES[gridItemSize]]">
+        <template v-for="match in matches" :key="match.path">
+          <div
+            class="relative group"
+            :class="selectMode && match.hash_id && isSelected(match.hash_id) ? 'ring-2 ring-emerald-500 rounded-xl' : ''"
+            @click.capture="onItemClickCapture(match.hash_id, $event)"
+          >
+            <div
+              v-if="selectMode && match.hash_id"
+              class="absolute top-2 left-1/2 -translate-x-1/2 z-20 p-1 rounded-full bg-white/90 dark:bg-gray-900/90 border border-gray-200 dark:border-gray-700 shadow-sm pointer-events-none"
+            >
+              <CheckCircleIconSolid v-if="isSelected(match.hash_id)" class="h-6 w-6 text-emerald-500" />
+              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+            </div>
+            <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(match.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+              <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" :class="gridCls.icon" />
+              <BookmarkIcon v-else :class="gridCls.icon" />
+            </button>
+            <button
+              v-if="currentUser?.is_admin && match.hash_id"
+              @click.prevent="editBookClearance(match, $event)"
+              :class="['absolute top-2 left-2 z-10 rounded font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800', gridCls.badge]"
+              :title="t('admin.edit_clearance_tooltip')"
+            >🔒 {{ match.clearance ?? 0 }}</button>
+
+            <router-link :to="`/item/${match.path}`" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-green-300 dark:hover:border-green-500', gridCls.card]">
+              <div :class="['aspect-[3/4] w-full rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900 relative', gridCls.coverMargin]">
+                <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" :alt="match.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
+                <DocumentIcon v-else :class="[gridCls.bigIcon, 'text-gray-300 dark:text-gray-600']" />
+                <span
+                  v-if="fileTypeLabel(match.name)"
+                  :class="['absolute bottom-2 right-2 z-10 rounded font-mono font-semibold bg-gray-800/80 text-white backdrop-blur-sm', gridCls.badge]"
+                >{{ fileTypeLabel(match.name) }}</span>
+              </div>
+              <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words line-clamp-2']" :title="match.title || match.name"><span v-html="highlightText(match.title || formatFilename(match.name, match.is_dir))"></span></h3>
+              <p v-if="match.author" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate font-bold italic']" :title="match.author"><span v-html="highlightText(match.author)"></span></p>
+              <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" class="mt-1" />
+            </router-link>
+          </div>
+        </template>
+      </div>
+
+      <div v-if="totalPages > 1" class="px-4 py-3 bg-white rounded-lg border border-gray-100 shadow-sm flex items-center justify-between text-sm">
         <button
           @click="goToPage(currentPage - 1)"
           :disabled="currentPage <= 1"

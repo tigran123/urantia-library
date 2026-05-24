@@ -89,7 +89,8 @@ const editBookClearance = async (item: any, event: Event) => {
 import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
-import { gridItemSize, GRID_CLASSES } from '../composables/useGridItemSize'
+import { gridItemSize, GRID_CLASSES, gridCls } from '../composables/useGridItemSize'
+import { formatBytes, fileTypeLabel } from '../lib/itemFormat'
 
 const route = useRoute()
 const items = ref<any[]>([])
@@ -197,29 +198,6 @@ watch(viewMode, (newMode) => {
   localStorage.setItem('viewMode', newMode)
 })
 
-const gridCls = computed(() => {
-  const small = gridItemSize.value === 'small'
-  return {
-    card: small ? 'p-2' : 'p-4',
-    coverMargin: small ? 'mb-2' : 'mb-3',
-    iconBtn: small ? 'p-1' : 'p-1.5',
-    icon: small ? 'h-3.5 w-3.5' : 'h-5 w-5',
-    badge: small ? 'px-1 text-[10px]' : 'px-1.5 py-0.5 text-xs',
-    title: small ? 'text-xs' : 'text-sm',
-    subtitle: small ? 'text-[11px]' : 'text-xs',
-    bigIcon: small ? 'h-10 w-10' : 'h-16 w-16',
-  }
-})
-
-const formatBytes = (bytes: number, decimals = 2) => {
-    if (!+bytes) return '0 Bytes'
-    const k = 1024
-    const dm = decimals < 0 ? 0 : decimals
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`
-}
-
 const loadPath = async (path: string) => {
   loading.value = true
   error.value = ''
@@ -280,37 +258,6 @@ const getFullUrl = (url: string) => {
   return api.defaults.baseURL?.replace('/api', '') + url
 }
 
-const fileTypeLabel = (name: string): string | null => {
-  if (!name) return null
-  const n = name.toLowerCase()
-  if (n.endsWith('.fb2.zip') || n.endsWith('.fb2')) return 'FB2'
-  if (n.endsWith('.html.zip') || n.endsWith('.htm.zip')) return 'HTML'
-  const m = n.match(/\.([^.]+)$/)
-  if (!m) return null
-  const ext = m[1]
-  const labels: Record<string, string> = {
-    pdf: 'PDF',
-    djvu: 'DjVu',
-    epub: 'ePub',
-    txt: 'TXT',
-    md: 'MD',
-    markdown: 'MD',
-    mobi: 'MOBI',
-    azw: 'AZW',
-    azw3: 'AZW3',
-    html: 'HTML',
-    htm: 'HTML',
-    cpp: 'C++',
-  }
-  if (labels[ext]) return labels[ext]
-
-  const codeExts = ['c', 'h', 'hpp', 'py', 'js', 'ts', 'jsx', 'tsx', 'lua', 'sh', 'bash', 'rs', 'go', 'java', 'css', 'scss', 'json', 'xml', 'yaml', 'yml', 'sql', 'ini']
-  if (codeExts.includes(ext)) {
-    return ext.toUpperCase()
-  }
-
-  return null
-}
 
 const downloadItem = (item: any, event: Event) => {
   event.preventDefault()
@@ -513,74 +460,100 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <li
             v-for="item in items"
             :key="item.name"
-            class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
+            class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors p-4 group"
             :class="selectMode && item.hash_id && isSelected(item.hash_id) ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''"
             @click.capture="onItemClickCapture(item.hash_id, $event)"
           >
-            <div class="flex items-center p-4 gap-3">
-              <div v-if="selectMode && item.hash_id" class="flex-shrink-0 pointer-events-none">
+            <div class="relative flex gap-4">
+              <!-- Selection indicator -->
+              <div v-if="selectMode && item.hash_id" class="flex-shrink-0 self-center pointer-events-none">
                 <CheckCircleIconSolid v-if="isSelected(item.hash_id)" class="h-6 w-6 text-emerald-500" />
                 <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
               </div>
-              <template v-if="item.is_dir">
-                <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="flex-1 flex items-center min-w-0">
-                  <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
-                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
-                  </div>
-                </a>
-                <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center min-w-0">
-                  <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500 flex-shrink-0 mr-4" />
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words">{{ formatFilename(item.name, item.is_dir) }}</p>
-                    <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
-                  </div>
-                </router-link>
-              </template>
 
-              <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="flex-1 flex items-center min-w-0">
-                <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-gray-100 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
+              <!-- Icon / Cover -->
+              <div class="flex-shrink-0">
+                <div v-if="item.is_dir" class="h-16 w-12 flex items-center justify-center bg-blue-50/50 dark:bg-gray-700/50 rounded shadow-sm border border-gray-200 dark:border-gray-700">
+                  <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500" />
+                </div>
+                <div v-else class="h-16 w-12 flex items-center justify-center bg-gray-100 dark:bg-gray-900 rounded shadow-sm overflow-hidden border border-gray-200 dark:border-gray-700">
                   <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-contain" />
                   <DocumentIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-600" />
                 </div>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="item.title || item.name">{{ item.title || formatFilename(item.name, item.is_dir) }}</p>
-                  <p v-if="item.author" class="text-xs text-gray-600 dark:text-gray-300 truncate mt-0.5 font-bold italic" :title="item.author">{{ item.author }}</p>
-                  <p v-if="item.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="item.description"></p>
-                </div>
-              </router-link>
-
-              <div class="flex-shrink-0 flex flex-col items-end gap-1">
-                <div class="flex items-center gap-1">
-                  <button
-                    v-if="currentUser?.is_admin && item.is_dir"
-                    @click.prevent="deleteDirectory(item.path, item.name, $event)"
-                    class="p-1.5 rounded-full hover:bg-red-100 dark:hover:bg-red-950/70 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                    :title="t('admin.delete_directory')"
-                  >
-                    <TrashIcon class="h-5 w-5" />
-                  </button>
-                  <button
-                    v-if="currentUser?.is_admin && item.hash_id"
-                    @click.prevent="editBookClearance(item, $event)"
-                    class="px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
-                    :title="t('admin.edit_clearance_tooltip')"
-                  >🔒 {{ item.clearance ?? 0 }}</button>
-                  <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" class="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-                    <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
-                    <BookmarkIcon v-else class="h-5 w-5" />
-                  </button>
-                  <button v-else-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" class="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors" :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
-                    <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
-                    <BookmarkIcon v-else class="h-5 w-5" />
-                  </button>
-                </div>
-                <div v-if="!item.is_dir" class="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  <span v-if="fileTypeLabel(item.name)" class="font-semibold">{{ fileTypeLabel(item.name) }}</span><span v-if="fileTypeLabel(item.name)"> · </span>{{ formatBytes(item.size) }}
-                </div>
-                <StarRating v-if="!item.is_dir && item.rating_count" :rating="item.avg_rating" :count="item.rating_count" />
               </div>
+
+              <!-- Details -->
+              <div class="flex-1 min-w-0 pr-12">
+                <div class="flex items-start justify-between">
+                  <div>
+                    <template v-if="item.is_dir">
+                      <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
+                        {{ formatFilename(item.name, item.is_dir) }}
+                      </a>
+                      <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
+                        {{ formatFilename(item.name, item.is_dir) }}
+                      </router-link>
+                    </template>
+                    <router-link v-else :to="`/item/${currentPath ? currentPath + '/' : ''}${item.name}`" class="text-lg font-medium text-blue-600 hover:underline break-words">
+                      {{ item.title || formatFilename(item.name, item.is_dir) }}
+                    </router-link>
+                    <p v-if="!item.is_dir && item.author" class="text-sm text-gray-700 dark:text-gray-300 mt-0.5">{{ item.author }}</p>
+                    <p v-if="!item.is_dir && item.title" class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-all">{{ item.name }}</p>
+                    <p v-if="item.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="item.description"></p>
+                  </div>
+                </div>
+
+                <div v-if="!item.is_dir" class="mt-2 text-xs text-gray-400 flex items-center gap-2 flex-wrap">
+                  <StarRating v-if="item.rating_count" :rating="item.avg_rating" :count="item.rating_count" />
+                  <span v-if="item.rating_count && (fileTypeLabel(item.name) || item.size != null)" class="text-gray-300">·</span>
+                  <span v-if="fileTypeLabel(item.name)" class="font-semibold">{{ fileTypeLabel(item.name) }}</span>
+                  <span v-if="fileTypeLabel(item.name) && item.size != null">·</span>
+                  <span v-if="item.size != null">{{ formatBytes(item.size) }}</span>
+                  <span v-if="fileTypeLabel(item.name) || item.size != null" class="text-gray-300">·</span>
+                  <span class="flex items-center gap-1">
+                    {{ $t('app.location') }}
+                    <router-link :to="`/browse/${currentPath}`" class="hover:text-blue-500 hover:underline">
+                      /{{ currentPath || 'Root' }}
+                    </router-link>
+                  </span>
+                </div>
+              </div>
+
+              <!-- Right-side action buttons -->
+              <button
+                v-if="!item.is_dir && item.hash_id"
+                @click.prevent="toggleFavorite(item, $event)"
+                class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }"
+                :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')"
+              >
+                <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
+                <BookmarkIcon v-else class="h-5 w-5" />
+              </button>
+              <button
+                v-if="item.is_dir"
+                @click.prevent="toggleDirFavorite(item.path, $event)"
+                class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }"
+                :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')"
+              >
+                <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
+                <BookmarkIcon v-else class="h-5 w-5" />
+              </button>
+              <button
+                v-if="currentUser?.is_admin && !item.is_dir && item.hash_id"
+                @click.prevent="editBookClearance(item, $event)"
+                class="absolute right-10 top-1 px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800"
+                :title="t('admin.edit_clearance_tooltip')"
+              >🔒 {{ item.clearance ?? 0 }}</button>
+              <button
+                v-if="currentUser?.is_admin && item.is_dir"
+                @click.prevent="deleteDirectory(item.path, item.name, $event)"
+                class="absolute right-10 top-1 p-1.5 rounded-full hover:bg-red-100 dark:hover:bg-red-950/70 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                :title="t('admin.delete_directory')"
+              >
+                <TrashIcon class="h-5 w-5" />
+              </button>
             </div>
           </li>
         </ul>
