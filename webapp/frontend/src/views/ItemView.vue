@@ -625,7 +625,7 @@ const submitReply = async () => {
                     <template v-else>{{ t('admin.integrity.never') }}</template>
                   </td>
                 </tr>
-                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                <tr v-if="item.import_date" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.imported') }}</th>
                   <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ formatDate(item.import_date) }}</td>
                 </tr>

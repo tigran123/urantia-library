@@ -303,7 +303,7 @@ watch(() => route.query.hash, openFromQuery)
 
         <div v-if="movePreview" class="text-sm">
           <p class="text-gray-700 dark:text-gray-300">
-            {{ t('admin.move.preview_count', { n: movePreview.moved.length, kind: movePreview.kind }) }}
+            {{ t('admin.move.preview_count', { n: movePreview.moved.length }, movePreview.moved.length) }}
           </p>
           <ul v-if="movePreview.moved.length" class="mt-2 space-y-0.5 max-h-48 overflow-y-auto text-xs font-mono text-gray-600 dark:text-gray-400">
             <li v-for="(it, i) in movePreview.moved.slice(0, 200)" :key="i" class="truncate">
