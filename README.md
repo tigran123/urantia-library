@@ -35,8 +35,8 @@ favourites and books in progress.
 
 ## Your bookshelf
 
-- **Favourite books.** Star any book to add it to your bookshelf for one-click
-  access.
+- **Favourite books.** Click on the 'bookmark' icon on any book to add it to your
+  bookshelf for one-click access.
 - **Favourite directories.** Bookmark entire topic directories the same way —
   useful for collections you return to often.
 - **Reading-progress strip.** Books with saved progress appear on your
