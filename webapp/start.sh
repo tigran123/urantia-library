@@ -17,6 +17,11 @@ fi
 if [ ! -d "frontend/dist" ]; then
     echo "Building frontend..."
     cd frontend
+
+    # Load NVM into the systemd execution environment so npm is available
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
     npm ci
     npm run build
     cd ..
