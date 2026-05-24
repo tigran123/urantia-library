@@ -1,6 +1,5 @@
 TODO
 webapp/backend/initdb.sh
-screenshots/
 webapp/secrets.env
 # Python
 __pycache__/
