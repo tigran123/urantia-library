@@ -22,6 +22,9 @@ if [ ! -d "frontend/dist" ]; then
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
+    # Reroute npm cache to the writable PrivateTmp to bypass ProtectHome=read-only
+    export npm_config_cache=/tmp/.npm
+
     npm ci
     npm run build
     cd ..
