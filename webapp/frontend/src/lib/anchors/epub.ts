@@ -97,13 +97,39 @@ export const paintAnnotations = (
   }
   owned.length = 0
 
-  const sorted = [...annotations].sort(
-    (a, b) => b.selected_text.length - a.selected_text.length,
-  )
-
-  for (const ann of sorted) {
+  // Deduplicate by cfiRange. ePub.js's Annotations.add() keys its internal
+  // store by encoded(cfiRange); a second add() at the same cfi overwrites the
+  // map entry but marks-pane has already drawn a separate <g>, so the first
+  // <g> becomes an unreachable orphan. The multi-user case (two people
+  // annotating the same text) used to trigger this on every repaint. Sidebar
+  // still lists every annotation by id; here we just paint one mark per
+  // unique cfi. Representative preference: own first (so click opens the
+  // user's editable annotation), then most recent.
+  const byCfi = new Map<string, Annotation[]>()
+  for (const ann of annotations) {
     const a = ann.anchor as EpubAnchor
     if (a?.type !== 'epub' || !a.cfiRange) continue
+    const list = byCfi.get(a.cfiRange)
+    if (list) list.push(ann)
+    else byCfi.set(a.cfiRange, [ann])
+  }
+
+  const representatives: Annotation[] = []
+  for (const list of byCfi.values()) {
+    list.sort((a, b) => {
+      if (a.is_own !== b.is_own) return a.is_own ? -1 : 1
+      return a.created_at < b.created_at ? 1 : -1
+    })
+    representatives.push(list[0])
+  }
+
+  // Re-add longest first so a short highlight ("Urantia") sits on top of an
+  // overlapping longer one ("records of Urantia respecting") — see the comment
+  // at the top of paintAnnotations for the ordering rationale.
+  representatives.sort((a, b) => b.selected_text.length - a.selected_text.length)
+
+  for (const ann of representatives) {
+    const a = ann.anchor as EpubAnchor
     // ePub.js → marks-pane → classList.add(this.className) only accepts a
     // single token (no spaces). Two classes like 'anno anno--mine' throw
     // InvalidCharacterError and the highlight is never added.

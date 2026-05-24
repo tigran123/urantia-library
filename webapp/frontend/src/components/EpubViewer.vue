@@ -291,6 +291,7 @@ const loadProgress = async () => {
 }
 
 let saveTimeout: any
+let annoReloadTimeout: any
 
 // !important on width/height/object-fit because many epubs bake
 // `width:100%;height:100%` onto the cover <img>, stretching it on landscape.
@@ -414,6 +415,13 @@ const initEpub = async () => {
       // ePub.js drops its highlight overlays whenever a section reloads, so
       // re-paint after each navigation event.
       repaintEpubAnnotations()
+      // Another user may have created or deleted annotations since we opened
+      // the book; refresh from the server and repaint. Debounced so rapid
+      // page-flipping doesn't hammer the backend.
+      clearTimeout(annoReloadTimeout)
+      annoReloadTimeout = setTimeout(() => {
+        annotationsApi.load().then(repaintEpubAnnotations)
+      }, 1000)
     })
 
     rendition.on('selected', onEpubSelected)
@@ -493,6 +501,7 @@ watch(() => props.source, () => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
   clearTimeout(saveTimeout)
+  clearTimeout(annoReloadTimeout)
   themeObs?.disconnect()
   themeObs = null
   document.body.style.overflow = ''
