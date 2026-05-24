@@ -29,8 +29,8 @@ cd backend
 # Launch based on explicit environment state
 if [ "$APP_ENV" = "development" ]; then
     echo "INFO: Development environment detected. Enabling hot-reload."
-    exec uvicorn main:app --host 127.0.0.1 --port 8000 --no-access-log --reload
+    exec uvicorn main:app --host 127.0.0.1 --port 8000 --root-path "${APP_ROOT_PATH:-/}" --no-access-log --reload
 else
     echo "INFO: Production environment detected. Running optimized server."
-    exec uvicorn main:app --host 127.0.0.1 --port 8000 --no-access-log
+    exec uvicorn main:app --host 127.0.0.1 --port 8000 --root-path "${APP_ROOT_PATH:-/}" --no-access-log
 fi
