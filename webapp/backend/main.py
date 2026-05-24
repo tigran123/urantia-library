@@ -953,20 +953,19 @@ async def search(
     per_page: int = 50,
     sort: str = Query("relevance", pattern="^(relevance|size|directory)$"),
     direction: str = Query("desc", alias="dir", pattern="^(asc|desc)$"),
+    cols: int = 1,
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
     page = max(page, 1)
     per_page = max(1, min(per_page, 200))
+    cols = max(1, min(cols, 50))
 
     if not q:
         return {"matches": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0,
                 "sort": sort, "dir": direction}
 
     query, terms = _build_search_query(q, current_user, db)
-
-    total = query.order_by(None).count()
-    total_pages = (total + per_page - 1) // per_page
 
     # Build ORDER BY. `direction` only meaningfully affects size and directory;
     # relevance is always score-desc with a stable tiebreak.
@@ -999,12 +998,63 @@ async def search(
             models.Book.title, models.Book.id, models.BookLocation.symlink_path,
         ]
 
-    results = (
-        query.order_by(*order_cols)
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all()
-    )
+    # Page-boundary strategy. In directory mode + grid view (cols >= 2), pages
+    # are computed so that the last directory on each page either ends naturally
+    # at a row boundary or — when it would otherwise have a partial last row
+    # AND the spillover items belong to the same directory — gets extended by
+    # up to (cols-1) items to fill that row. This eliminates the visual ugliness
+    # where, e.g., a directory of 10 items at 13-wide grid splits 8/2 across two
+    # pages instead of 10/0. We do the walk in Python over a path-only
+    # projection of the sorted result set; for any realistic library this is
+    # microseconds and avoids a much more invasive offset-based pagination.
+    if sort == "directory" and cols >= 2:
+        paths: list[str] = [
+            row[0] for row in
+            query.with_entities(models.BookLocation.symlink_path)
+                 .order_by(*order_cols)
+                 .all()
+        ]
+        total = len(paths)
+        dirs = [os.path.dirname(p) for p in paths]
+        boundaries: list[int] = [0]
+        i = 0
+        while i < total:
+            j = min(i + per_page, total)
+            if j < total:
+                last_dir = dirs[j - 1]
+                k = j - 1
+                while k > i and dirs[k - 1] == last_dir:
+                    k -= 1
+                dir_in_page = j - k
+                extra = 0
+                while j + extra < total and dirs[j + extra] == last_dir:
+                    extra += 1
+                if extra > 0 and dir_in_page % cols != 0:
+                    take = min(cols - (dir_in_page % cols), extra)
+                    j += take
+            boundaries.append(j)
+            i = j
+        total_pages = max(1, len(boundaries) - 1)
+        if page > total_pages:
+            results = []
+        else:
+            start_idx = boundaries[page - 1]
+            end_idx = boundaries[page]
+            results = (
+                query.order_by(*order_cols)
+                .offset(start_idx)
+                .limit(end_idx - start_idx)
+                .all()
+            )
+    else:
+        total = query.order_by(None).count()
+        total_pages = (total + per_page - 1) // per_page
+        results = (
+            query.order_by(*order_cols)
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
 
     matches = []
     for book, loc in results:

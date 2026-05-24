@@ -130,13 +130,23 @@ const onResize = () => {
   }, 200)
 }
 
+// Estimated column count for the current grid (1 outside grid mode). This is
+// what we send as `cols` to /api/search so the backend can do directory-aware
+// row-fill page-boundary adjustment.
+const gridCols = computed(() => {
+  if (viewMode.value !== 'grid') return 1
+  return estimateGridCols(windowWidth.value, gridItemSize.value)
+})
+
 // In grid mode, round the user's preferred per_page to the nearest multiple of
 // columns so the last row is never half-empty. In list mode, pass the user's
-// preference through unchanged.
+// preference through unchanged. Directory mode is special: the backend itself
+// computes per-page boundaries that snap to whole-row endings of each group,
+// so we just send the raw target and let the server decide.
 const effectivePerPage = computed(() => {
   if (viewMode.value !== 'grid') return targetPerPage.value
-  const cols = estimateGridCols(windowWidth.value, gridItemSize.value)
-  return roundToRowMultiple(targetPerPage.value, cols)
+  if (sortMode.value === 'directory') return targetPerPage.value
+  return roundToRowMultiple(targetPerPage.value, gridCols.value)
 })
 
 const goToPage = (page: number) => {
@@ -272,7 +282,9 @@ const doSearch = async (q: string, page: number) => {
   searched.value = true
 
   try {
-    const params: Record<string, any> = { q, page, per_page: effectivePerPage.value }
+    const params: Record<string, any> = {
+      q, page, per_page: effectivePerPage.value, cols: gridCols.value,
+    }
     if (sortMode.value !== 'relevance') {
       params.sort = sortMode.value
       params.dir = sortDir.value
@@ -311,8 +323,10 @@ watch(() => route.query.q, () => {
 // Effective per_page can change when: the user toggles list/grid, picks a new
 // search_per_page in Settings, picks a new gridItemSize in Settings, or
 // resizes across a Tailwind breakpoint (debounced). Any of these resets to
-// page 1 and refetches.
-watch(effectivePerPage, () => {
+// page 1 and refetches. We also watch gridCols because in directory mode the
+// backend recomputes boundaries from the column count, so a breakpoint cross
+// shifts page edges even if effectivePerPage didn't change.
+watch([effectivePerPage, gridCols], () => {
   if (!searched.value) return
   if (currentPage.value !== 1) {
     router.replace({ name: 'search', query: { ...route.query, page: '1' } })
