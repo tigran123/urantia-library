@@ -24,6 +24,8 @@ class AdminUserSummary(BaseModel):
     is_admin: bool
     clearance: int
     is_active: bool
+    avatar_url: Optional[str] = None
+    real_name: Optional[str] = None
 
     class Config:
         from_attributes = True

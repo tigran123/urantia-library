@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
+import { userInitials } from '../userDisplay'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -18,6 +19,8 @@ type AdminUser = {
   is_admin: boolean
   clearance: number
   is_active: boolean
+  avatar_url?: string | null
+  real_name?: string | null
 }
 
 type AdminSession = {
@@ -96,6 +99,11 @@ const terminateSession = async (s: AdminSession) => {
   }
 }
 
+const getFullUrl = (url: string | null | undefined): string => {
+  if (!url) return ''
+  return (api.defaults.baseURL?.replace('/api', '') || '') + url
+}
+
 const fmtTime = (iso: string): string => {
   try {
     return new Date(iso).toLocaleString()
@@ -159,7 +167,24 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-for="u in users" :key="u.id" class="border-b border-gray-100 dark:border-gray-700/60">
-            <td class="py-2 pr-2 text-gray-900 dark:text-gray-100">{{ u.email }}</td>
+            <td class="py-2 pr-2 text-gray-900 dark:text-gray-100">
+              <div class="flex items-center gap-3">
+                <img
+                  v-if="u.avatar_url"
+                  :src="getFullUrl(u.avatar_url)"
+                  class="h-8 w-8 rounded-full object-cover border border-gray-200 dark:border-gray-700 flex-shrink-0"
+                  alt=""
+                />
+                <span
+                  v-else
+                  class="h-8 w-8 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-xs font-semibold text-gray-600 dark:text-gray-200 flex-shrink-0"
+                >{{ userInitials(u) }}</span>
+                <div class="min-w-0">
+                  <div v-if="u.real_name" class="truncate">{{ u.real_name }}</div>
+                  <div class="truncate" :class="u.real_name ? 'text-xs text-gray-500 dark:text-gray-400' : ''">{{ u.email }}</div>
+                </div>
+              </div>
+            </td>
             <td class="py-2 pr-2">
               <input type="checkbox" v-model="u.is_admin" />
             </td>
