@@ -755,7 +755,7 @@ _SEARCH_FIELD_COLUMNS = {
     "tags": models.Book.tags,
 }
 _SEARCH_FIELD_ALIASES = {"tag": "tags"}
-_STRUCTURAL_KEYS = {"path", "ext", "needs_review"}
+_STRUCTURAL_KEYS = {"path", "ext", "needs_review", "clearance"}
 # Relevance weight of a scoped-field match (used by _relevance_score).
 _SEARCH_FIELD_WEIGHT = {
     "title": 4, "author": 3, "publisher": 2, "series": 2, "tags": 2,
@@ -779,7 +779,7 @@ def parse_search_query(q: str):
     Returns ``(terms, filters)`` where ``filters`` holds the structural
     path/ext/needs_review filters and ``terms`` is a list of dicts:
     ``{text, field, negate, is_phrase}`` (text is lowercased)."""
-    filters = {"path": None, "ext": None, "needs_review": None}
+    filters = {"path": None, "ext": None, "needs_review": None, "clearance": None}
     terms = []
 
     for m in _SEARCH_TOKEN_RE.finditer(q or ""):
@@ -805,6 +805,27 @@ def parse_search_query(q: str):
                     filters["needs_review"] = True
                 elif val in ("0", "false", "no"):
                     filters["needs_review"] = False
+            elif field == "clearance":
+                m = re.fullmatch(r"(\d+)-(\d+)", val)
+                if m:
+                    n1, n2 = int(m.group(1)), int(m.group(2))
+                    if n1 > n2:
+                        n1, n2 = n2, n1
+                    filters["clearance"] = ("between", n1, n2)
+                else:
+                    op = "eq"
+                    num = val
+                    if val.endswith("+"):
+                        op, num = "gt", val[:-1].strip()
+                    elif val.endswith("-"):
+                        op, num = "lt", val[:-1].strip()
+                    try:
+                        n = int(num)
+                    except ValueError:
+                        continue
+                    if n < 0:
+                        continue
+                    filters["clearance"] = (op, n, None)
             continue
 
         scope = _SEARCH_FIELD_ALIASES.get(field, field)
@@ -943,6 +964,17 @@ def _build_search_query(q: str, current_user: models.User | None, db: Session):
 
     if filters["needs_review"] is not None and _is_admin(current_user):
         query = query.filter(models.Book.needs_review == filters["needs_review"])
+
+    if filters["clearance"] is not None:
+        op, n1, n2 = filters["clearance"]
+        if op == "eq":
+            query = query.filter(models.Book.clearance == n1)
+        elif op == "gt":
+            query = query.filter(models.Book.clearance > n1)
+        elif op == "lt":
+            query = query.filter(models.Book.clearance < n1)
+        elif op == "between":
+            query = query.filter(models.Book.clearance.between(n1, n2))
 
     return query, terms
 

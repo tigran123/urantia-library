@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, inject, type Ref } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api, { startIntegrityJob, setBulkBookClearance, type IntegrityMode } from '../api'
@@ -16,6 +16,21 @@ const clearanceSaving = ref(false)
 const toggleSelectMode = () => {
   selectMode.value = !selectMode.value
   if (!selectMode.value) selected.value = new Set()
+}
+
+const onSelectModeKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && selectMode.value) {
+    toggleSelectMode()
+    return
+  }
+  if (
+    e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
+    (e.key === 'm' || e.key === 'M') &&
+    currentUser.value?.is_admin
+  ) {
+    e.preventDefault()
+    toggleSelectMode()
+  }
 }
 
 const isSelected = (hashId: string) => selected.value.has(hashId)
@@ -243,6 +258,11 @@ onMounted(() => {
   loadFavorites()
   loadDirFavorites()
   loadPath(route.params.path as string)
+  window.addEventListener('keydown', onSelectModeKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onSelectModeKeydown)
 })
 
 watch(() => route.params.path, (newPath) => {
@@ -360,7 +380,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           :class="selectMode
             ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-200 dark:hover:bg-emerald-900'
             : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-emerald-600 hover:bg-gray-100 dark:hover:bg-gray-700'"
-          :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
+          :title="(selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')) + ' (Ctrl+M)'"
         >
           <CursorArrowRaysIcon class="h-5 w-5" />
           <span class="hidden sm:inline">{{ t('admin.integrity.select_mode') }}</span>

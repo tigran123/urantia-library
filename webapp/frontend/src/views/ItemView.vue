@@ -548,8 +548,8 @@ const submitReply = async () => {
             </div>
           </div>
           
-          <!-- Details (collapsible metadata panel; collapsed by default) -->
-          <details class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group overflow-hidden">
+          <!-- Details (collapsible metadata panel; expanded by default) -->
+          <details open class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group overflow-hidden">
             <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between">
               <span>{{ t('app.details') }}</span>
               <span class="transition-transform group-open:rotate-90 text-gray-400">›</span>

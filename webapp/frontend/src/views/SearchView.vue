@@ -35,6 +35,21 @@ const toggleSelectMode = () => {
   if (!selectMode.value) selected.value = new Set()
 }
 
+const onSelectModeKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && selectMode.value) {
+    toggleSelectMode()
+    return
+  }
+  if (
+    e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
+    (e.key === 'm' || e.key === 'M') &&
+    currentUser.value?.is_admin
+  ) {
+    e.preventDefault()
+    toggleSelectMode()
+  }
+}
+
 const isSelected = (hashId: string) => selected.value.has(hashId)
 
 const toggleSelect = (hashId: string) => {
@@ -329,11 +344,13 @@ const doSearch = async (q: string, page: number) => {
 onMounted(() => {
   loadFavorites()
   window.addEventListener('resize', onResize)
+  window.addEventListener('keydown', onSelectModeKeydown)
   doSearch(route.query.q as string, currentPage.value)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
+  window.removeEventListener('keydown', onSelectModeKeydown)
   if (resizeTimer !== null) window.clearTimeout(resizeTimer)
 })
 
@@ -520,7 +537,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             :class="selectMode
               ? 'bg-emerald-100 text-emerald-700 border-emerald-300 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-700 dark:hover:bg-emerald-900/50'
               : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-            :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
+            :title="(selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')) + ' (Ctrl+M)'"
           >
             <CursorArrowRaysIcon class="h-5 w-5" />
             <span class="hidden sm:inline">{{ t('admin.integrity.select_mode') }}</span>
