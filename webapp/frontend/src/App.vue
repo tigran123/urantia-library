@@ -203,6 +203,44 @@ const currentBrowsePath = computed(() => {
   return '';
 })
 
+// Mirrors the backend tokenizer in `parse_search_query` (main.py): a `path:`
+// clause is either path:"quoted", path:'quoted', or path:<non-whitespace>.
+const PATH_CLAUSE_RE = /(?:^|\s)path:(?:"[^"]*"|'[^']*'|\S+)/gi
+
+const extractPathValues = (q: string): string[] => {
+  const out: string[] = []
+  for (const m of q.matchAll(PATH_CLAUSE_RE)) {
+    let v = m[0].trim().slice('path:'.length)
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.slice(1, -1)
+    }
+    out.push(v)
+  }
+  return out
+}
+
+// True only when the search box already filters by the current browse dir
+// (case-insensitive, matching how the backend lowercases the value).
+const hasCurrentPathFilter = computed(() => {
+  if (!currentBrowsePath.value) return false
+  const want = currentBrowsePath.value.toLowerCase()
+  return extractPathValues(searchQuery.value).some(v => v.toLowerCase() === want)
+})
+
+const quotePathValueIfNeeded = (s: string): string => {
+  if (!/\s/.test(s) && !s.includes('"') && !s.includes("'")) return s
+  if (!s.includes('"')) return `"${s}"`
+  if (!s.includes("'")) return `'${s}'`
+  return s
+}
+
+const applyCurrentPathFilter = () => {
+  if (!currentBrowsePath.value) return
+  const stripped = searchQuery.value.replace(PATH_CLAUSE_RE, ' ').replace(/\s+/g, ' ').trim()
+  const value = quotePathValueIfNeeded(currentBrowsePath.value)
+  searchQuery.value = stripped ? `path:${value} ${stripped}` : `path:${value} `
+}
+
 // Set by onSearchEnter when Enter is pressed on a physical keyboard, so
 // performSearch can leave focus alone. Defaults to false so non-keyboard
 // submits (tapping the magnifier) also dismiss any on-screen keyboard.
@@ -284,8 +322,8 @@ const handleLogout = async () => {
                   <QuestionMarkCircleIcon class="h-5 w-5" />
                 </button>
               </div>
-              <div v-if="currentBrowsePath && !searchQuery.includes('path:')" class="absolute top-full left-0 mt-1 pl-1 text-xs text-gray-500 dark:text-gray-400">
-                <button type="button" @click="searchQuery = `path:${currentBrowsePath} ` + searchQuery" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer">
+              <div v-if="currentBrowsePath && !hasCurrentPathFilter" class="absolute top-full left-0 mt-1 pl-1 text-xs text-gray-500 dark:text-gray-400">
+                <button type="button" @click="applyCurrentPathFilter()" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer">
                   Search in "{{ currentBrowsePath }}"
                 </button>
               </div>
@@ -394,8 +432,8 @@ const handleLogout = async () => {
               <QuestionMarkCircleIcon class="h-5 w-5" />
             </button>
           </div>
-          <div v-if="currentBrowsePath && !searchQuery.includes('path:')" class="absolute top-full left-0 mt-1 pl-1 text-xs text-gray-500 dark:text-gray-400">
-            <button type="button" @click="searchQuery = `path:${currentBrowsePath} ` + searchQuery" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer">
+          <div v-if="currentBrowsePath && !hasCurrentPathFilter" class="absolute top-full left-0 mt-1 pl-1 text-xs text-gray-500 dark:text-gray-400">
+            <button type="button" @click="applyCurrentPathFilter()" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer">
               Search in "{{ currentBrowsePath }}"
             </button>
           </div>
