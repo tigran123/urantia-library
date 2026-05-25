@@ -1,0 +1,141 @@
+server {
+    listen 127.0.0.1:8080;
+    server_name sigmaai.ai;
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name sigmaai.ai;
+
+    ssl_certificate /etc/letsencrypt/live/sigmaai.ai/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sigmaai.ai/privkey.pem;
+
+    # Allow large document uploads (prevent 413 Request Entity Too Large)
+    client_max_body_size 100M;
+
+    # Перенаправляем адрес без слеша на адрес со слешем
+    location = /ephemeris {
+        return 301 /ephemeris/;
+    }
+
+    # Магия проксирования: обрати внимание на слеши в конце location и proxy_pass!
+    location /ephemeris/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Redirect address without slash to address with slash
+    location = /cashreconai {
+        return 301 /cashreconai/;
+    }
+
+    # Proxy traffic to the CashReconAI Express server
+    location /cashreconai/ {
+        proxy_pass http://127.0.0.1:3002/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # Disable buffering for SSE (streaming LLM responses)
+        proxy_buffering off;
+
+        # Extend timeouts for models that take a while to generate the first token
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+    }
+
+    # Redirect address without slash to address with slash
+    location = /openclaw {
+        return 301 /openclaw/;
+    }
+
+    # Proxy traffic to Open Claw
+    location /openclaw/ {
+        proxy_pass http://127.0.0.1:18789/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+
+    # Urantia Library statements begin here
+    location = /library {
+        return 301 /library/;
+    }
+
+    # Proxy traffic to the Urantia Library webapp
+    location /library/ {
+        # Restrict access to your home IP only
+        allow 89.242.93.253;
+        deny all;
+
+        client_max_body_size 1024M;       # was 100M globally
+        proxy_request_buffering off;      # stream the upload straight through
+        proxy_read_timeout 600s;          # slow uplinks need more than the 60s default
+
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Long-lived caching for Vite's content-hashed chunks under /library/assets/.
+    # These filenames embed a hash of their bytes, so the URL→bytes mapping
+    # never changes for the lifetime of the build.
+    location ~ ^/library/assets/ {
+        allow 89.242.93.253;
+        deny all;
+
+        rewrite ^/library/(.*)$ /$1 break;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+    # Urantia Library statements end here
+
+
+    # Redirect address without slash to address with slash
+    location = /tair {
+        return 301 /tair/;
+    }
+
+    # Proxy traffic to the TAIR React app
+    location /tair/ {
+        proxy_pass http://127.0.0.1:3003/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
