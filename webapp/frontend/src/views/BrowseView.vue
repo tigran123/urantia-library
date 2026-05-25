@@ -116,8 +116,8 @@ const editBookClearance = async (item: any, event: Event) => {
   const raw = window.prompt(t('admin.clearance_prompt', { title: item.title || item.name }), String(current))
   if (raw === null) return
   const next = Number(raw)
-  if (!Number.isFinite(next) || next < 0 || !Number.isInteger(next)) {
-    alert(t('admin.clearance_invalid'))
+  if (!Number.isFinite(next) || !Number.isInteger(next) || next < 0 || next > 100) {
+    alert(t('admin.integrity.clearance_invalid_range'))
     return
   }
   try {
