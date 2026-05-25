@@ -1806,7 +1806,12 @@ def _extract_upload_metadata(src_path: str, fmt: str) -> dict:
                         elif key == "tags" and val: out["tags"] = val
                         elif key == "series" and val: out["series"] = val
                         elif key == "languages" and val: out["languages"] = val.lower()
-                        elif key == "published" and val: out["published"] = val
+                        elif key == "published" and val:
+                            # ebook-meta emits a full ISO datetime
+                            # ("2007-05-15T00:00:00+00:00") even when the
+                            # source only declared a year. The column is
+                            # year-shaped — trim to the leading 4 digits.
+                            out["published"] = val[:4] if re.match(r"^\d{4}-", val) else val
                         elif key == "identifiers" and val: out["identifiers"] = val
                         elif key == "comments":
                             current_key = "comments"
