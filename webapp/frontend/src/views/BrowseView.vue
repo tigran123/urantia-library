@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api, { startIntegrityJob, type IntegrityMode } from '../api'
+import api, { startIntegrityJob, setBulkBookClearance, type IntegrityMode } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
 const currentUser = inject<Ref<{ is_admin?: boolean, email?: string } | null>>('currentUser', ref(null))
@@ -11,6 +11,7 @@ const router = useRouter()
 const selectMode = ref(false)
 const selected = ref<Set<string>>(new Set())
 const verifyStarting = ref(false)
+const clearanceSaving = ref(false)
 
 const toggleSelectMode = () => {
   selectMode.value = !selectMode.value
@@ -67,6 +68,31 @@ const startSelectionVerify = async (mode: IntegrityMode) => {
   }
 }
 
+const startSelectionSetClearance = async () => {
+  const ids = Array.from(selected.value)
+  if (!ids.length) return
+  const raw = window.prompt(t('admin.integrity.set_clearance_prompt', { count: ids.length }))
+  if (raw === null) return
+  const next = Number(raw)
+  if (!Number.isFinite(next) || !Number.isInteger(next) || next < 0 || next > 100) {
+    alert(t('admin.integrity.clearance_invalid_range'))
+    return
+  }
+  clearanceSaving.value = true
+  try {
+    await setBulkBookClearance({ hash_ids: ids, clearance: next })
+    const idSet = new Set(ids)
+    for (const it of items.value) {
+      if (it.hash_id && idSet.has(it.hash_id)) it.clearance = next
+    }
+    clearSelection()
+  } catch (err: any) {
+    alert(err?.response?.data?.detail || err?.message || 'error')
+  } finally {
+    clearanceSaving.value = false
+  }
+}
+
 const editBookClearance = async (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
@@ -86,7 +112,7 @@ const editBookClearance = async (item: any, event: Event) => {
     alert(err.response?.data?.detail || err.message)
   }
 }
-import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon } from '@heroicons/vue/24/outline'
+import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon, LockClosedIcon, CursorArrowRaysIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
 import { gridItemSize, GRID_CLASSES, gridCls } from '../composables/useGridItemSize'
@@ -336,7 +362,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-emerald-600 hover:bg-gray-100 dark:hover:bg-gray-700'"
           :title="selectMode ? t('admin.integrity.exit_select_mode') : t('admin.integrity.select_mode')"
         >
-          <ShieldCheckIcon class="h-5 w-5" />
+          <CursorArrowRaysIcon class="h-5 w-5" />
           <span class="hidden sm:inline">{{ t('admin.integrity.select_mode') }}</span>
         </button>
 
@@ -583,6 +609,14 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       >
         <ShieldCheckIcon class="h-4 w-4" />
         {{ t('admin.integrity.verify_selected') }} — {{ t('admin.integrity.full') }}
+      </button>
+      <button
+        @click="startSelectionSetClearance()"
+        :disabled="!selected.size || clearanceSaving"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <LockClosedIcon class="h-4 w-4" />
+        {{ t('admin.integrity.set_clearance_selected') }}
       </button>
       <button
         @click="clearSelection()"

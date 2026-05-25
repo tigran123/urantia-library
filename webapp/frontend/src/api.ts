@@ -78,6 +78,9 @@ export const startIntegrityJob = (payload: {
   mode: IntegrityMode
 }) => api.post<IntegrityJobSummary>('/admin/integrity/jobs', payload)
 
+export const setBulkBookClearance = (payload: { hash_ids: string[]; clearance: number }) =>
+  api.post<{ updated: number; clearance: number }>('/admin/books/clearance', payload)
+
 export const getIntegrityJob = (jobId: string, include: 'failures' | 'all' = 'failures') =>
   api.get<IntegrityJobDetail>(
     `/admin/integrity/jobs/${encodeURIComponent(jobId)}`,
