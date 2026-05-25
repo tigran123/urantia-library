@@ -9,6 +9,11 @@ The library is organised by topic. Use the navigation in the top bar to browse
 the directory tree, search by title or author, or jump to your bookshelf of
 favourites and books in progress.
 
+**No account needed to read.** The catalog is open to guests — anyone can
+browse the directory tree, open books, and search without signing in. Signing
+in is what enables the per-reader features below: bookshelf, reading progress,
+highlights, ratings, comments, and feedback threads.
+
 ## Reading
 
 - **Many formats, one reader.** PDF, EPUB, DJVU, FB2, Markdown, HTML, and image
@@ -30,6 +35,12 @@ favourites and books in progress.
   description, tags, series, and identifiers in a single query.
 - **Unicode-aware.** Case-insensitive search works correctly for Cyrillic and
   other non-Latin scripts.
+- **Quick filters.** Narrow a search with inline operators in the query:
+  `path:Topic` scopes the search to a directory subtree, `ext:pdf` scopes it
+  to a file format.
+- **Sort and lay out.** Sort results by relevance, file size, or directory;
+  switch between list and grid views, and adjust the thumbnail size of the
+  grid.
 - **Configurable page size.** Choose how many results you want per page from
   your account settings.
 
