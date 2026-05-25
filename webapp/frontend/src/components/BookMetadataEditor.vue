@@ -59,7 +59,7 @@ const renameError = ref('')
 
 const startRename = (loc: string) => {
   renamingLoc.value = loc
-  renameDraft.value = loc.split('/').pop() || ''
+  renameDraft.value = loc
   renameError.value = ''
 }
 
@@ -70,13 +70,15 @@ const cancelRename = () => {
 }
 
 const commitRename = async (loc: string) => {
-  const newBase = renameDraft.value.trim()
-  if (!editing.value || !newBase || newBase.includes('/')) {
-    renameError.value = newBase.includes('/') ? 'Filename may not contain "/"' : 'Empty filename'
+  const dst = renameDraft.value.trim().replace(/^\/+/, '').replace(/\/+$/, '')
+  if (!editing.value || !dst) {
+    renameError.value = t('admin.move.empty_path')
     return
   }
-  const parent = loc.split('/').slice(0, -1).join('/')
-  const dst = parent ? `${parent}/${newBase}` : newBase
+  if (dst.includes('//') || dst.split('/').some((seg) => seg === '.' || seg === '..')) {
+    renameError.value = t('admin.move.invalid_path')
+    return
+  }
   if (dst === loc) { cancelRename(); return }
   renaming.value = true
   renameError.value = ''
@@ -238,12 +240,12 @@ const reextractCover = async () => {
           <div class="flex items-baseline gap-3 flex-wrap">
             <span class="text-gray-500 dark:text-gray-400 shrink-0">{{ t('admin.field_locations') }}</span>
             <template v-for="loc in editing.locations" :key="loc">
-              <span v-if="renamingLoc === loc" class="inline-flex items-center gap-1.5">
-                <code class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] break-all">/{{ loc.split('/').slice(0, -1).join('/') }}/</code>
+              <span v-if="renamingLoc === loc" class="inline-flex items-center gap-1.5 flex-1 min-w-0">
+                <span class="font-mono text-[11px] text-gray-500 dark:text-gray-400">/</span>
                 <input
                   v-model="renameDraft"
                   type="text"
-                  class="px-1.5 py-0.5 rounded border border-blue-400 dark:border-blue-600 bg-white dark:bg-gray-800 font-mono text-[11px] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500/40"
+                  class="flex-1 min-w-0 px-1.5 py-0.5 rounded border border-blue-400 dark:border-blue-600 bg-white dark:bg-gray-800 font-mono text-[11px] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500/40"
                   @keydown.enter.prevent="commitRename(loc)"
                   @keydown.escape.prevent="cancelRename"
                 />

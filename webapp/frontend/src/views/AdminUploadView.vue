@@ -108,6 +108,12 @@ const stepIndex = computed(() => {
 
 const titleMissing = computed(() => !(meta.value.title || '').trim())
 
+const destinationEmpty = computed(() => {
+  const a = (selectedDir.value || '').replace(/^\/+|\/+$/g, '')
+  const b = (extraSubpath.value || '').replace(/^\/+|\/+$/g, '')
+  return !a && !b
+})
+
 const fmtBytes = (n: number) => {
   if (n < 1024) return `${n} B`
   const units = ['KB', 'MB', 'GB']
@@ -290,6 +296,7 @@ const openPicker = () => fileInputEl.value?.click()
 
 const commit = async () => {
   if (!stagingId.value || titleMissing.value) return
+  if (destinationEmpty.value && !window.confirm(t('admin.upload.review.destination_empty.confirm'))) return
   stage.value = 'committing'
   errorMsg.value = ''
   try {
@@ -637,6 +644,16 @@ const reviewCoverMeta = computed(() => {
             v-model:extra-subpath="extraSubpath"
             :filename="filename"
           />
+          <div
+            v-if="destinationEmpty"
+            class="mt-3 flex items-start gap-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm"
+          >
+            <ExclamationTriangleIcon class="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <div class="font-semibold text-amber-800 dark:text-amber-200">{{ t('admin.upload.review.destination_empty.title') }}</div>
+              <div class="text-xs text-amber-700 dark:text-amber-300 mt-0.5">{{ t('admin.upload.review.destination_empty.body') }}</div>
+            </div>
+          </div>
         </div>
         <div class="border-t border-gray-100 dark:border-gray-700 pt-5">
           <label class="block text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.filename') }}</label>

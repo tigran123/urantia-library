@@ -326,7 +326,7 @@ const messages = {
       delete_confirm: 'Delete "{title}"?\n\nThis removes the database row, every symlink in /Books pointing to it, the vault file (.data/{prefix}…), and the cover image.\n\nThis cannot be undone.',
       delete_fs_warnings: 'Deleted, but with filesystem warnings:\n{errors}',
       edit_book: 'Edit book',
-      rename_filename: 'Rename filename',
+      rename_filename: 'Move or rename',
       field_hash: 'Hash',
       field_locations: 'Locations',
       field_title: 'Title',
@@ -357,7 +357,9 @@ const messages = {
         error_collision: 'Some destinations already exist — nothing moved.',
         row_action: 'Move…',
         dest_basename: 'Destination name',
-        dest_basename_help: 'May contain slashes — any missing directories will be created.'
+        dest_basename_help: 'May contain slashes — any missing directories will be created.',
+        empty_path: 'Path may not be empty.',
+        invalid_path: 'Invalid path.'
       },
       integrity: {
         tab: 'Integrity',
@@ -468,6 +470,11 @@ const messages = {
           replace_cover: 'Replace cover…',
           reextract: 'Re-extract',
           destination: 'Destination',
+          destination_empty: {
+            title: 'No directory selected',
+            body: 'This book will be uploaded to the library root. Pick a directory above unless you really intended root.',
+            confirm: 'No destination directory selected — the book will be uploaded to the library root.\n\nUpload to root anyway?',
+          },
           final_location: 'Final location:',
           tree_loading: 'Loading…',
           tree_root: '(library root)',
@@ -902,7 +909,7 @@ const messages = {
       delete_confirm: 'Удалить «{title}»?\n\nЭто удалит запись из базы данных, все симлинки в /Books, ссылающиеся на неё, файл из хранилища (.data/{prefix}…) и обложку.\n\nЭто действие необратимо.',
       delete_fs_warnings: 'Удалено, но с предупреждениями файловой системы:\n{errors}',
       edit_book: 'Изменить книгу',
-      rename_filename: 'Переименовать файл',
+      rename_filename: 'Переместить или переименовать',
       field_hash: 'Хэш',
       field_locations: 'Расположения',
       field_title: 'Название',
@@ -933,7 +940,9 @@ const messages = {
         error_collision: 'Некоторые целевые пути уже существуют — ничего не перемещено.',
         row_action: 'Переместить…',
         dest_basename: 'Имя на новом месте',
-        dest_basename_help: 'Можно использовать «/» — недостающие подкаталоги будут созданы.'
+        dest_basename_help: 'Можно использовать «/» — недостающие подкаталоги будут созданы.',
+        empty_path: 'Путь не может быть пустым.',
+        invalid_path: 'Недопустимый путь.'
       },
       integrity: {
         tab: 'Целостность',
@@ -1044,6 +1053,11 @@ const messages = {
           replace_cover: 'Заменить обложку…',
           reextract: 'Извлечь заново',
           destination: 'Расположение',
+          destination_empty: {
+            title: 'Директория не выбрана',
+            body: 'Книга будет загружена в корень библиотеки. Выберите директорию выше, если это не входило в ваши намерения.',
+            confirm: 'Целевая директория не выбрана — книга будет загружена в корень библиотеки.\n\nВсё равно загрузить в корень?',
+          },
           final_location: 'Финальный путь:',
           tree_loading: 'Загрузка…',
           tree_root: '(корень библиотеки)',
