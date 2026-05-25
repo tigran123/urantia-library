@@ -611,8 +611,27 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
     filename = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
     filepath = os.path.join(AVATAR_DIR, filename)
 
-    with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Stream with a size cap. Without it, any logged-in user could fill the
+    # disk now that nginx allows large request bodies through.
+    bytes_written = 0
+    try:
+        with open(filepath, "wb") as buffer:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > _AVATAR_MAX_BYTES:
+                    buffer.close()
+                    os.remove(filepath)
+                    raise HTTPException(status_code=400, detail="Avatar too large")
+                buffer.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        try: os.remove(filepath)
+        except OSError: pass
+        raise HTTPException(status_code=500, detail=f"Avatar upload failed: {e}")
 
     avatar_url = f"/api/avatars/{filename}"
     current_user.avatar_url = avatar_url
@@ -1685,6 +1704,7 @@ _STAGING_LOCK = threading.Lock()
 _STAGING_TTL_S = 3600
 _MAX_UPLOAD_BYTES = 850 * 1024 * 1024
 _MAX_COVER_BYTES = 5 * 1024 * 1024
+_AVATAR_MAX_BYTES = 5 * 1024 * 1024
 
 _ACCEPTED_BOOK_EXTS = {
     "fb2", "zip", "epub", "pdf", "djvu", "mobi", "azw", "azw3", "prc",
@@ -5303,12 +5323,23 @@ async def upload_feedback_attachment(
     if not file.content_type or file.content_type not in _FEEDBACK_ALLOWED_MIME:
         raise HTTPException(status_code=400, detail="Unsupported image type")
 
-    # Read with size cap.
-    data = await file.read()
-    if len(data) == 0:
+    # Chunked read so a malicious 1GB POST can't OOM uvicorn before the cap
+    # check fires. The previous `await file.read()` slurped the whole body
+    # first and then checked the size — safe only while nginx capped requests
+    # at 100M, which it no longer does.
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _FEEDBACK_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="file too large")
+        chunks.append(chunk)
+    if total == 0:
         raise HTTPException(status_code=400, detail="empty file")
-    if len(data) > _FEEDBACK_ATTACHMENT_MAX_BYTES:
-        raise HTTPException(status_code=400, detail="file too large")
+    data = b"".join(chunks)
 
     # One attachment per thread — replace any existing.
     existing = db.query(models.FeedbackAttachment).filter(

@@ -43,9 +43,17 @@ const pdfjsAssets = (): Plugin => {
   }
 }
 
+// Vite 8 does NOT normalize import.meta.env.BASE_URL to end in a slash,
+// even though it normalizes the value used for its own asset URLs in
+// index.html. So user code that does `${BASE_URL}foo` breaks silently when
+// APP_ROOT_PATH is set without a trailing slash (e.g. `/library` →
+// `/librarypdfjs/...`). Force the slash here so every consumer sees the
+// same shape.
+const APP_BASE = (process.env.APP_ROOT_PATH || '/').replace(/\/?$/, '/')
+
 // https://vite.dev/config/
 export default defineConfig({
-  base: process.env.APP_ROOT_PATH || '/',
+  base: APP_BASE,
   plugins: [
     vue(),
     tailwindcss(),
