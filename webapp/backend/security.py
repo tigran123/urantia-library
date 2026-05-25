@@ -1,7 +1,7 @@
 import bcrypt
 import jwt
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 
 SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "super-secret-key-change-in-production")
@@ -28,7 +28,7 @@ def create_access_token(data: dict) -> tuple[str, str, datetime]:
     revocation: a missing jti — or a jti that's no longer in the map —
     means the token is treated as terminated regardless of signature/exp."""
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     jti = str(uuid.uuid4())
     to_encode.update({"exp": expire, "jti": jti})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

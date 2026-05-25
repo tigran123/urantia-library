@@ -122,7 +122,7 @@ def app_ctx(monkeypatch):
                 "user_agent": "pytest",
                 "created_at": now,
                 "last_seen_at": now,
-                "expires_at": expires_at.replace(tzinfo=timezone.utc),
+                "expires_at": expires_at,
             }
         c.cookies.set("access_token", token)
         return c

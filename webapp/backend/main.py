@@ -430,9 +430,7 @@ async def login(request: Request, login_data: schemas.UserLogin, db: Session = D
             "user_agent": request.headers.get("user-agent"),
             "created_at": now,
             "last_seen_at": now,
-            # JWT `exp` was set with naive utcnow(); make it tz-aware so
-            # comparisons against datetime.now(timezone.utc) work.
-            "expires_at": expires_at.replace(tzinfo=timezone.utc),
+            "expires_at": expires_at,
         }
     response = JSONResponse(content={"message": "Login successful"})
     response.set_cookie(

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import List, Optional
 
 class UserCreate(BaseModel):
@@ -27,8 +27,7 @@ class AdminUserSummary(BaseModel):
     avatar_url: Optional[str] = None
     real_name: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserClearanceUpdate(BaseModel):
     clearance: Optional[int] = None
@@ -86,8 +85,7 @@ class AdminBookDetail(BaseModel):
     last_verified_mode: Optional[str] = None
     last_verified_error: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UploadStagingResponse(BaseModel):
@@ -178,8 +176,7 @@ class FavoriteResponse(BaseModel):
     user_id: int
     hash_id: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DirectoryFavoriteCreate(BaseModel):
     path: str
@@ -189,8 +186,7 @@ class DirectoryFavoriteResponse(BaseModel):
     user_id: int
     path: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ReadingProgressCreate(BaseModel):
     hash_id: str
@@ -204,8 +200,7 @@ class ReadingProgressResponse(BaseModel):
     location: str
     percent: Optional[float] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RatingCreate(BaseModel):
