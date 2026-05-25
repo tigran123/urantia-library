@@ -620,7 +620,20 @@ const initPdf = async () => {
       responseType: 'arraybuffer',
     })
     const data = new Uint8Array(res.data as ArrayBuffer)
-    const loadingTask = pdfjsLib.getDocument({ data })
+    // CMaps, Foxit standard-font substitutes, and the JBig2/JPEG2000/QCMS
+    // wasm decoders are copied into dist/pdfjs/ at build time (and served
+    // from node_modules in dev) by the `pdfjs-assets` plugin in
+    // vite.config.ts. Without these URLs, scans compressed with JBig2
+    // (Adobe Paper-Capture facsimile PDFs are the obvious case) silently
+    // fail to decode and the page renders blank.
+    const base = import.meta.env.BASE_URL
+    const loadingTask = pdfjsLib.getDocument({
+      data,
+      cMapUrl: `${base}pdfjs/cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `${base}pdfjs/standard_fonts/`,
+      wasmUrl: `${base}pdfjs/wasm/`,
+    })
     pdfDoc = await loadingTask.promise
     totalPages.value = pdfDoc.numPages
 
