@@ -2,6 +2,7 @@
 import { computed, ref, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { PhotoIcon, ArrowPathIcon } from '@heroicons/vue/24/outline'
+import api from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -43,7 +44,20 @@ onUnmounted(() => {
   if (localUrl.value) URL.revokeObjectURL(localUrl.value)
 })
 
-const displayUrl = computed(() => localUrl.value || props.imageUrl || null)
+// Backend cover URLs come back as bare absolute paths like /api/covers/<hash>
+// or /api/admin/books/upload/<id>/cover.jpg. On prod the SPA lives under
+// /library/ and the backend is reachable as /library/api/..., so those bare
+// paths 404 unless we re-prefix them with the axios baseURL's host portion.
+const prefixCoverUrl = (u: string) => {
+  if (/^(blob:|data:|https?:)/i.test(u)) return u
+  if (!u.startsWith('/api/')) return u
+  const prefix = api.defaults.baseURL?.replace(/\/api\/?$/, '') ?? ''
+  return prefix + u
+}
+
+const displayUrl = computed(() =>
+  localUrl.value || (props.imageUrl ? prefixCoverUrl(props.imageUrl) : null),
+)
 
 const cardSizeClasses = computed(() =>
   props.size === 'small'
