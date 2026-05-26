@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import api, { startIntegrityJob, setBulkBookClearance, searchHashIds, type IntegrityMode } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
-import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon, FolderIcon, ArrowUpIcon, ArrowDownIcon, ScaleIcon, LockClosedIcon, CursorArrowRaysIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon, FolderIcon, ArrowUpIcon, ArrowDownIcon, ScaleIcon, LockClosedIcon, CursorArrowRaysIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
 import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultiple } from '../composables/useGridItemSize'
@@ -383,6 +383,19 @@ const getFullUrl = (url: string) => {
   return api.defaults.baseURL?.replace('/api', '') + url
 }
 
+const downloadItem = (item: any, event: Event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!item || item.is_dir) return
+  const url = getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = item.name
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
 // Build a scoped query that searches for one author, e.g. author:"Jane Doe".
 const authorQuery = (author: string) => `author:"${(author || '').replace(/"/g, '')}"`
 
@@ -743,6 +756,13 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <div :class="['aspect-[3/4] w-full rounded-lg overflow-hidden flex items-center justify-center bg-gray-50 dark:bg-gray-900 relative', gridCls.coverMargin]">
                 <img v-if="match.cover_url" :src="getFullUrl(match.cover_url)" :alt="match.name" class="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
                 <DocumentIcon v-else :class="[gridCls.bigIcon, 'text-gray-300 dark:text-gray-600']" />
+                <button
+                  @click.prevent.stop="downloadItem(match, $event)"
+                  :class="['absolute bottom-2 left-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm border border-gray-100 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:text-blue-500', gridCls.iconBtn]"
+                  :title="$t('app.download')"
+                >
+                  <ArrowDownTrayIcon :class="gridCls.icon" />
+                </button>
                 <span
                   v-if="fileTypeLabel(match.name)"
                   :class="['absolute bottom-2 right-2 z-10 rounded font-mono font-semibold bg-gray-800/80 text-white backdrop-blur-sm', gridCls.badge]"
