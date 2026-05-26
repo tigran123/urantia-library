@@ -207,7 +207,7 @@ const startUpload = async (chosen: File) => {
   form.append('file', chosen)
 
   try {
-    const resp = await fetch('/api/admin/books/upload', {
+    const resp = await fetch(`${api.defaults.baseURL ?? '/api'}/admin/books/upload`, {
       method: 'POST',
       body: form,
       credentials: 'include',
