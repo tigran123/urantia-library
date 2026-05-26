@@ -197,6 +197,103 @@ const actionLabel = (action: string): string => {
   return opt ? t(opt.key) : action
 }
 
+// Translate a field name from the controlled list used by book.edit /
+// user.clearance audits. Unknown keys (e.g. a new column added before the
+// i18n catalogue is updated) pass through verbatim.
+const fieldLabel = (key: string): string => {
+  const tx = t(`admin.audit.field.${key}`)
+  return tx === `admin.audit.field.${key}` ? key : tx
+}
+
+// Build a localized summary from the action + structured details. Falls back
+// to the stored English summary (e.summary) for legacy rows whose details
+// don't carry the human-readable target label.
+const summaryLabel = (e: AuditLogEntry): string => {
+  const d = e.details || {}
+  const get = (k: string): string | null => {
+    const v = (d as Record<string, unknown>)[k]
+    return typeof v === 'string' || typeof v === 'number' ? String(v) : null
+  }
+  const fields = (): string | null => {
+    const changed = (d as Record<string, unknown>).changed
+    if (!changed || typeof changed !== 'object') return null
+    return Object.keys(changed as Record<string, unknown>).map(fieldLabel).join(', ')
+  }
+
+  switch (e.action) {
+    case 'book.upload': {
+      const title = get('title'), path = get('path')
+      if (title && path) return t('admin.audit.summary.book_upload', { title, path })
+      break
+    }
+    case 'book.edit': {
+      const title = get('title'), f = fields()
+      if (title && f) return t('admin.audit.summary.book_edit', { title, fields: f })
+      break
+    }
+    case 'book.delete': {
+      const title = get('title')
+      if (title) return t('admin.audit.summary.book_delete', { title })
+      break
+    }
+    case 'book.move': {
+      const src = get('src'), dst = get('dst'), kind = get('kind')
+      if (kind === 'file') {
+        const filename = get('filename')
+        if (filename && src !== null && dst !== null)
+          return t('admin.audit.summary.book_move_file', { filename, src, dst })
+      } else if (kind === 'directory') {
+        const count = get('count')
+        if (count !== null && src !== null && dst !== null)
+          return t('admin.audit.summary.book_move_dir', { count, src, dst })
+      }
+      break
+    }
+    case 'book.cover': {
+      const title = get('title'), mode = get('mode')
+      if (title && mode === 'upload')    return t('admin.audit.summary.book_cover_upload',    { title })
+      if (title && mode === 'reextract') return t('admin.audit.summary.book_cover_reextract', { title })
+      break
+    }
+    case 'book.clearance': {
+      const n = get('new')
+      if ((d as Record<string, unknown>).bulk) {
+        const count = get('count')
+        if (count !== null && n !== null)
+          return t('admin.audit.summary.book_clearance_bulk', { count, n })
+      } else {
+        const title = get('title')
+        if (title && n !== null)
+          return t('admin.audit.summary.book_clearance_one', { title, n })
+      }
+      break
+    }
+    case 'user.clearance': {
+      const email = get('email'), f = fields()
+      if (email && f) return t('admin.audit.summary.user_clearance', { email, fields: f })
+      break
+    }
+    case 'user.session_terminate': {
+      const email = get('email')
+      if (email) return t('admin.audit.summary.user_session_terminate', { email })
+      break
+    }
+    case 'comment.moderate': {
+      const author = get('author'), decision = get('decision')
+      if (author && decision === 'approve') return t('admin.audit.summary.comment_approve', { author })
+      if (author && decision === 'delete')  return t('admin.audit.summary.comment_delete',  { author })
+      break
+    }
+    case 'annotation.moderate': {
+      const author = get('author'), decision = get('decision')
+      if (author && decision === 'approve') return t('admin.audit.summary.annotation_approve', { author })
+      if (author && decision === 'delete')  return t('admin.audit.summary.annotation_delete',  { author })
+      break
+    }
+  }
+  return e.summary
+}
+
 const toggleExpand = (id: number) => {
   if (expanded.value.has(id)) expanded.value.delete(id)
   else expanded.value.add(id)
@@ -325,7 +422,7 @@ onMounted(() => {
                     >{{ actionLabel(e.action) }}</span>
                     <span :title="formatDate(e.created_at)">{{ relativeTime(e.created_at) }}</span>
                   </div>
-                  <p class="mt-0.5 text-sm text-gray-800 dark:text-gray-200">{{ e.summary }}</p>
+                  <p class="mt-0.5 text-sm text-gray-800 dark:text-gray-200">{{ summaryLabel(e) }}</p>
                   <button
                     v-if="e.details"
                     @click="toggleExpand(e.id)"

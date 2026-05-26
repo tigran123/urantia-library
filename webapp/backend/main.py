@@ -1352,7 +1352,7 @@ async def admin_terminate_session(
     _audit(db, admin, "user.session_terminate",
            target_kind="user", target_id=target["user_id"],
            summary=f'Terminated session of {target["email"]}',
-           details={"jti": jti, "ip_address": target.get("ip_address")})
+           details={"email": target["email"], "jti": jti, "ip_address": target.get("ip_address")})
     db.commit()
     with _active_sessions_lock:
         _active_sessions.pop(jti, None)   # idempotent — another request might have evicted concurrently
@@ -1394,7 +1394,7 @@ async def admin_set_user_clearance(
         _audit(db, admin, "user.clearance",
                target_kind="user", target_id=user.id,
                summary=f'Updated {user.email}: {", ".join(diff.keys())}',
-               details={"changed": diff})
+               details={"email": user.email, "changed": diff})
     db.commit()
     db.refresh(user)
     return user
@@ -1417,7 +1417,7 @@ async def admin_set_book_clearance(
         _audit(db, admin, "book.clearance",
                target_kind="book", target_id=hash_id,
                summary=f'Set clearance of "{book.title or hash_id[:12]}" to {payload.clearance}',
-               details={"old": old, "new": payload.clearance})
+               details={"title": book.title or hash_id[:12], "old": old, "new": payload.clearance})
     book.clearance = payload.clearance
     db.commit()
     return {"hash_id": hash_id, "clearance": book.clearance}
@@ -1454,7 +1454,7 @@ async def admin_bulk_set_book_clearance(
     _audit(db, admin, "book.clearance",
            target_kind="book", target_id=None,
            summary=f"Set clearance of {updated} books to {payload.clearance}",
-           details={"count": updated, "new": payload.clearance,
+           details={"bulk": True, "count": updated, "new": payload.clearance,
                     "hash_ids": changing_ids[:25]})
     db.commit()
     return {"updated": updated, "clearance": payload.clearance}
@@ -1537,7 +1537,7 @@ async def admin_update_book(
         _audit(db, admin, "book.edit",
                target_kind="book", target_id=hash_id,
                summary=f'Edited "{original_title}": {", ".join(diff.keys())}',
-               details={"changed": diff})
+               details={"title": original_title, "changed": diff})
     db.commit()
     db.refresh(book)
     return _book_to_admin_detail(book, db)
@@ -1598,7 +1598,7 @@ async def admin_delete_book(
     _audit(db, admin, "book.delete",
            target_kind="book", target_id=hash_id,
            summary=f'Deleted "{deleted_title}"',
-           details={"locations": locations})
+           details={"title": deleted_title, "locations": locations})
     db.commit()
     return {"deleted": hash_id, "locations": locations, "errors": errors}
 
@@ -1783,15 +1783,19 @@ async def admin_move(
     if moved:
         if kind == "file":
             m = moved[0]
-            summary = f'Moved "{m.src.rsplit("/", 1)[-1]}" from /{src} to /{dst}'
+            filename = m.src.rsplit("/", 1)[-1]
+            summary = f'Moved "{filename}" from /{src} to /{dst}'
             target_id: str | None = m.hash_id
+            move_details = {"filename": filename, "src": src, "dst": dst,
+                            "kind": kind, "count": len(moved)}
         else:
             summary = f"Moved {len(moved)} books from /{src}/ to /{dst}/"
             target_id = None
+            move_details = {"src": src, "dst": dst, "kind": kind, "count": len(moved)}
         _audit(db, admin, "book.move",
                target_kind="book", target_id=target_id,
                summary=summary,
-               details={"src": src, "dst": dst, "kind": kind, "count": len(moved)})
+               details=move_details)
         db.commit()
 
     return schemas.MoveResponse(
@@ -2239,7 +2243,7 @@ async def admin_replace_book_cover(
     _audit(db, admin, "book.cover",
            target_kind="book", target_id=hash_id,
            summary=f'Replaced cover of "{book.title or hash_id[:12]}"',
-           details={"mode": "upload"})
+           details={"title": book.title or hash_id[:12], "mode": "upload"})
     db.commit()
     return {"cover_url": cover_url}
 
@@ -2285,7 +2289,7 @@ async def admin_reextract_book_cover(
     _audit(db, admin, "book.cover",
            target_kind="book", target_id=hash_id,
            summary=f'Re-extracted cover of "{book.title or hash_id[:12]}"',
-           details={"mode": "reextract"})
+           details={"title": book.title or hash_id[:12], "mode": "reextract"})
     db.commit()
     return {"cover_url": cover_url}
 
@@ -2755,7 +2759,7 @@ async def admin_commit_book(
     _audit(db, admin, "book.upload",
            target_kind="book", target_id=file_hash,
            summary=f'Uploaded "{title}" to /{rel_path}',
-           details={"path": rel_path, "size": vault_size, "clearance": int(payload.clearance)})
+           details={"title": title, "path": rel_path, "size": vault_size, "clearance": int(payload.clearance)})
     try:
         db.commit()
     except Exception as e:
@@ -4690,7 +4694,8 @@ async def admin_approve_comment(comment_id: int, admin: models.User = Depends(re
     _audit(db, admin, "comment.moderate",
            target_kind="comment", target_id=row.id,
            summary=f"Approved comment by {author_email or f'user #{row.user_id}'}",
-           details={"decision": "approve", "book_hash": row.hash_id})
+           details={"author": author_email or f"user #{row.user_id}",
+                    "decision": "approve", "book_hash": row.hash_id})
     db.commit()
     return {"id": row.id, "status": row.status}
 
@@ -4708,7 +4713,8 @@ async def admin_delete_comment(comment_id: int, admin: models.User = Depends(req
         _audit(db, admin, "comment.moderate",
                target_kind="comment", target_id=comment_id,
                summary=f"Deleted comment by {author_email or f'user #{author_id}'}",
-               details={"decision": "delete", "book_hash": book_hash})
+               details={"author": author_email or f"user #{author_id}",
+                        "decision": "delete", "book_hash": book_hash})
         db.commit()
     return {"message": "Removed"}
 
@@ -4984,7 +4990,8 @@ async def admin_approve_annotation(
     _audit(db, admin, "annotation.moderate",
            target_kind="annotation", target_id=row.id,
            summary=f"Approved annotation by {author_email or f'user #{row.user_id}'}",
-           details={"decision": "approve", "book_hash": row.hash_id})
+           details={"author": author_email or f"user #{row.user_id}",
+                    "decision": "approve", "book_hash": row.hash_id})
     db.commit()
     return {"id": row.id, "status": row.status}
 
@@ -5004,7 +5011,8 @@ async def admin_delete_annotation(
         _audit(db, admin, "annotation.moderate",
                target_kind="annotation", target_id=annotation_id,
                summary=f"Deleted annotation by {author_email or f'user #{author_id}'}",
-               details={"decision": "delete", "book_hash": book_hash})
+               details={"author": author_email or f"user #{author_id}",
+                        "decision": "delete", "book_hash": book_hash})
         db.commit()
     return {"message": "Removed"}
 
