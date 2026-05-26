@@ -1,0 +1,23 @@
+[Unit]
+Description=Urantia Library — refresh MaxMind GeoLite2 database
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tigran
+Group=tigran
+WorkingDirectory=/Books/
+EnvironmentFile=/Books/urantia-library/webapp/secrets.env
+ExecStart=/Books/urantia-library/webapp/backend/scripts/update_geoip.sh
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/Books/.data/
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes

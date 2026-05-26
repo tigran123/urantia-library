@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/vue/24/outline'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
@@ -12,6 +12,17 @@ const showPassword = ref(false)
 const errorMsg = ref('')
 const loading = ref(false)
 const router = useRouter()
+const route = useRoute()
+
+// Same-origin path validator. Accepts only "/foo"-shaped paths to defend
+// against open-redirect via `?next=https://evil.test/...` or `?next=//evil`.
+function safeNext(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  if (!raw.startsWith('/')) return null
+  if (raw.startsWith('//')) return null   // protocol-relative URL
+  if (raw.includes('://')) return null    // belt and braces
+  return raw
+}
 
 const handleLogin = async () => {
   errorMsg.value = ''
@@ -21,8 +32,15 @@ const handleLogin = async () => {
       email: email.value,
       password: password.value
     })
-    // Successfully logged in, go to browse
-    router.push({ name: 'browse' })
+    // If the user was bounced here by the 401 interceptor, ?next holds the
+    // original destination — return them there. Anything that fails the
+    // same-origin validator falls back to the default landing page.
+    const next = safeNext(route.query.next)
+    if (next) {
+      router.push(next)
+    } else {
+      router.push({ name: 'browse' })
+    }
   } catch (err: any) {
     if (err.response && err.response.data && err.response.data.detail) {
       errorMsg.value = err.response.data.detail
@@ -87,5 +105,16 @@ const handleLogin = async () => {
       {{ t('auth.noAccount') }}
       <router-link :to="{ name: 'register' }" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('auth.requestAccessLink') }}</router-link>
     </div>
+
+    <p class="mt-4 text-center text-xs text-gray-500 dark:text-gray-400">
+      <i18n-t keypath="auth.loginLegalNote" tag="span">
+        <template #privacy>
+          <router-link :to="{ name: 'privacy' }" target="_blank" class="hover:underline">{{ t('app.legal.privacy') }}</router-link>
+        </template>
+        <template #terms>
+          <router-link :to="{ name: 'terms' }" target="_blank" class="hover:underline">{{ t('app.legal.terms') }}</router-link>
+        </template>
+      </i18n-t>
+    </p>
   </div>
 </template>

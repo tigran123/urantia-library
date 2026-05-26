@@ -1,0 +1,21 @@
+[Unit]
+Description=Urantia Library — prune usage_events older than 24 months
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=tigran
+Group=tigran
+WorkingDirectory=/Books/
+ExecStart=/Books/urantia-library/webapp/backend/scripts/prune_usage_events.sh
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/Books/.data/
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes

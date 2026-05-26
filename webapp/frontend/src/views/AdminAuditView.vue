@@ -12,7 +12,7 @@ import {
 
 const { t } = useI18n({ useScope: 'global' })
 
-type CurrentUser = { email: string, is_admin?: boolean } | null
+type CurrentUser = { email: string, is_admin?: boolean, search_per_page?: number | null } | null
 const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
 const router = useRouter()
 
@@ -85,48 +85,33 @@ const segmentClass = (action: string) =>
 
 // ----- Timeline state -----
 const entries = ref<AuditLogEntry[]>([])
-const nextCursor = ref<number | null>(null)
+const feedPage = ref(1)
+const feedTotalPages = ref(0)
+const feedTotal = ref(0)
 const loadingFeed = ref(false)
-const loadingMore = ref(false)
 const expanded = ref<Set<number>>(new Set())
 const feedError = ref('')
 
-const loadFeed = async () => {
+const loadFeed = async (p: number = 1) => {
   loadingFeed.value = true
   feedError.value = ''
   try {
+    // per_page is server-controlled via the admin's users.search_per_page
+    // setting, matching the Usage Timeline and My Activity feeds.
     const res = await adminAuditFeed({
-      limit: 50,
+      page: p,
       since: sinceIso.value,
       action: actionFilter.value || null,
       actor_user_id: actorFilter.value,
     })
     entries.value = res.data.entries
-    nextCursor.value = res.data.next_cursor
+    feedPage.value = res.data.page
+    feedTotalPages.value = res.data.total_pages
+    feedTotal.value = res.data.total
   } catch (err: any) {
     feedError.value = err.response?.data?.detail || err.message
   } finally {
     loadingFeed.value = false
-  }
-}
-
-const loadMore = async () => {
-  if (nextCursor.value === null) return
-  loadingMore.value = true
-  try {
-    const res = await adminAuditFeed({
-      limit: 50,
-      cursor: nextCursor.value,
-      since: sinceIso.value,
-      action: actionFilter.value || null,
-      actor_user_id: actorFilter.value,
-    })
-    entries.value = [...entries.value, ...res.data.entries]
-    nextCursor.value = res.data.next_cursor
-  } catch (err: any) {
-    feedError.value = err.response?.data?.detail || err.message
-  } finally {
-    loadingMore.value = false
   }
 }
 
@@ -166,6 +151,14 @@ const loadLeaders = async () => {
 watch([mode, range, actionFilter, actorFilter], () => {
   if (mode.value === 'timeline') loadFeed()
   else loadLeaders()
+})
+
+// React to Settings → Results per page edits: the modal mutates
+// currentUser.search_per_page, the backend default reads it on the next
+// /api/admin/audit call, so we just refetch from page 1. Mirrors the same
+// fix in AdminUsageView (Timeline tab) and MyActivityView.
+watch(() => currentUser?.value?.search_per_page, () => {
+  if (mode.value === 'timeline') loadFeed(1)
 })
 
 // Click an actor row in the leaderboard → jump to timeline filtered by them.
@@ -527,14 +520,20 @@ onMounted(() => {
             </li>
           </ul>
 
-          <div class="mt-4 flex items-center justify-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+          <div v-if="feedTotalPages > 1" class="mt-4 flex items-center justify-center gap-2 text-sm">
             <button
-              v-if="nextCursor !== null"
-              @click="loadMore"
-              :disabled="loadingMore"
-              class="px-4 py-1.5 rounded-md font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
-            >{{ loadingMore ? t('admin.loading') : t('admin.audit.load_more') }}</button>
-            <span v-else>{{ t('admin.audit.end_of_feed') }}</span>
+              type="button"
+              :disabled="feedPage <= 1 || loadingFeed"
+              class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50"
+              @click="loadFeed(feedPage - 1)"
+            >‹ {{ t('myActivity.prev') }}</button>
+            <span class="text-gray-600 dark:text-gray-400">{{ t('myActivity.pageOf', { p: feedPage, n: feedTotalPages }) }}</span>
+            <button
+              type="button"
+              :disabled="feedPage >= feedTotalPages || loadingFeed"
+              class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50"
+              @click="loadFeed(feedPage + 1)"
+            >{{ t('myActivity.next') }} ›</button>
           </div>
         </template>
       </template>

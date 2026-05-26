@@ -124,7 +124,7 @@ def test_audit_feed_requires_admin(app_ctx):
 
 
 def test_audit_feed_pagination_and_filters(app_ctx):
-    """Feed honours limit + cursor + actor/action/since filters and orders newest-first."""
+    """Feed honours page + per_page + actor/action/since filters and orders newest-first."""
     helpers, _emails, TestSession = app_ctx
     models = helpers["models"]
     main   = helpers["main"]
@@ -149,18 +149,24 @@ def test_audit_feed_pagination_and_filters(app_ctx):
 
     c = helpers["client_for"]("alice@example.com")
 
-    # No filters — get all 5, newest first.
+    # No filters — get all 5, newest first, single page.
     body = c.get("/api/admin/audit").json()
     assert [e["summary"] for e in body["entries"]] == ["row 4", "row 3", "row 2", "row 1", "row 0"]
-    assert body["next_cursor"] is None
+    assert body["total"] == 5
+    assert body["page"] == 1
+    assert body["total_pages"] == 1
 
-    # Pagination: limit=2 should yield 2 entries + a cursor.
-    body = c.get("/api/admin/audit?limit=2").json()
+    # Pagination: per_page=2 should yield page 1 of 3.
+    body = c.get("/api/admin/audit?per_page=2").json()
     assert len(body["entries"]) == 2
     assert body["entries"][0]["summary"] == "row 4"
-    assert body["next_cursor"] is not None
-    body2 = c.get(f"/api/admin/audit?limit=2&cursor={body['next_cursor']}").json()
+    assert body["page"] == 1
+    assert body["per_page"] == 2
+    assert body["total"] == 5
+    assert body["total_pages"] == 3
+    body2 = c.get("/api/admin/audit?per_page=2&page=2").json()
     assert [e["summary"] for e in body2["entries"]] == ["row 2", "row 1"]
+    assert body2["page"] == 2
 
     # Filter by actor.
     body = c.get(f"/api/admin/audit?actor_user_id={bob_id}").json()

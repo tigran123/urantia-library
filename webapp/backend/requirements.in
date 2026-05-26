@@ -8,6 +8,7 @@ pyjwt
 pydantic[email]
 aiofiles
 python-multipart
+geoip2
 
 # Dev-only — needed for the pytest suite under tests/. Not imported by the
 # server at runtime.

@@ -18,6 +18,10 @@ import FeedbackThreadView from '../views/FeedbackThreadView.vue'
 import AdminFeedbackView from '../views/AdminFeedbackView.vue'
 import AdminFeedbackSettingsView from '../views/AdminFeedbackSettingsView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
+import PrivacyView from '../views/PrivacyView.vue'
+import TermsView from '../views/TermsView.vue'
+import MyActivityView from '../views/MyActivityView.vue'
+import AdminUsageView from '../views/AdminUsageView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -120,6 +124,26 @@ const router = createRouter({
       path: '/admin/audit',
       name: 'admin-audit',
       component: AdminAuditView
+    },
+    {
+      path: '/privacy',
+      name: 'privacy',
+      component: PrivacyView
+    },
+    {
+      path: '/terms',
+      name: 'terms',
+      component: TermsView
+    },
+    {
+      path: '/account/activity',
+      name: 'my-activity',
+      component: MyActivityView
+    },
+    {
+      path: '/admin/usage',
+      name: 'admin-usage',
+      component: AdminUsageView
     }
   ]
 })

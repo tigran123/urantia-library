@@ -34,11 +34,20 @@ echo "Starting Urantia Library Web Server..."
 cd backend
 . .venv/bin/activate
 
+# Pass --root-path only when APP_ROOT_PATH names a real prefix. Both empty
+# and "/" mean "no prefix" — but passing --root-path / makes uvicorn prepend
+# "/" to scope.path, so request.url.path came back as "//api/..." on dev.
+# Treat both as no-op so secrets.env can spell it either way.
+ROOT_PATH_ARGS=()
+if [ -n "$APP_ROOT_PATH" ] && [ "$APP_ROOT_PATH" != "/" ]; then
+    ROOT_PATH_ARGS=(--root-path "$APP_ROOT_PATH")
+fi
+
 # Launch based on explicit environment state
 if [ "$APP_ENV" = "development" ]; then
     echo "INFO: Development environment detected. Enabling hot-reload."
-    exec uvicorn main:app --host 127.0.0.1 --port 8000 --root-path "${APP_ROOT_PATH:-/}" --no-access-log --reload
+    exec uvicorn main:app --host 127.0.0.1 --port 8000 "${ROOT_PATH_ARGS[@]}" --no-access-log --reload
 else
     echo "INFO: Production environment detected. Running optimized server."
-    exec uvicorn main:app --host 127.0.0.1 --port 8000 --root-path "${APP_ROOT_PATH:-/}" --no-access-log
+    exec uvicorn main:app --host 127.0.0.1 --port 8000 "${ROOT_PATH_ARGS[@]}" --no-access-log
 fi

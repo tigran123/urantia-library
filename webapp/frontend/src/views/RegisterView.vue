@@ -7,6 +7,7 @@ const { t } = useI18n({ useScope: 'global' })
 const email = ref('')
 const source = ref('')
 const purpose = ref('')
+const acceptedLegal = ref(false)
 const errorMsg = ref('')
 const successMsg = ref('')
 const loading = ref(false)
@@ -20,7 +21,8 @@ const handleRegister = async () => {
     await api.post('/register', {
       email: email.value,
       source: source.value || null,
-      purpose: purpose.value || null
+      purpose: purpose.value || null,
+      accepted_legal: acceptedLegal.value
     })
     successMsg.value = t('auth.registerSuccess')
     // Clear form
@@ -90,9 +92,30 @@ const handleRegister = async () => {
         </div>
       </div>
 
+      <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
+        <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+          <input
+            v-model="acceptedLegal"
+            type="checkbox"
+            required
+            class="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+          />
+          <span>
+            <i18n-t keypath="auth.acceptLegal" tag="span">
+              <template #privacy>
+                <router-link :to="{ name: 'privacy' }" target="_blank" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.legal.privacy') }}</router-link>
+              </template>
+              <template #terms>
+                <router-link :to="{ name: 'terms' }" target="_blank" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.legal.terms') }}</router-link>
+              </template>
+            </i18n-t>
+          </span>
+        </label>
+      </div>
+
       <button
         type="submit"
-        :disabled="loading"
+        :disabled="loading || !acceptedLegal"
         class="w-full mt-4 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
       >
         {{ loading ? t('auth.submitLoading') : t('auth.submitBtn') }}

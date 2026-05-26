@@ -30,6 +30,7 @@ from database import engine, get_db, SessionLocal, verify_schema_version
 from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 import email_utils
 import jwt
+import geoip2.database
 
 models.Base.metadata.create_all(bind=engine)
 verify_schema_version(engine)
@@ -89,6 +90,40 @@ FEEDBACK_ATTACHMENT_DIR = os.environ.get(
 )
 os.makedirs(FEEDBACK_ATTACHMENT_DIR, exist_ok=True)
 _TOPDIR_SKIPLIST = {".claude", ".antigravitycli", ".vscode", ".data", "CLAUDE.md", "GEMINI.md", "urantia-library"}
+
+# Offline IP→geo lookup for usage_events. The .mmdb is refreshed monthly by
+# scripts/update_geoip.sh; the reader here is opened once at module load, so
+# a fresh database only takes effect on the next service restart.
+# A missing file is non-fatal: events still record with NULL geo.
+GEOIP_DB_PATH = os.path.join(DATA_DIR, "geoip", "GeoLite2-City.mmdb")
+try:
+    _geoip_reader: Optional[geoip2.database.Reader] = (
+        geoip2.database.Reader(GEOIP_DB_PATH) if os.path.exists(GEOIP_DB_PATH) else None
+    )
+    if _geoip_reader is None:
+        print(f"WARN: GeoIP database not found at {GEOIP_DB_PATH}; "
+              "usage events will record with NULL geo until "
+              "scripts/update_geoip.sh seeds it.")
+except Exception as e:
+    print(f"WARN: failed to open GeoIP database at {GEOIP_DB_PATH}: {e}")
+    _geoip_reader = None
+
+
+def _geo_lookup(ip: str) -> tuple[Optional[str], Optional[str]]:
+    """Resolve an IP to (country_iso, city_name). Returns (None, None) for
+    loopback, link-local, missing database, or any lookup error — never
+    raises. Safe to call from the request path."""
+    if not _geoip_reader or not ip:
+        return (None, None)
+    # Loopback / link-local short-circuit (no geo on dev or behind reverse
+    # proxy that hasn't set XFF correctly).
+    if ip.startswith("127.") or ip == "::1" or ip.startswith("fe80:"):
+        return (None, None)
+    try:
+        r = _geoip_reader.city(ip)
+        return (r.country.iso_code, r.city.name)
+    except Exception:
+        return (None, None)
 
 _last_seen: dict[int, datetime] = {}
 _last_seen_lock = threading.Lock()
@@ -170,6 +205,20 @@ def _blake2b_of_file(path: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _current_jti(access_token: str | None) -> str | None:
+    """Decode `jti` from an access_token cookie without validating against the
+    session map. Used by admin handlers that need to know which session is
+    the caller's own (to guard against self-termination), and by
+    _record_usage_event() to cluster a single login's events."""
+    if not access_token:
+        return None
+    try:
+        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    return payload.get("jti")
 
 
 def _verify_book_sync(hash_id: str, mode: str, db: Session) -> dict:
@@ -389,6 +438,64 @@ def _audit(
     ))
 
 
+def _record_usage_event(
+    request: Request,
+    kind: str,
+    *,
+    user: models.User | None,
+    hash_id: str | None = None,
+    path: str | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Append a row to usage_events for the current request. Fire-and-forget:
+    opens its own short-lived session, swallows any exception, never blocks
+    the request path. Unlike _audit(), this does NOT ride the caller's
+    transaction — telemetry must be independent of the action's success.
+
+    `kind`     — 'page' | 'book_open' | 'search' | 'login' | 'register'
+    `hash_id`  — book identifier when kind='book_open'; ignored otherwise
+    `path`     — explicit path to record (defaults to request.url.path; pass
+                 the ?path= value for /api/browse so the row reflects what
+                 the user navigated to, not the API URL)
+    `extra`    — per-kind details serialised into extra_json
+    """
+    # Honour the admin kill-switch (Admin → Usage → Settings). The cache is
+    # rebuilt by _load_enabled_kinds() on save; an empty set silently drops
+    # every recording while keeping existing rows in place.
+    if kind not in _enabled_kinds:
+        return
+    try:
+        ip = request.client.host if request.client else "unknown"
+        ua = (request.headers.get("user-agent") or "")[:500] or None
+        jti = _current_jti(request.cookies.get("access_token"))
+        country, city = _geo_lookup(ip)
+        raw_path = path if path is not None else request.url.path
+        # Collapse repeated slashes so the log reads cleanly regardless of
+        # uvicorn root-path quirks ("/" prefix → "//api/..." in request.url).
+        norm_path = re.sub(r"/{2,}", "/", raw_path) if raw_path else raw_path
+        db = SessionLocal()
+        try:
+            db.add(models.UsageEvent(
+                ts=_now_iso(),
+                user_id=user.id if user else None,
+                session_jti=jti,
+                ip=ip,
+                user_agent=ua,
+                geo_country=country,
+                geo_city=city,
+                kind=kind,
+                path=norm_path,
+                hash_id=hash_id,
+                extra_json=json.dumps(extra, separators=(",", ":")) if extra is not None else None,
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        # Telemetry must never break a real request.
+        pass
+
+
 def _first_book_path(db: Session, hash_id: str) -> str | None:
     """Return one current symlink path for `hash_id`, or None if the book has
     no registered locations. Used by audit-write sites to snapshot a /item/<path>
@@ -462,8 +569,16 @@ def _accessible_locations_query(db: Session, prefix: str, user: models.User | No
 async def login(request: Request, login_data: schemas.UserLogin, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == login_data.email).first()
     if not user or not verify_password(login_data.password, user.hashed_password):
+        _record_usage_event(
+            request, "login", user=user,
+            extra={"success": False, "email": login_data.email, "reason": "bad_credentials"},
+        )
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     if not user.is_active:
+        _record_usage_event(
+            request, "login", user=user,
+            extra={"success": False, "email": login_data.email, "reason": "inactive"},
+        )
         raise HTTPException(status_code=400, detail="User is not active")
 
     access_token, jti, expires_at = create_access_token(data={"sub": user.email})
@@ -488,6 +603,7 @@ async def login(request: Request, login_data: schemas.UserLogin, db: Session = D
         samesite="lax",
         max_age=7*24*60*60
     )
+    _record_usage_event(request, "login", user=user, extra={"success": True})
     return response
 
 @app.post("/api/logout")
@@ -541,11 +657,101 @@ async def get_me(current_user: models.User = Depends(get_current_user)):
     }
 
 
+# ==============================================================================
+# My Activity — GDPR subject-rights surface for the signed-in user
+# ==============================================================================
+# Backs the #/account/activity page. GET returns the user's own usage_events,
+# either paginated (default) or as a full JSON export (?format=json).
+# DELETE wipes all events for this user — exercises Art. 17 ("right to be
+# forgotten") for the data subject. Guest erasure is handled out-of-band via
+# the contact-admin path documented in the Privacy Policy.
+
+@app.get("/api/me/activity")
+async def my_activity(
+    page: int = 1,
+    per_page: int | None = None,
+    format: str | None = None,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    base = (
+        db.query(models.UsageEvent)
+          .filter(models.UsageEvent.user_id == current_user.id)
+          .order_by(models.UsageEvent.id.desc())
+    )
+
+    # Art. 20 portability export: all rows in one response, no pagination.
+    if format == "json":
+        rows = base.all()
+        return {
+            "exported_at": _now_iso(),
+            "user_email": current_user.email,
+            "events": [_my_activity_row(ev) for ev in rows],
+        }
+
+    # Default to the user's own "results per page" preference (the same knob
+    # the Search results use), with a 50-row fallback when unset.
+    if per_page is None:
+        per_page = int(current_user.search_per_page or 50)
+    page = max(page, 1)
+    per_page = max(1, min(per_page, 200))
+    total = base.count()
+    rows = base.offset((page - 1) * per_page).limit(per_page).all()
+    return {
+        "page": page,
+        "per_page": per_page,
+        "total": int(total),
+        "total_pages": (int(total) + per_page - 1) // per_page,
+        "events": [_my_activity_row(ev) for ev in rows],
+    }
+
+
+def _my_activity_row(ev: models.UsageEvent) -> dict:
+    extra = None
+    if ev.extra_json:
+        try:
+            extra = json.loads(ev.extra_json)
+        except json.JSONDecodeError:
+            extra = {"_raw": ev.extra_json}
+    return {
+        "id": ev.id,
+        "ts": ev.ts,
+        "kind": ev.kind,
+        "path": ev.path,
+        "hash_id": ev.hash_id,
+        "ip": ev.ip,
+        "user_agent": ev.user_agent,
+        "geo_country": ev.geo_country,
+        "geo_city": ev.geo_city,
+        "extra": extra,
+    }
+
+
+@app.delete("/api/me/activity")
+async def delete_my_activity(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete all usage_events for the current user (Art. 17 right to erasure).
+    Returns the count of deleted rows."""
+    n = (
+        db.query(models.UsageEvent)
+          .filter(models.UsageEvent.user_id == current_user.id)
+          .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": int(n)}
+
+
 @app.get("/api/library-stats")
 async def library_stats(
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    # NOT instrumented as a usage_event: this endpoint is hit by App.vue's
+    # footer refresh and the periodic /api/me heartbeat side-effect, not a
+    # user-initiated page load. Recording it would flood usage_events with
+    # idle noise. /api/browse is the real page-view signal.
     clearance = _clearance_of(current_user)
 
     accessible_books = (
@@ -709,7 +915,7 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
     return current_user
 
 @app.get("/api/browse")
-async def browse(path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+async def browse(request: Request, path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
     target_dir = os.path.join(BOOKS_DIR, path)
     if not os.path.abspath(target_dir).startswith(os.path.abspath(BOOKS_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -814,6 +1020,7 @@ async def browse(path: str = "", current_user: models.User | None = Depends(get_
         it["avg_rating"] = s["avg_rating"] if s else None
         it["rating_count"] = s["rating_count"] if s else 0
 
+    _record_usage_event(request, "page", user=current_user, path=path or "/")
     return {"path": path, "items": items}
 
 # --- Intelligent search -----------------------------------------------------
@@ -1066,6 +1273,7 @@ def _build_search_query(q: str, current_user: models.User | None, db: Session):
 
 @app.get("/api/search")
 async def search(
+    request: Request,
     q: str = "",
     page: int = 1,
     per_page: int = 50,
@@ -1203,6 +1411,13 @@ async def search(
         m["avg_rating"] = s["avg_rating"] if s else None
         m["rating_count"] = s["rating_count"] if s else 0
 
+    # Record only non-empty searches; an empty `q` was short-circuited above.
+    _record_usage_event(
+        request, "search",
+        user=current_user,
+        extra={"q": q, "page": page, "total": int(total)},
+    )
+
     return {
         "matches": matches,
         "page": page,
@@ -1231,22 +1446,41 @@ async def search_hash_ids(
 
 
 @app.post("/api/register", response_model=schemas.Message)
-async def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+async def register_user(request: Request, user: schemas.UserCreate, db: Session = Depends(get_db)):
+    # Privacy Policy + ToS consent is required at submit. Recorded on the
+    # registration_request row so it survives the gap until admin approval;
+    # /api/set-password copies it forward to the users row.
+    if not user.accepted_legal:
+        _record_usage_event(
+            request, "register", user=None,
+            extra={"success": False, "email": user.email, "reason": "legal_not_accepted"},
+        )
+        raise HTTPException(status_code=400, detail="You must accept the Privacy Policy and Terms of Service to register.")
+
     # Check if user already exists
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
+        _record_usage_event(
+            request, "register", user=None,
+            extra={"success": False, "email": user.email, "reason": "email_exists"},
+        )
         raise HTTPException(status_code=400, detail="Email already registered")
 
     # Check if a pending request already exists
     db_request = db.query(models.RegistrationRequest).filter(models.RegistrationRequest.email == user.email).first()
     if db_request:
+        _record_usage_event(
+            request, "register", user=None,
+            extra={"success": False, "email": user.email, "reason": "already_pending"},
+        )
         raise HTTPException(status_code=400, detail="Registration request already pending")
 
     db_req = models.RegistrationRequest(
         email=user.email,
         source=user.source,
         purpose=user.purpose,
-        status="pending"
+        status="pending",
+        accepted_legal_at=_now_iso(),
     )
     db.add(db_req)
     db.commit()
@@ -1260,6 +1494,10 @@ async def register_user(user: schemas.UserCreate, db: Session = Depends(get_db))
         purpose=db_req.purpose
     )
 
+    _record_usage_event(
+        request, "register", user=None,
+        extra={"success": True, "email": user.email},
+    )
     return {"message": "Registration request queued for approval."}
 
 @app.get("/api/admin/approve")
@@ -1292,13 +1530,32 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
         email=db_req.email,
         hashed_password=hashed_password,
         real_name=real_name,
-        is_active=True
+        is_active=True,
+        # Carry the original consent timestamp forward to the user row. Pre-0003
+        # requests may have NULL here — fall back to "now" so the new user row
+        # always has a non-NULL acceptance timestamp (they had to walk through
+        # the approval email link, so they're consenting at this moment anyway).
+        accepted_legal_at=db_req.accepted_legal_at or _now_iso(),
     )
     db.add(new_user)
     db.delete(db_req)
     db.commit()
 
     return {"message": "Password set successfully. You can now log in."}
+
+@app.get("/api/legal/meta")
+async def legal_meta():
+    """Configuration the Privacy Policy / Terms of Service render-time
+    interpolator reads. Public — no auth needed, since the documents
+    themselves are public. Falls back to ADMIN_EMAIL for the contact when
+    LEGAL_CONTACT_EMAIL is unset. Jurisdiction wording is no longer
+    interpolated (it was unsound to substitute one English string into the
+    Russian doc); it's hardcoded in each locale's markdown instead."""
+    contact = os.environ.get("LEGAL_CONTACT_EMAIL") or os.environ.get("ADMIN_EMAIL") or ""
+    return {
+        "contact_email": contact,
+    }
+
 
 @app.get("/api/admin/reject")
 async def reject_user(token: str, db: Session = Depends(get_db)):
@@ -1324,19 +1581,6 @@ async def admin_list_users(
     db: Session = Depends(get_db),
 ):
     return db.query(models.User).order_by(models.User.email).all()
-
-
-def _current_jti(access_token: str | None) -> str | None:
-    """Decode `jti` from an access_token cookie without validating against the
-    session map. Used by admin handlers that need to know which session is
-    the caller's own (to guard against self-termination)."""
-    if not access_token:
-        return None
-    try:
-        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.PyJWTError:
-        return None
-    return payload.get("jti")
 
 
 @app.get("/api/admin/sessions", response_model=List[schemas.AdminSessionSummary])
@@ -3067,6 +3311,7 @@ async def admin_cancel_integrity_job(
 
 @app.get("/api/files/{path:path}")
 async def get_file(
+    request: Request,
     path: str,
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
@@ -3077,6 +3322,12 @@ async def get_file(
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     assert_can_read_path(file_path, current_user, db)
+    _record_usage_event(
+        request, "book_open",
+        user=current_user,
+        hash_id=_resolve_vault_hash(file_path),
+        path=path,
+    )
     return FileResponse(file_path)
 
 def sanitize_fb2_path(path: str) -> str:
@@ -3408,6 +3659,7 @@ def _extract_annotation_html(root) -> str:
 
 @app.get("/api/fb2-content")
 async def fb2_content(
+    request: Request,
     path: str,
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
@@ -3418,6 +3670,12 @@ async def fb2_content(
         xml_bytes = _read_fb2_bytes(file_path)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    _record_usage_event(
+        request, "book_open",
+        user=current_user,
+        hash_id=_resolve_vault_hash(file_path),
+        path=path,
+    )
     return _convert_fb2(xml_bytes)
 
 
@@ -3793,6 +4051,7 @@ def _convert_txt(text: str) -> Dict[str, Any]:
 
 @app.get("/api/md-content")
 async def md_content(
+    request: Request,
     path: str,
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
@@ -3802,6 +4061,12 @@ async def md_content(
     text = _read_text_file(file_path)
     lower = file_path.lower()
     ext = os.path.splitext(lower)[1]
+    _record_usage_event(
+        request, "book_open",
+        user=current_user,
+        hash_id=_resolve_vault_hash(file_path),
+        path=path,
+    )
     if lower.endswith(".txt"):
         return _convert_txt(text)
     elif ext in CODE_EXTENSIONS:
@@ -4091,6 +4356,7 @@ def _convert_html(html_bytes: bytes, max_chars: int | None = None) -> Dict[str, 
 
 @app.get("/api/html-content")
 async def html_content(
+    request: Request,
     path: str,
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
@@ -4101,6 +4367,12 @@ async def html_content(
         data = _read_html_bytes(file_path)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=422, detail="Corrupt zip archive")
+    _record_usage_event(
+        request, "book_open",
+        user=current_user,
+        hash_id=_resolve_vault_hash(file_path),
+        path=path,
+    )
     return _convert_html(data)
 
 
@@ -4172,6 +4444,7 @@ def extract_djvu_outline(file_path: str) -> list:
 
 @app.get("/api/djvu-metadata")
 async def djvu_metadata(
+    request: Request,
     path: str,
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
@@ -4183,6 +4456,14 @@ async def djvu_metadata(
         doc = ctx.new_document(djvu.decode.FileURI(file_path))
         doc.decoding_job.wait()
         total_pages = len(doc.pages)
+        # Treat djvu-metadata as the book-open signal (one event per open);
+        # /api/djvu-page is hit per-page-render and would flood the table.
+        _record_usage_event(
+            request, "book_open",
+            user=current_user,
+            hash_id=_resolve_vault_hash(file_path),
+            path=path,
+        )
         return {"total_pages": total_pages}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -5111,18 +5392,24 @@ def _audit_actor_dict(user: models.User) -> dict:
 
 @app.get("/api/admin/audit", response_model=schemas.AuditFeed)
 async def admin_audit_feed(
-    limit: int = 50,
-    cursor: int | None = None,           # last-seen id from the previous page; rows with id < cursor are returned
+    page: int = 1,
+    per_page: int | None = None,
     actor_user_id: int | None = None,
     action: str | None = None,
     since: str | None = None,            # ISO-8601 UTC; only entries with created_at >= this are returned
     _admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Paginated timeline of admin actions, newest first. Cursor is the `id`
-    of the last entry from the previous page — stable under concurrent inserts
-    because new rows always get a higher id, never sneak into a finished page."""
-    limit = max(1, min(limit, 200))
+    """Page-based timeline of admin actions, newest first. Symmetric with
+    `/api/admin/usage/timeline` and `/api/me/activity` — Prev / Page X of N /
+    Next is friendlier than scrolling through 1000+ rows under "Load more".
+
+    `per_page` defaults to the admin's own `users.search_per_page` setting
+    (same knob as Search), with a 50-row fallback when unset."""
+    if per_page is None:
+        per_page = int(_admin.search_per_page or 50)
+    page = max(page, 1)
+    per_page = max(1, min(per_page, 200))
     # Outer join because the actor row may have been hard-deleted (FKs are
     # not enforced in this SQLite). Matches the 'actor user was deleted'
     # tolerance already in admin_audit_stats — without this, deleting a
@@ -5132,8 +5419,6 @@ async def admin_audit_feed(
           .outerjoin(models.User, models.AdminAuditLog.actor_user_id == models.User.id)
           .order_by(models.AdminAuditLog.id.desc())
     )
-    if cursor is not None:
-        q = q.filter(models.AdminAuditLog.id < cursor)
     if actor_user_id is not None:
         q = q.filter(models.AdminAuditLog.actor_user_id == actor_user_id)
     if action:
@@ -5141,9 +5426,8 @@ async def admin_audit_feed(
     if since:
         q = q.filter(models.AdminAuditLog.created_at >= since)
 
-    rows = q.limit(limit + 1).all()
-    has_more = len(rows) > limit
-    rows = rows[:limit]
+    total = q.order_by(None).count()
+    rows = q.offset((page - 1) * per_page).limit(per_page).all()
 
     entries = []
     for entry, user in rows:
@@ -5178,7 +5462,10 @@ async def admin_audit_feed(
 
     return {
         "entries": entries,
-        "next_cursor": rows[-1][0].id if has_more and rows else None,
+        "page": page,
+        "per_page": per_page,
+        "total": int(total),
+        "total_pages": (int(total) + per_page - 1) // per_page,
     }
 
 
@@ -5231,6 +5518,480 @@ async def admin_audit_stats(
     leaders.sort(key=lambda r: r["total"], reverse=True)
 
     return {"since": since, "leaders": leaders}
+
+
+# ==============================================================================
+# Admin → Usage analytics (reads from usage_events)
+# ==============================================================================
+# All endpoints below are admin-only. The shape mirrors /api/admin/audit/* —
+# `days` is a relative window (default 30), and the response is a plain dict
+# (no response_model) so the surface stays easy to evolve. Queries are
+# indexed via ix_usage_events_*: ts / (user_id,ts) / (ip,ts) / (hash_id,ts)
+# / (kind,ts).
+
+# Recording kill-switch. Admin can toggle which event kinds get inserted from
+# /api/admin/usage/settings. Module-level set is replaced (not mutated)
+# whenever the admin saves, so readers in _record_usage_event need no lock —
+# CPython's GIL guarantees an atomic name rebind, and `in` on a set is O(1).
+_USAGE_KINDS_ALL = ("page", "book_open", "search", "login", "register")
+_enabled_kinds: frozenset[str] = frozenset(_USAGE_KINDS_ALL)
+
+
+def _load_enabled_kinds() -> None:
+    """Read the persisted enabled-kinds set from app_meta into the module
+    cache. Called once at startup and after each admin update. Falls back to
+    'all enabled' if the row is missing or malformed (the safer default —
+    matches the Privacy Policy's published list)."""
+    global _enabled_kinds
+    db = SessionLocal()
+    try:
+        row = db.query(models.AppMeta).filter(
+            models.AppMeta.key == "usage_events_enabled_kinds"
+        ).first()
+        if row and row.value:
+            try:
+                vals = json.loads(row.value)
+                if isinstance(vals, list):
+                    _enabled_kinds = frozenset(v for v in vals if v in _USAGE_KINDS_ALL)
+                    return
+            except json.JSONDecodeError:
+                pass
+        _enabled_kinds = frozenset(_USAGE_KINDS_ALL)
+    finally:
+        db.close()
+
+
+_load_enabled_kinds()
+
+
+def _usage_since(days: int | None) -> str:
+    """Return an ISO-8601 UTC timestamp `days` ago, matching the format
+    written into usage_events.ts so lexicographic >= agrees with chronology."""
+    d = max(1, min(int(days) if days else 30, 3650))
+    return (datetime.now(timezone.utc) - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@app.get("/api/admin/usage/overview")
+async def admin_usage_overview(
+    days: int = 30,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """High-level rollup for the Admin → Usage landing page: totals by kind,
+    distinct users / IPs / countries seen, and a per-day count for a sparkline."""
+    since = _usage_since(days)
+    base = db.query(models.UsageEvent).filter(models.UsageEvent.ts >= since)
+
+    by_kind_rows = (
+        db.query(models.UsageEvent.kind, func.count())
+          .filter(models.UsageEvent.ts >= since)
+          .group_by(models.UsageEvent.kind)
+          .all()
+    )
+    by_kind = {k: int(n) for k, n in by_kind_rows}
+
+    total_events = base.count()
+    unique_users = (
+        db.query(func.count(func.distinct(models.UsageEvent.user_id)))
+          .filter(models.UsageEvent.ts >= since)
+          .filter(models.UsageEvent.user_id.isnot(None))
+          .scalar() or 0
+    )
+    unique_ips = (
+        db.query(func.count(func.distinct(models.UsageEvent.ip)))
+          .filter(models.UsageEvent.ts >= since)
+          .scalar() or 0
+    )
+    unique_countries = (
+        db.query(func.count(func.distinct(models.UsageEvent.geo_country)))
+          .filter(models.UsageEvent.ts >= since)
+          .filter(models.UsageEvent.geo_country.isnot(None))
+          .scalar() or 0
+    )
+
+    # Daily sparkline. substr(ts,1,10) extracts the YYYY-MM-DD prefix.
+    daily_rows = (
+        db.query(func.substr(models.UsageEvent.ts, 1, 10), func.count())
+          .filter(models.UsageEvent.ts >= since)
+          .group_by(func.substr(models.UsageEvent.ts, 1, 10))
+          .order_by(func.substr(models.UsageEvent.ts, 1, 10))
+          .all()
+    )
+    daily = [{"date": d, "count": int(n)} for d, n in daily_rows]
+
+    return {
+        "since": since,
+        "days": days,
+        "total_events": int(total_events),
+        "by_kind": by_kind,
+        "unique_users": int(unique_users),
+        "unique_ips": int(unique_ips),
+        "unique_countries": int(unique_countries),
+        "daily": daily,
+    }
+
+
+@app.get("/api/admin/usage/by-country")
+async def admin_usage_by_country(
+    days: int = 30,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Country leaderboard: events / unique IPs / unique users per ISO-2."""
+    since = _usage_since(days)
+    rows = (
+        db.query(
+            models.UsageEvent.geo_country,
+            func.count().label("n"),
+            func.count(func.distinct(models.UsageEvent.ip)).label("ips"),
+            func.count(func.distinct(models.UsageEvent.user_id)).label("users"),
+        )
+        .filter(models.UsageEvent.ts >= since)
+        .group_by(models.UsageEvent.geo_country)
+        .order_by(func.count().desc())
+        .all()
+    )
+    return {
+        "since": since,
+        "days": days,
+        "countries": [
+            {"country": c or "UNKNOWN", "events": int(n), "unique_ips": int(ips), "unique_users": int(users)}
+            for c, n, ips, users in rows
+        ],
+    }
+
+
+@app.get("/api/admin/usage/by-city")
+async def admin_usage_by_city(
+    country: str,
+    days: int = 30,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Cities within a given ISO-2 country code, by event count."""
+    since = _usage_since(days)
+    rows = (
+        db.query(
+            models.UsageEvent.geo_city,
+            func.count().label("n"),
+            func.count(func.distinct(models.UsageEvent.ip)).label("ips"),
+        )
+        .filter(models.UsageEvent.ts >= since)
+        .filter(models.UsageEvent.geo_country == country)
+        .group_by(models.UsageEvent.geo_city)
+        .order_by(func.count().desc())
+        .all()
+    )
+    return {
+        "since": since,
+        "days": days,
+        "country": country,
+        "cities": [
+            {"city": c or "UNKNOWN", "events": int(n), "unique_ips": int(ips)}
+            for c, n, ips in rows
+        ],
+    }
+
+
+@app.get("/api/admin/usage/by-book")
+async def admin_usage_by_book(
+    days: int = 30,
+    limit: int = 50,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Most-opened books in the window. Joined to books for the title/author;
+    a NULL join row means the book was deleted (ON DELETE SET NULL keeps the
+    event but drops the hash_id), so those rows are filtered out.
+
+    `signed_in_readers` counts distinct user_id values (NULLs ignored by SQL),
+    while `guest_ips` counts distinct ip values from rows where user_id IS NULL.
+    Splitting them avoids the misleading 'opened by 0 readers' that you'd see
+    when the book was only opened by guests."""
+    since = _usage_since(days)
+    limit = max(1, min(int(limit), 500))
+    rows = (
+        db.query(
+            models.UsageEvent.hash_id,
+            models.Book.title,
+            models.Book.author,
+            func.count().label("opens"),
+            func.count(func.distinct(models.UsageEvent.user_id)).label("signed_in_readers"),
+            func.count(func.distinct(case(
+                (models.UsageEvent.user_id.is_(None), models.UsageEvent.ip),
+                else_=None,
+            ))).label("guest_ips"),
+        )
+        .outerjoin(models.Book, models.Book.id == models.UsageEvent.hash_id)
+        .filter(models.UsageEvent.ts >= since)
+        .filter(models.UsageEvent.kind == "book_open")
+        .filter(models.UsageEvent.hash_id.isnot(None))
+        .group_by(models.UsageEvent.hash_id)
+        .order_by(func.count().desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "since": since,
+        "days": days,
+        "books": [
+            {
+                "hash_id": h,
+                "title": title,
+                "author": author,
+                "opens": int(opens),
+                "signed_in_readers": int(readers),
+                "guest_ips": int(guests),
+            }
+            for h, title, author, opens, readers, guests in rows
+        ],
+    }
+
+
+@app.get("/api/admin/usage/by-user")
+async def admin_usage_by_user(
+    days: int = 30,
+    limit: int = 100,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Per-user activity rollup. Guest rows (user_id IS NULL) are excluded;
+    those are surfaced via /by-ip instead."""
+    since = _usage_since(days)
+    limit = max(1, min(int(limit), 1000))
+    rows = (
+        db.query(
+            models.UsageEvent.user_id,
+            models.User.email,
+            models.User.real_name,
+            func.count().label("total"),
+            func.count(func.distinct(case((models.UsageEvent.kind == "book_open", models.UsageEvent.hash_id), else_=None))).label("books"),
+            func.max(models.UsageEvent.ts).label("last_seen"),
+        )
+        .join(models.User, models.User.id == models.UsageEvent.user_id)
+        .filter(models.UsageEvent.ts >= since)
+        .group_by(models.UsageEvent.user_id)
+        .order_by(func.count().desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "since": since,
+        "days": days,
+        "users": [
+            {
+                "user_id": uid,
+                "email": email,
+                "real_name": real_name,
+                "total_events": int(total),
+                "unique_books_opened": int(books),
+                "last_seen": last_seen,
+            }
+            for uid, email, real_name, total, books, last_seen in rows
+        ],
+    }
+
+
+@app.get("/api/admin/usage/by-ip")
+async def admin_usage_by_ip(
+    days: int = 30,
+    country: str | None = None,
+    limit: int = 100,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Per-IP rollup, optionally filtered to a single country. One row per IP
+    with first_seen / last_seen extremes."""
+    since = _usage_since(days)
+    limit = max(1, min(int(limit), 1000))
+    q = (
+        db.query(
+            models.UsageEvent.ip,
+            models.UsageEvent.geo_country,
+            models.UsageEvent.geo_city,
+            func.count().label("n"),
+            func.count(func.distinct(models.UsageEvent.user_id)).label("users"),
+            func.min(models.UsageEvent.ts).label("first_seen"),
+            func.max(models.UsageEvent.ts).label("last_seen"),
+        )
+        .filter(models.UsageEvent.ts >= since)
+    )
+    if country:
+        q = q.filter(models.UsageEvent.geo_country == country)
+    rows = (
+        q.group_by(models.UsageEvent.ip)
+         .order_by(func.count().desc())
+         .limit(limit)
+         .all()
+    )
+    return {
+        "since": since,
+        "days": days,
+        "country": country,
+        "ips": [
+            {
+                "ip": ip,
+                "country": c,
+                "city": city,
+                "events": int(n),
+                "unique_users": int(users),
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+            }
+            for ip, c, city, n, users, first_seen, last_seen in rows
+        ],
+    }
+
+
+@app.get("/api/admin/usage/settings")
+async def admin_usage_settings_get(
+    _admin: models.User = Depends(require_admin),
+):
+    """Return the current set of usage_event kinds being recorded, and the
+    full list of recognised kinds so the UI can render every checkbox even
+    if a future kind is added in code but not yet enabled."""
+    return {
+        "enabled_kinds": sorted(_enabled_kinds),
+        "all_kinds": list(_USAGE_KINDS_ALL),
+    }
+
+
+@app.put("/api/admin/usage/settings")
+async def admin_usage_settings_put(
+    payload: schemas.UsageSettingsUpdate,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Replace the enabled-kinds set. Silently drops unknown kind names —
+    the persisted set is always a subset of _USAGE_KINDS_ALL."""
+    new_set = frozenset(v for v in payload.enabled_kinds if v in _USAGE_KINDS_ALL)
+    payload_json = json.dumps(sorted(new_set))
+
+    row = db.query(models.AppMeta).filter(
+        models.AppMeta.key == "usage_events_enabled_kinds"
+    ).first()
+    old_value = row.value if row else None
+    if row:
+        row.value = payload_json
+    else:
+        db.add(models.AppMeta(key="usage_events_enabled_kinds", value=payload_json))
+
+    _audit(
+        db, _admin, "usage.kinds_update",
+        target_kind="settings",
+        target_id="usage_events_enabled_kinds",
+        summary=f"Usage recording: {', '.join(sorted(new_set)) or '(none)'}",
+        details={"old": old_value, "new": payload_json},
+    )
+    db.commit()
+
+    _load_enabled_kinds()
+    return {
+        "enabled_kinds": sorted(_enabled_kinds),
+        "all_kinds": list(_USAGE_KINDS_ALL),
+    }
+
+
+@app.get("/api/admin/usage/timeline")
+async def admin_usage_timeline(
+    page: int = 1,
+    per_page: int | None = None,
+    user: str | None = None,           # accepts numeric user_id or full email; admin disambiguates
+    ip: str | None = None,
+    hash_id: str | None = None,
+    kind: str | None = None,
+    country: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Raw event feed, newest first, page-based pagination (the matching
+    Audit endpoint still uses cursor + 'Load more' — we use page-numbers here
+    for symmetry with #/account/activity, which the operator preferred).
+
+    All filters compose with AND. `per_page` defaults to the admin's own
+    `users.search_per_page` setting (same knob as Search) so pagination is
+    consistent across all admin tables.
+
+    `user` accepts either a numeric id (matches usage_events.user_id) or an
+    email address (case-insensitive exact match against users.email). A
+    nonexistent email yields an empty result, not a 404."""
+    if per_page is None:
+        per_page = int(_admin.search_per_page or 100)
+    page = max(page, 1)
+    per_page = max(1, min(per_page, 500))
+    q = (
+        db.query(models.UsageEvent, models.User)
+          .outerjoin(models.User, models.User.id == models.UsageEvent.user_id)
+          .order_by(models.UsageEvent.id.desc())
+    )
+    if user:
+        token = user.strip()
+        token_lc = token.lower()
+        if token_lc in ("guest", "(guest)"):
+            q = q.filter(models.UsageEvent.user_id.is_(None))
+        elif token.isdigit():
+            q = q.filter(models.UsageEvent.user_id == int(token))
+        else:
+            # Email: resolve once, then filter by the integer user_id so the
+            # SQLite indexes on usage_events still apply. A lookup that finds
+            # nothing forces a deliberately empty result set rather than
+            # filtering by NULL (which would silently match guest rows).
+            resolved = db.query(models.User.id).filter(
+                func.lower(models.User.email) == token_lc
+            ).scalar()
+            if resolved is None:
+                q = q.filter(models.UsageEvent.id == -1)
+            else:
+                q = q.filter(models.UsageEvent.user_id == resolved)
+    if ip:
+        q = q.filter(models.UsageEvent.ip == ip)
+    if hash_id:
+        q = q.filter(models.UsageEvent.hash_id == hash_id)
+    if kind:
+        q = q.filter(models.UsageEvent.kind == kind)
+    if country:
+        q = q.filter(models.UsageEvent.geo_country == country)
+    if since:
+        q = q.filter(models.UsageEvent.ts >= since)
+    if until:
+        q = q.filter(models.UsageEvent.ts <= until)
+
+    total = q.count()
+    rows = q.offset((page - 1) * per_page).limit(per_page).all()
+
+    entries = []
+    for ev, user in rows:
+        extra = None
+        if ev.extra_json:
+            try:
+                extra = json.loads(ev.extra_json)
+            except json.JSONDecodeError:
+                extra = {"_raw": ev.extra_json}
+        entries.append({
+            "id": ev.id,
+            "ts": ev.ts,
+            "user_id": ev.user_id,
+            "user_email": user.email if user else None,
+            "session_jti": ev.session_jti,
+            "ip": ev.ip,
+            "user_agent": ev.user_agent,
+            "geo_country": ev.geo_country,
+            "geo_city": ev.geo_city,
+            "kind": ev.kind,
+            "path": ev.path,
+            "hash_id": ev.hash_id,
+            "extra": extra,
+        })
+
+    return {
+        "entries": entries,
+        "page": page,
+        "per_page": per_page,
+        "total": int(total),
+        "total_pages": (int(total) + per_page - 1) // per_page,
+    }
 
 
 # ==============================================================================

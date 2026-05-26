@@ -13,7 +13,8 @@ CREATE TABLE users (
     clearance INTEGER NOT NULL DEFAULT 0,
     avatar_url VARCHAR,
     real_name VARCHAR,                  -- Optional display name shown on comments instead of the email local-part
-    search_per_page INTEGER DEFAULT 50
+    search_per_page INTEGER DEFAULT 50,
+    accepted_legal_at TEXT              -- ISO-8601 UTC; NULL = user has not yet accepted current Privacy/ToS
 );
 
 CREATE TABLE registration_requests (
@@ -22,7 +23,8 @@ CREATE TABLE registration_requests (
     status VARCHAR,
     source VARCHAR,
     purpose VARCHAR,
-    token VARCHAR UNIQUE
+    token VARCHAR UNIQUE,
+    accepted_legal_at TEXT              -- ISO-8601 UTC; stamped at submit. NOT NULL in /api/register's validation, but column-level nullable for forward-compat.
 );
 
 -- ==============================================================================
@@ -263,6 +265,43 @@ CREATE TABLE admin_audit_log (
 CREATE INDEX idx_admin_audit_log_created_at ON admin_audit_log(created_at);
 CREATE INDEX idx_admin_audit_log_actor      ON admin_audit_log(actor_user_id);
 CREATE INDEX idx_admin_audit_log_action     ON admin_audit_log(action);
+
+-- ==============================================================================
+-- 8. Usage Events (library analytics)
+-- ==============================================================================
+-- Per-request telemetry: page views, book opens, searches, logins, registrations.
+-- Written from main.py via _record_usage_event() (try/except wrapped so telemetry
+-- can never break a request). Read by the Admin → Usage panel and the per-user
+-- My Activity page (#/account/activity).
+--
+-- IP address is personal data under GDPR (CJEU Breyer C-582/14). Retention is
+-- 24 months, enforced daily by scripts/prune_usage_events.sh. See the Privacy
+-- Policy for the user-facing data-flow description.
+--
+-- FK ondelete semantics:
+--   * users(id) ON DELETE SET NULL  — account deletion detaches the timeline
+--                                      from the identity without erasing it.
+--   * books(id) ON DELETE SET NULL  — a book removal shouldn't erase the
+--                                      historical fact that it was opened.
+CREATE TABLE usage_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           TEXT NOT NULL,                                       -- ISO-8601 UTC ('YYYY-MM-DDTHH:MM:SSZ')
+    user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,     -- NULL = guest or detached
+    session_jti  TEXT,                                                -- JWT jti, clusters one session's events
+    ip           TEXT NOT NULL,                                       -- raw client IP, post-XFF
+    user_agent   TEXT,                                                -- truncated to ~500 chars
+    geo_country  TEXT,                                                -- ISO-2 (e.g. 'AM','RU') or NULL
+    geo_city     TEXT,                                                -- English name from GeoLite2 or NULL
+    kind         TEXT NOT NULL,                                       -- 'page'|'book_open'|'search'|'login'|'register'
+    path         TEXT,                                                -- normalized request path or filtered ?path= value
+    hash_id      TEXT REFERENCES books(id) ON DELETE SET NULL,        -- book hash for kind='book_open', else NULL
+    extra_json   TEXT                                                 -- per-kind details (search query+count, login success, …)
+);
+CREATE INDEX ix_usage_events_ts      ON usage_events(ts);
+CREATE INDEX ix_usage_events_user_ts ON usage_events(user_id, ts);
+CREATE INDEX ix_usage_events_ip_ts   ON usage_events(ip, ts);
+CREATE INDEX ix_usage_events_hash_ts ON usage_events(hash_id, ts);
+CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 
 -- Schema version stamp. The runner at webapp/backend/migrate.py reads this
 -- and applies any numbered files in webapp/backend/migrations/ whose number

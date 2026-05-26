@@ -1,0 +1,14 @@
+[Unit]
+Description=Run daily usage_events retention prune for Urantia Library
+Requires=urantia-library-prune.service
+
+[Timer]
+# 04:00 UTC every day — runs after the 03:00 nightly_backup so the day's
+# backup already captured the rows about to be deleted. Persistent so a
+# missed run (machine off) fires on next boot.
+OnCalendar=*-*-* 04:00:00 UTC
+Persistent=true
+Unit=urantia-library-prune.service
+
+[Install]
+WantedBy=timers.target

@@ -555,13 +555,6 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   <span v-if="fileTypeLabel(item.name)" class="font-semibold">{{ fileTypeLabel(item.name) }}</span>
                   <span v-if="fileTypeLabel(item.name) && item.size != null">·</span>
                   <span v-if="item.size != null">{{ formatBytes(item.size) }}</span>
-                  <span v-if="fileTypeLabel(item.name) || item.size != null" class="text-gray-300">·</span>
-                  <span class="flex items-center gap-1">
-                    {{ $t('app.location') }}
-                    <router-link :to="`/browse/${currentPath}`" class="hover:text-blue-500 hover:underline">
-                      /{{ currentPath || 'Root' }}
-                    </router-link>
-                  </span>
                 </div>
               </div>
 

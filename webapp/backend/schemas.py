@@ -5,6 +5,9 @@ class UserCreate(BaseModel):
     email: EmailStr
     source: Optional[str] = None
     purpose: Optional[str] = None
+    # The registration form's required "I accept the Privacy Policy and Terms"
+    # checkbox; /api/register rejects with 400 when this is False.
+    accepted_legal: bool = False
 
 class UserResponse(BaseModel):
     email: EmailStr
@@ -434,6 +437,13 @@ class AdminFeedbackSettingsResponse(AdminFeedbackSettingsPayload):
     pending_count: int = 0
 
 
+class UsageSettingsUpdate(BaseModel):
+    """Payload for PUT /api/admin/usage/settings. The server treats this as
+    the full new set — any kind not listed becomes disabled. Unknown kind
+    names are silently dropped server-side."""
+    enabled_kinds: List[str]
+
+
 # --- Librarian audit log -----------------------------------------------------
 
 class AuditActor(BaseModel):
@@ -464,7 +474,10 @@ class AuditLogEntry(BaseModel):
 
 class AuditFeed(BaseModel):
     entries: List[AuditLogEntry]
-    next_cursor: Optional[int] = None           # pass back as ?cursor= to fetch the next page; null = end of feed
+    page: int
+    per_page: int
+    total: int                                  # total matching rows across all pages
+    total_pages: int                            # max page number; 0 when total==0
 
 
 class AuditLeaderEntry(BaseModel):

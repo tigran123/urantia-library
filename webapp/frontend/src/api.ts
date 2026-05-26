@@ -17,9 +17,13 @@ api.interceptors.response.use(
       // means "browsing anonymously" and must NOT bounce the visitor to login.
       const isMeProbe = error.config?.url === '/me'
 
-      // Redirect to login if unauthorized AND not already on a public page
+      // Redirect to login if unauthorized AND not already on a public page.
+      // Preserve the original destination as ?next= so LoginView can route
+      // back to it after a successful sign-in. fullPath includes the hash
+      // route's path + query + hash, which is what hash-history needs.
       if (!isMeProbe && router.currentRoute.value.name && !publicRoutes.includes(router.currentRoute.value.name.toString())) {
-        router.push({ name: 'login' })
+        const next = router.currentRoute.value.fullPath
+        router.push({ name: 'login', query: next && next !== '/' ? { next } : undefined })
       }
     }
     return Promise.reject(error)
@@ -205,7 +209,10 @@ export interface AuditLogEntry {
 
 export interface AuditFeed {
   entries: AuditLogEntry[]
-  next_cursor: number | null
+  page: number
+  per_page: number
+  total: number
+  total_pages: number
 }
 
 export interface AuditLeaderEntry {
@@ -220,8 +227,8 @@ export interface AuditStats {
 }
 
 export interface AuditFeedParams {
-  limit?: number
-  cursor?: number | null
+  page?: number
+  per_page?: number
   actor_user_id?: number | null
   action?: string | null
   since?: string | null

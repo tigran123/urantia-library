@@ -118,8 +118,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 <FolderIcon class="h-6 w-6 text-blue-400 dark:text-blue-500" />
               </div>
               <div class="flex-1 min-w-0 pr-8" :class="{ 'opacity-60': !dir.exists }">
-                <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="dir.path">{{ dir.name }}</p>
-                <p class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" :title="dir.path">/{{ dir.path }}</p>
+                <p class="text-base font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="dir.path">{{ dir.name }}</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400 truncate mt-0.5" :title="dir.path">/{{ dir.path }}</p>
                 <span v-if="!dir.exists" class="inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">{{ $t('app.missing_file') }}</span>
               </div>
             </router-link>
@@ -151,10 +151,10 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 </div>
               </div>
               <div class="flex-1 min-w-0 pr-8" :class="{ 'opacity-60': !match.path }">
-                <p class="text-sm font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="match.title || match.original_filename">{{ match.title || formatFilename(match.original_filename || '', false) }}</p>
-                <p v-if="match.author" class="text-xs text-gray-600 dark:text-gray-300 truncate mt-0.5" :title="match.author">{{ match.author }}</p>
+                <p class="text-base font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="match.title || match.original_filename">{{ match.title || formatFilename(match.original_filename || '', false) }}</p>
+                <p v-if="match.author" class="text-sm text-gray-600 dark:text-gray-300 truncate mt-0.5" :title="match.author">{{ match.author }}</p>
                 <span v-if="!match.path" class="inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">{{ $t('app.missing_file') }}</span>
-                <p v-if="match.description" class="text-xs text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="match.description"></p>
+                <p v-if="match.description" class="text-sm text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="match.description"></p>
               </div>
             </component>
             <button @click="removeFavorite(match.hash_id)" class="absolute right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-gray-400 hover:text-red-500 dark:hover:text-red-400" :title="$t('app.remove_favorite')">

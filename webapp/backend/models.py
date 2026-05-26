@@ -15,6 +15,7 @@ class User(Base):
     avatar_url = Column(String, nullable=True)
     real_name = Column(String, nullable=True)
     search_per_page = Column(Integer, nullable=True)
+    accepted_legal_at = Column(String, nullable=True)   # ISO-8601 UTC; NULL = not yet accepted current Privacy/ToS
 
 class RegistrationRequest(Base):
     __tablename__ = "registration_requests"
@@ -25,6 +26,7 @@ class RegistrationRequest(Base):
     source = Column(String, nullable=True)   # Optional context: where did they hear about the library
     purpose = Column(String, nullable=True)  # Optional context: purpose for registering
     token = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
+    accepted_legal_at = Column(String, nullable=True)   # ISO-8601 UTC; stamped at submit. NULL on a row = legacy pre-0003 request.
 
 class Favorite(Base):
     __tablename__ = "favorites"
@@ -251,3 +253,36 @@ class AdminAuditLog(Base):
     target_id     = Column(String, nullable=True)
     summary       = Column(String, nullable=False)
     details_json  = Column(Text, nullable=True)
+
+
+class UsageEvent(Base):
+    """Per-request usage telemetry: page views, book opens, searches, logins,
+    registrations. Written from the request path via _record_usage_event() in
+    main.py (try/except wrapped so telemetry can never break a request).
+
+    Personal data under GDPR (IP address; see CJEU Breyer C-582/14). Retention
+    is 24 months, enforced daily by scripts/prune_usage_events.sh. The
+    user-facing surface lives at #/account/activity (GET/DELETE /api/me/activity)
+    and the admin surface at /api/admin/usage/*. See the Privacy Policy for the
+    full data-flow description."""
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        Index("ix_usage_events_ts",      "ts"),
+        Index("ix_usage_events_user_ts", "user_id", "ts"),
+        Index("ix_usage_events_ip_ts",   "ip", "ts"),
+        Index("ix_usage_events_hash_ts", "hash_id", "ts"),
+        Index("ix_usage_events_kind_ts", "kind", "ts"),
+    )
+
+    id          = Column(Integer, primary_key=True, index=True)
+    ts          = Column(String, nullable=False)                                                  # ISO-8601 UTC
+    user_id     = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)     # NULL = guest or detached
+    session_jti = Column(String, nullable=True)
+    ip          = Column(String, nullable=False)
+    user_agent  = Column(String, nullable=True)
+    geo_country = Column(String, nullable=True)
+    geo_city    = Column(String, nullable=True)
+    kind        = Column(String, nullable=False)                                                  # 'page'|'book_open'|'search'|'login'|'register'
+    path        = Column(String, nullable=True)
+    hash_id     = Column(String, ForeignKey("books.id", ondelete="SET NULL"), nullable=True)
+    extra_json  = Column(Text, nullable=True)

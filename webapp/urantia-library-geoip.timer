@@ -1,0 +1,18 @@
+[Unit]
+Description=Monthly refresh of MaxMind GeoLite2 database for Urantia Library
+Requires=urantia-library-geoip.service
+
+[Timer]
+# First day of each month at 05:00 UTC. MaxMind publishes weekly updates,
+# but monthly is plenty for IP→city accuracy in this library. Persistent so
+# a missed run (machine off) fires on next boot.
+#
+# Note: the GeoIP reader in main.py is opened once at startup, so a fresh
+# .mmdb only takes effect after the next service restart. That's deliberate
+# (avoids file-watcher complexity for a once-a-month refresh).
+OnCalendar=*-*-01 05:00:00 UTC
+Persistent=true
+Unit=urantia-library-geoip.service
+
+[Install]
+WantedBy=timers.target
