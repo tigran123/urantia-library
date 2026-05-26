@@ -19,6 +19,7 @@ import {
   MagnifyingGlassMinusIcon,
 } from '@heroicons/vue/24/outline'
 import DjvuTocNode, { type DjvuOutlineNode } from './DjvuTocNode.vue'
+import { useScrollPan } from '../composables/useScrollPan'
 import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -68,6 +69,9 @@ let resizeTimer: ReturnType<typeof setTimeout> | null = null
 
 const toc = ref<DjvuOutlineNode[]>([])
 const tocOpen = ref(false)
+
+// Drag-to-pan when the page overflows the scroll container.
+const { isDragging: isPanning, canPan, onMouseDown: onPanMouseDown, updateCanPan } = useScrollPan(container)
 
 const toggleImmersive = () => { immersive.value = !immersive.value }
 
@@ -267,6 +271,9 @@ const applyFit = () => {
   renderedScale.value = scale
   dispL.value = natL.value.w ? { w: natL.value.w * scale, h: natL.value.h * scale } : null
   dispR.value = natR.value.w ? { w: natR.value.w * scale, h: natR.value.h * scale } : null
+  // <img> sizing happens after the next tick, so wait for layout before
+  // recomputing whether there's overflow to pan into.
+  nextTick(() => updateCanPan())
 }
 
 // Snap an arbitrary page number to the spread that contains it. A spread may
@@ -550,7 +557,12 @@ watch(container, (el) => {
           </nav>
         </aside>
 
-        <div ref="container" class="relative flex-grow min-w-0 overflow-auto bg-gray-200 dark:bg-gray-900 p-2 lg:p-4">
+        <div
+          ref="container"
+          class="relative flex-grow min-w-0 overflow-auto bg-gray-200 dark:bg-gray-900 p-2 lg:p-4"
+          :class="canPan ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : ''"
+          @mousedown="onPanMouseDown"
+        >
           <div v-if="loadingPage" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
             <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
           </div>
@@ -563,7 +575,8 @@ watch(container, (el) => {
               v-if="imageUrl"
               :src="imageUrl"
               :style="dispL ? { width: dispL.w + 'px', height: dispL.h + 'px' } : undefined"
-              class="shrink-0 object-contain shadow-md bg-white"
+              class="shrink-0 object-contain shadow-md bg-white select-none"
+              draggable="false"
               alt="DjVu Page"
             />
             <!-- Odd-right cover: blank left half so the cover page sits on the right. -->
@@ -576,7 +589,8 @@ watch(container, (el) => {
               v-if="isDoublePage && imageUrl2"
               :src="imageUrl2"
               :style="dispR ? { width: dispR.w + 'px', height: dispR.h + 'px' } : undefined"
-              class="shrink-0 object-contain shadow-md bg-white"
+              class="shrink-0 object-contain shadow-md bg-white select-none"
+              draggable="false"
               alt="DjVu Page 2"
             />
           </div>

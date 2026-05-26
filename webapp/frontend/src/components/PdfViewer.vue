@@ -27,6 +27,7 @@ import AnnotationPopover from './AnnotationPopover.vue'
 import AnnotationsSidebar from './AnnotationsSidebar.vue'
 import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
 import { useAnnotations } from '../composables/useAnnotations'
+import { useScrollPan } from '../composables/useScrollPan'
 import { anchorFromSelection as pdfAnchorFromSelection, paintAnnotations as pdfPaintAnnotations } from '../lib/anchors/pdf'
 import { popoverPosition, type PopoverPosition } from '../lib/anchors/popoverPosition'
 import type { Annotation } from '../api'
@@ -86,6 +87,20 @@ const textSelectEnabled = ref(false)
 
 const annotationsApi = useAnnotations(hashId)
 const annoSidebarOpen = ref(false)
+
+// Drag-to-pan when the page overflows the scroll container. Veto when the
+// mousedown lands in the text-selection layer (so highlighting still works)
+// or in the annotation popover.
+const { isDragging: isPanning, canPan, onMouseDown: onPanMouseDown, updateCanPan } = useScrollPan(
+  container,
+  (e) => {
+    const t = e.target as HTMLElement | null
+    if (!t) return true
+    if (t.closest('.textLayer')) return false
+    if (t.closest('.anno-popover')) return false
+    return true
+  },
+)
 
 interface PdfPending {
   selectedText: string
@@ -462,6 +477,7 @@ const renderPage = async (n: number) => {
     currentPage.value = anchor
     saveProgress()
     paintTextLayerAnnotations()
+    updateCanPan()
   } catch (e: any) {
     if (e?.name !== 'RenderingCancelledException') {
       error.value = e?.message || 'Render failed'
@@ -891,7 +907,12 @@ onBeforeUnmount(() => {
         </div>
       </aside>
 
-      <div ref="container" class="relative flex-grow min-w-0 bg-gray-200 dark:bg-gray-900 overflow-auto p-2 lg:p-4">
+      <div
+        ref="container"
+        class="relative flex-grow min-w-0 bg-gray-200 dark:bg-gray-900 overflow-auto p-2 lg:p-4"
+        :class="canPan ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : ''"
+        @mousedown="onPanMouseDown"
+      >
         <div v-if="loadingPage" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10 pointer-events-none">
           <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
         </div>
@@ -1032,6 +1053,7 @@ input[type=number] {
   forced-color-adjust: none;
   transform-origin: 0 0;
   caret-color: CanvasText;
+  cursor: text;
   z-index: 2;
 
   --min-font-size: 1;
