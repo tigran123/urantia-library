@@ -83,6 +83,24 @@ async def strip_charset_for_websites(request: Request, call_next):
             response.headers["content-type"] = "text/html"
     return response
 
+@app.middleware("http")
+async def spa_cache_headers(request: Request, call_next):
+    # The SPA shell (index.html) must never be cached: its <script>/<link>
+    # tags reference content-hashed asset filenames, and a rebuild produces
+    # new hashes. A stale cached index.html points at evicted hashes and the
+    # browser 404s on CSS/JS, leaving the page unstyled until the user
+    # Ctrl+R's. Hashed assets under /assets/ are immutable and safe to
+    # cache aggressively.
+    response = await call_next(request)
+    if response.status_code != 200:
+        return response
+    path = request.url.path
+    if path == "/" or path == "/index.html":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    elif path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
 BOOKS_DIR = os.environ.get("BOOKS_DIR", "/Books")
 DATA_DIR = os.path.join(BOOKS_DIR, ".data")
 FEEDBACK_ATTACHMENT_DIR = os.environ.get(

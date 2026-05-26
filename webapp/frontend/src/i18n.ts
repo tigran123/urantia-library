@@ -146,7 +146,20 @@ const messages = {
       submitBtn: 'Submit Request',
       alreadyHaveAccount: 'Already have an account?',
       acceptLegal: 'I have read and agree to the {privacy} and {terms}.',
-      loginLegalNote: 'By signing in you agree to the {privacy} and {terms}.'
+      loginLegalNote: 'By signing in you agree to the {privacy} and {terms}.',
+      setPasswordTitle: 'Set Your Password',
+      setPasswordFullNameLabel: 'Full Name',
+      setPasswordOptional: '(optional)',
+      setPasswordFullNameHelp: 'Shown next to your comments. You can change it later in Settings.',
+      setPasswordNewLabel: 'New Password',
+      setPasswordConfirmLabel: 'Confirm Password',
+      setPasswordBtn: 'Set Password',
+      setPasswordLoading: 'Saving...',
+      setPasswordSuccess: 'Password set successfully! You can now log in.',
+      setPasswordLoginLink: 'Click here to log in',
+      setPasswordInvalidToken: 'Invalid or missing token.',
+      setPasswordMismatch: 'Passwords do not match.',
+      setPasswordError: 'An error occurred setting the password. The link might be expired.'
     },
     search: {
       title: 'Search Results',
@@ -921,7 +934,20 @@ const messages = {
       submitBtn: 'Отправить запрос',
       alreadyHaveAccount: 'Уже есть аккаунт?',
       acceptLegal: 'Я ознакомился(-ась) и согласен(-на) с {privacy} и {terms}.',
-      loginLegalNote: 'Входя в систему, вы соглашаетесь с {privacy} и {terms}.'
+      loginLegalNote: 'Входя в систему, вы соглашаетесь с {privacy} и {terms}.',
+      setPasswordTitle: 'Установите пароль',
+      setPasswordFullNameLabel: 'Имя',
+      setPasswordOptional: '(необязательно)',
+      setPasswordFullNameHelp: 'Будет показано рядом с вашими комментариями. Изменить можно позже в настройках.',
+      setPasswordNewLabel: 'Новый пароль',
+      setPasswordConfirmLabel: 'Подтвердите пароль',
+      setPasswordBtn: 'Установить пароль',
+      setPasswordLoading: 'Сохранение...',
+      setPasswordSuccess: 'Пароль успешно установлен! Теперь вы можете войти.',
+      setPasswordLoginLink: 'Нажмите здесь, чтобы войти',
+      setPasswordInvalidToken: 'Неверная или отсутствующая ссылка.',
+      setPasswordMismatch: 'Пароли не совпадают.',
+      setPasswordError: 'Ошибка при установке пароля. Возможно, ссылка истекла.'
     },
     search: {
       title: 'Результаты поиска',

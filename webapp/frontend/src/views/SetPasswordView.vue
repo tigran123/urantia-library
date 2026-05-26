@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/vue/24/outline'
 import api from '../api'
+
+const { t, locale } = useI18n({ useScope: 'global' })
 
 const realName = ref('')
 const password = ref('')
@@ -20,13 +23,13 @@ onMounted(() => {
   if (route.query.token) {
     token.value = route.query.token as string
   } else {
-    errorMsg.value = 'Invalid or missing token.'
+    errorMsg.value = t('auth.setPasswordInvalidToken')
   }
 })
 
 const handleSetPassword = async () => {
   if (password.value !== confirmPassword.value) {
-    errorMsg.value = 'Passwords do not match.'
+    errorMsg.value = t('auth.setPasswordMismatch')
     return
   }
 
@@ -40,14 +43,14 @@ const handleSetPassword = async () => {
       password: password.value,
       real_name: realName.value.trim() || null,
     })
-    successMsg.value = 'Password set successfully! You can now log in.'
+    successMsg.value = t('auth.setPasswordSuccess')
     password.value = ''
     confirmPassword.value = ''
   } catch (err: any) {
     if (err.response && err.response.data && err.response.data.detail) {
       errorMsg.value = err.response.data.detail
     } else {
-      errorMsg.value = 'An error occurred setting the password. The link might be expired.'
+      errorMsg.value = t('auth.setPasswordError')
     }
   } finally {
     loading.value = false
@@ -56,8 +59,8 @@ const handleSetPassword = async () => {
 </script>
 
 <template>
-  <div class="max-w-md mx-auto mt-10 bg-white p-8 border rounded-lg shadow-sm">
-    <h2 class="text-2xl font-bold mb-6 text-center text-gray-900">Set Your Password</h2>
+  <div :key="locale" class="max-w-md mx-auto mt-10 bg-white p-8 border rounded-lg shadow-sm">
+    <h2 class="text-2xl font-bold mb-6 text-center text-gray-900">{{ t('auth.setPasswordTitle') }}</h2>
 
     <div v-if="errorMsg" class="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">
       {{ errorMsg }}
@@ -66,13 +69,13 @@ const handleSetPassword = async () => {
     <div v-if="successMsg" class="mb-4 p-3 bg-green-50 text-green-700 rounded text-sm">
       {{ successMsg }}
       <div class="mt-4">
-        <router-link :to="{ name: 'login' }" class="text-blue-600 hover:underline">Click here to log in</router-link>
+        <router-link :to="{ name: 'login' }" class="text-blue-600 hover:underline">{{ t('auth.setPasswordLoginLink') }}</router-link>
       </div>
     </div>
 
     <form v-if="!successMsg && token" @submit.prevent="handleSetPassword" class="space-y-4">
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-gray-400 font-normal">(optional)</span></label>
+        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.setPasswordFullNameLabel') }} <span class="text-gray-400 font-normal">{{ t('auth.setPasswordOptional') }}</span></label>
         <input
           v-model="realName"
           type="text"
@@ -80,11 +83,11 @@ const handleSetPassword = async () => {
           autocomplete="name"
           class="w-full px-3 py-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
         />
-        <p class="text-xs text-gray-500 mt-1">Shown next to your comments. You can change it later in Settings.</p>
+        <p class="text-xs text-gray-500 mt-1">{{ t('auth.setPasswordFullNameHelp') }}</p>
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.setPasswordNewLabel') }}</label>
         <div class="relative">
           <input
             v-model="password"
@@ -104,7 +107,7 @@ const handleSetPassword = async () => {
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+        <label class="block text-sm font-medium text-gray-700 mb-1">{{ t('auth.setPasswordConfirmLabel') }}</label>
         <div class="relative">
           <input
             v-model="confirmPassword"
@@ -128,7 +131,7 @@ const handleSetPassword = async () => {
         :disabled="loading"
         class="w-full mt-4 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
       >
-        {{ loading ? 'Saving...' : 'Set Password' }}
+        {{ loading ? t('auth.setPasswordLoading') : t('auth.setPasswordBtn') }}
       </button>
     </form>
   </div>
