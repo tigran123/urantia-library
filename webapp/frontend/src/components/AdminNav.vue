@@ -55,5 +55,10 @@ watch(() => route.path, refreshFeedbackActiveCount)
         {{ feedbackActiveCount }}
       </span>
     </router-link>
+    <router-link
+      to="/admin/audit"
+      class="px-3 py-1.5 rounded-md text-sm font-medium"
+      :class="$route.path.startsWith('/admin/audit') ? 'bg-blue-600 text-white' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+    >{{ t('admin.audit.tab') }}</router-link>
   </div>
 </template>

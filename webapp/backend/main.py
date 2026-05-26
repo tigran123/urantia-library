@@ -353,6 +353,42 @@ def _is_admin(user: models.User | None) -> bool:
     return bool(user and user.is_admin)
 
 
+def _audit(
+    db: Session,
+    actor: models.User,
+    action: str,
+    *,
+    target_kind: str | None = None,
+    target_id: str | int | None = None,
+    summary: str,
+    details: dict | None = None,
+) -> None:
+    """Append a row to admin_audit_log within the caller's open transaction.
+
+    Why no commit here: the row rides along with whatever commit the calling
+    endpoint is about to do for the underlying action. If that commit gets
+    rolled back, the audit row vanishes with it — the desired invariant is
+    "no audit entries for actions that didn't happen." The flip side is that
+    the caller MUST eventually commit; an _audit() call without a subsequent
+    db.commit() in the same request is a silent bug.
+
+    `action` is a dotted controlled vocabulary; see admin_audit_log.action in
+    lib_schema.sql for the canonical list. `target_id` accepts int (user id,
+    comment id) or str (book hash) and is stored as text either way.
+    """
+    db.add(models.AdminAuditLog(
+        created_at=_now_iso(),
+        actor_user_id=actor.id,
+        action=action,
+        target_kind=target_kind,
+        target_id=str(target_id) if target_id is not None else None,
+        summary=summary,
+        # `is not None` rather than truthiness — an intentional `details={}`
+        # should still serialise (as the JSON "{}") instead of silently becoming NULL.
+        details_json=json.dumps(details, separators=(",", ":")) if details is not None else None,
+    ))
+
+
 def _book_clearance(file_hash: str | None, db: Session) -> int:
     """Return the clearance required to read `file_hash`. 0 (public) if the
     hash is unknown or has no row in `books` — matches the design decision
@@ -1300,14 +1336,26 @@ async def admin_list_sessions(
 async def admin_terminate_session(
     jti: str,
     access_token: str = Cookie(None),
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     if jti == _current_jti(access_token):
         raise HTTPException(status_code=400, detail="Refusing to terminate own session")
+    # Peek at the session row first so we have something to audit; only after
+    # the audit row has actually committed do we evict from memory. If commit
+    # fails, the target still has their session and the admin sees a 5xx — no
+    # torn-write window where the user is logged out but the log says nothing.
     with _active_sessions_lock:
-        removed = _active_sessions.pop(jti, None)
-    if removed is None:
+        target = _active_sessions.get(jti)
+    if target is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    _audit(db, admin, "user.session_terminate",
+           target_kind="user", target_id=target["user_id"],
+           summary=f'Terminated session of {target["email"]}',
+           details={"jti": jti, "ip_address": target.get("ip_address")})
+    db.commit()
+    with _active_sessions_lock:
+        _active_sessions.pop(jti, None)   # idempotent — another request might have evicted concurrently
     return {"jti": jti, "terminated": True}
 
 
@@ -1321,20 +1369,32 @@ async def admin_set_user_clearance(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    diff: dict[str, list] = {}
     if payload.clearance is not None:
         if payload.clearance < 0:
             raise HTTPException(status_code=400, detail="Clearance must be non-negative")
+        if user.clearance != payload.clearance:
+            diff["clearance"] = [user.clearance, payload.clearance]
         user.clearance = payload.clearance
     if payload.is_admin is not None:
         # Guard: don't let an admin demote themselves into having zero admins.
         if user.id == admin.id and payload.is_admin is False:
             raise HTTPException(status_code=400, detail="Refusing to demote the current admin")
+        if bool(user.is_admin) != bool(payload.is_admin):
+            diff["is_admin"] = [bool(user.is_admin), bool(payload.is_admin)]
         user.is_admin = payload.is_admin
     if payload.is_active is not None:
         # Guard: an admin must not lock themselves out of the system.
         if user.id == admin.id and payload.is_active is False:
             raise HTTPException(status_code=400, detail="Refusing to deactivate the current admin")
+        if bool(user.is_active) != bool(payload.is_active):
+            diff["is_active"] = [bool(user.is_active), bool(payload.is_active)]
         user.is_active = payload.is_active
+    if diff:
+        _audit(db, admin, "user.clearance",
+               target_kind="user", target_id=user.id,
+               summary=f'Updated {user.email}: {", ".join(diff.keys())}',
+               details={"changed": diff})
     db.commit()
     db.refresh(user)
     return user
@@ -1344,7 +1404,7 @@ async def admin_set_user_clearance(
 async def admin_set_book_clearance(
     hash_id: str,
     payload: schemas.BookClearanceUpdate,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if payload.clearance < 0:
@@ -1352,6 +1412,12 @@ async def admin_set_book_clearance(
     book = db.query(models.Book).filter(models.Book.id == hash_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+    old = book.clearance
+    if old != payload.clearance:
+        _audit(db, admin, "book.clearance",
+               target_kind="book", target_id=hash_id,
+               summary=f'Set clearance of "{book.title or hash_id[:12]}" to {payload.clearance}',
+               details={"old": old, "new": payload.clearance})
     book.clearance = payload.clearance
     db.commit()
     return {"hash_id": hash_id, "clearance": book.clearance}
@@ -1360,17 +1426,36 @@ async def admin_set_book_clearance(
 @app.post("/api/admin/books/clearance")
 async def admin_bulk_set_book_clearance(
     payload: schemas.BulkBookClearanceUpdate,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if payload.clearance < 0:
         raise HTTPException(status_code=400, detail="Clearance must be non-negative")
     if not payload.hash_ids:
         return {"updated": 0, "clearance": payload.clearance}
-    updated = db.query(models.Book).filter(models.Book.id.in_(payload.hash_ids)).update(
+    # SQLite's UPDATE returns rows-matched, not rows-changed, so a no-op
+    # bulk (every book already at the target clearance) would otherwise emit
+    # an audit row claiming a mass change. Restrict the UPDATE to the hashes
+    # whose value actually differs.
+    changing_ids = [
+        h for (h,) in db.query(models.Book.id)
+            .filter(
+                models.Book.id.in_(payload.hash_ids),
+                models.Book.clearance != payload.clearance,
+            )
+            .all()
+    ]
+    if not changing_ids:
+        return {"updated": 0, "clearance": payload.clearance}
+    updated = db.query(models.Book).filter(models.Book.id.in_(changing_ids)).update(
         {models.Book.clearance: payload.clearance},
         synchronize_session=False,
     )
+    _audit(db, admin, "book.clearance",
+           target_kind="book", target_id=None,
+           summary=f"Set clearance of {updated} books to {payload.clearance}",
+           details={"count": updated, "new": payload.clearance,
+                    "hash_ids": changing_ids[:25]})
     db.commit()
     return {"updated": updated, "clearance": payload.clearance}
 
@@ -1429,7 +1514,7 @@ async def admin_get_book(
 async def admin_update_book(
     hash_id: str,
     payload: schemas.BookUpdate,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     book = db.query(models.Book).filter(models.Book.id == hash_id).first()
@@ -1438,8 +1523,21 @@ async def admin_update_book(
     updates = payload.model_dump(exclude_unset=True)
     if "clearance" in updates and updates["clearance"] is not None and updates["clearance"] < 0:
         raise HTTPException(status_code=400, detail="Clearance must be non-negative")
+    # Capture the title BEFORE the mutation loop — otherwise a rename ("Foo"
+    # → "Bar") produces an audit summary like 'Edited "Bar": title', which
+    # reads as if Bar were the original.
+    original_title = book.title or hash_id[:12]
+    diff: dict[str, list] = {}
     for field, val in updates.items():
+        old = getattr(book, field)
+        if old != val:
+            diff[field] = [old, val]
         setattr(book, field, val)
+    if diff:
+        _audit(db, admin, "book.edit",
+               target_kind="book", target_id=hash_id,
+               summary=f'Edited "{original_title}": {", ".join(diff.keys())}',
+               details={"changed": diff})
     db.commit()
     db.refresh(book)
     return _book_to_admin_detail(book, db)
@@ -1448,12 +1546,13 @@ async def admin_update_book(
 @app.delete("/api/admin/books/{hash_id}")
 async def admin_delete_book(
     hash_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     book = db.query(models.Book).filter(models.Book.id == hash_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+    deleted_title = book.title or hash_id[:12]
 
     locations = [r[0] for r in db.query(models.BookLocation.symlink_path).filter(
         models.BookLocation.hash_id == hash_id
@@ -1496,6 +1595,10 @@ async def admin_delete_book(
     db.query(models.BookRating).filter(models.BookRating.hash_id == hash_id).delete()
     db.query(models.BookComment).filter(models.BookComment.hash_id == hash_id).delete()
     db.delete(book)
+    _audit(db, admin, "book.delete",
+           target_kind="book", target_id=hash_id,
+           summary=f'Deleted "{deleted_title}"',
+           details={"locations": locations})
     db.commit()
     return {"deleted": hash_id, "locations": locations, "errors": errors}
 
@@ -1534,7 +1637,7 @@ def _rmdir_empty_upwards(start_abs: str) -> None:
 async def admin_move(
     payload: schemas.MoveRequest,
     dry_run: bool = False,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Move a managed book (symlink) or an entire directory subtree to a new
@@ -1674,6 +1777,22 @@ async def admin_move(
             except OSError:
                 pass
         _rmdir_empty_upwards(os.path.dirname(src_abs))
+
+    # Audit gets its own commit — the per-book DB updates above each committed
+    # independently, so there's no caller transaction left to ride.
+    if moved:
+        if kind == "file":
+            m = moved[0]
+            summary = f'Moved "{m.src.rsplit("/", 1)[-1]}" from /{src} to /{dst}'
+            target_id: str | None = m.hash_id
+        else:
+            summary = f"Moved {len(moved)} books from /{src}/ to /{dst}/"
+            target_id = None
+        _audit(db, admin, "book.move",
+               target_kind="book", target_id=target_id,
+               summary=summary,
+               details={"src": src, "dst": dst, "kind": kind, "count": len(moved)})
+        db.commit()
 
     return schemas.MoveResponse(
         src=src, dst=dst, kind=kind, dry_run=False,
@@ -2110,20 +2229,25 @@ def _save_cover_for_hash(file: UploadFile, hash_id: str) -> str:
 async def admin_replace_book_cover(
     hash_id: str,
     file: UploadFile = File(...),
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     book = db.query(models.Book).filter(models.Book.id == hash_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     cover_url = _save_cover_for_hash(file, hash_id)
+    _audit(db, admin, "book.cover",
+           target_kind="book", target_id=hash_id,
+           summary=f'Replaced cover of "{book.title or hash_id[:12]}"',
+           details={"mode": "upload"})
+    db.commit()
     return {"cover_url": cover_url}
 
 
 @app.post("/api/admin/books/{hash_id}/cover/reextract", response_model=schemas.CoverUpdateResponse)
 async def admin_reextract_book_cover(
     hash_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     book = db.query(models.Book).filter(models.Book.id == hash_id).first()
@@ -2158,6 +2282,11 @@ async def admin_reextract_book_cover(
     if result is None:
         raise HTTPException(status_code=500, detail="Cover extraction failed")
     cover_url = _cover_url_for(hash_id) or f"/api/covers/{hash_id}"
+    _audit(db, admin, "book.cover",
+           target_kind="book", target_id=hash_id,
+           summary=f'Re-extracted cover of "{book.title or hash_id[:12]}"',
+           details={"mode": "reextract"})
+    db.commit()
     return {"cover_url": cover_url}
 
 
@@ -2517,7 +2646,7 @@ async def admin_cancel_staging(
 @app.post("/api/admin/books/commit", response_model=schemas.AdminBookDetail)
 async def admin_commit_book(
     payload: schemas.UploadCommitRequest,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Finalise a staged upload: move file into the CAS vault, link from
@@ -2623,6 +2752,10 @@ async def admin_commit_book(
     )
     db.add(book)
     db.add(models.BookLocation(hash_id=file_hash, symlink_path=rel_path))
+    _audit(db, admin, "book.upload",
+           target_kind="book", target_id=file_hash,
+           summary=f'Uploaded "{title}" to /{rel_path}',
+           details={"path": rel_path, "size": vault_size, "clearance": int(payload.clearance)})
     try:
         db.commit()
     except Exception as e:
@@ -4547,23 +4680,35 @@ async def admin_list_comments(
 
 
 @app.post("/api/admin/comments/{comment_id}/approve")
-async def admin_approve_comment(comment_id: int, _admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+async def admin_approve_comment(comment_id: int, admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     row = db.query(models.BookComment).filter(models.BookComment.id == comment_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Comment not found")
     row.status = "approved"
     row.updated_at = _now_iso()
+    author_email = db.query(models.User.email).filter(models.User.id == row.user_id).scalar()
+    _audit(db, admin, "comment.moderate",
+           target_kind="comment", target_id=row.id,
+           summary=f"Approved comment by {author_email or f'user #{row.user_id}'}",
+           details={"decision": "approve", "book_hash": row.hash_id})
     db.commit()
     return {"id": row.id, "status": row.status}
 
 
 @app.delete("/api/admin/comments/{comment_id}")
-async def admin_delete_comment(comment_id: int, _admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
+async def admin_delete_comment(comment_id: int, admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
     row = db.query(models.BookComment).filter(models.BookComment.id == comment_id).first()
     if row:
+        author_id = row.user_id
+        book_hash = row.hash_id
+        author_email = db.query(models.User.email).filter(models.User.id == author_id).scalar()
         if row.parent_id is None:
             db.query(models.BookComment).filter(models.BookComment.parent_id == row.id).delete()
         db.delete(row)
+        _audit(db, admin, "comment.moderate",
+               target_kind="comment", target_id=comment_id,
+               summary=f"Deleted comment by {author_email or f'user #{author_id}'}",
+               details={"decision": "delete", "book_hash": book_hash})
         db.commit()
     return {"message": "Removed"}
 
@@ -4827,7 +4972,7 @@ async def admin_list_annotations(
 @app.post("/api/admin/annotations/{annotation_id}/approve")
 async def admin_approve_annotation(
     annotation_id: int,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     row = db.query(models.Annotation).filter(models.Annotation.id == annotation_id).first()
@@ -4835,6 +4980,11 @@ async def admin_approve_annotation(
         raise HTTPException(status_code=404, detail="Annotation not found")
     row.status = "approved"
     row.updated_at = _now_iso()
+    author_email = db.query(models.User.email).filter(models.User.id == row.user_id).scalar()
+    _audit(db, admin, "annotation.moderate",
+           target_kind="annotation", target_id=row.id,
+           summary=f"Approved annotation by {author_email or f'user #{row.user_id}'}",
+           details={"decision": "approve", "book_hash": row.hash_id})
     db.commit()
     return {"id": row.id, "status": row.status}
 
@@ -4842,14 +4992,162 @@ async def admin_approve_annotation(
 @app.delete("/api/admin/annotations/{annotation_id}")
 async def admin_delete_annotation(
     annotation_id: int,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     row = db.query(models.Annotation).filter(models.Annotation.id == annotation_id).first()
     if row:
+        author_id = row.user_id
+        book_hash = row.hash_id
+        author_email = db.query(models.User.email).filter(models.User.id == author_id).scalar()
         db.delete(row)
+        _audit(db, admin, "annotation.moderate",
+               target_kind="annotation", target_id=annotation_id,
+               summary=f"Deleted annotation by {author_email or f'user #{author_id}'}",
+               details={"decision": "delete", "book_hash": book_hash})
         db.commit()
     return {"message": "Removed"}
+
+
+# ==============================================================================
+# Librarian audit log
+# ==============================================================================
+# Read-only views over admin_audit_log. Writing happens via _audit() at the
+# call sites; here we just paginate the feed and aggregate the leaderboard.
+# Both endpoints require admin (the log lets you see what other admins did,
+# so it inherently must not leak to non-admins).
+
+def _audit_actor_dict(user: models.User) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "real_name": user.real_name,
+        "avatar_url": user.avatar_url,
+    }
+
+
+@app.get("/api/admin/audit", response_model=schemas.AuditFeed)
+async def admin_audit_feed(
+    limit: int = 50,
+    cursor: int | None = None,           # last-seen id from the previous page; rows with id < cursor are returned
+    actor_user_id: int | None = None,
+    action: str | None = None,
+    since: str | None = None,            # ISO-8601 UTC; only entries with created_at >= this are returned
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Paginated timeline of admin actions, newest first. Cursor is the `id`
+    of the last entry from the previous page — stable under concurrent inserts
+    because new rows always get a higher id, never sneak into a finished page."""
+    limit = max(1, min(limit, 200))
+    # Outer join because the actor row may have been hard-deleted (FKs are
+    # not enforced in this SQLite). Matches the 'actor user was deleted'
+    # tolerance already in admin_audit_stats — without this, deleting a
+    # user account would silently drop their entire history from the feed.
+    q = (
+        db.query(models.AdminAuditLog, models.User)
+          .outerjoin(models.User, models.AdminAuditLog.actor_user_id == models.User.id)
+          .order_by(models.AdminAuditLog.id.desc())
+    )
+    if cursor is not None:
+        q = q.filter(models.AdminAuditLog.id < cursor)
+    if actor_user_id is not None:
+        q = q.filter(models.AdminAuditLog.actor_user_id == actor_user_id)
+    if action:
+        q = q.filter(models.AdminAuditLog.action == action)
+    if since:
+        q = q.filter(models.AdminAuditLog.created_at >= since)
+
+    rows = q.limit(limit + 1).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    entries = []
+    for entry, user in rows:
+        details = None
+        if entry.details_json:
+            try:
+                details = json.loads(entry.details_json)
+            except json.JSONDecodeError:
+                details = {"_raw": entry.details_json}  # don't crash the feed over a malformed row
+        if user is None:
+            # Actor was hard-deleted. Synthesize a placeholder so the row
+            # stays visible — the audit log's append-only contract takes
+            # precedence over hiding orphans.
+            actor = {
+                "id": entry.actor_user_id,
+                "email": "",
+                "real_name": "(deleted user)",
+                "avatar_url": None,
+            }
+        else:
+            actor = _audit_actor_dict(user)
+        entries.append({
+            "id": entry.id,
+            "created_at": entry.created_at,
+            "actor": actor,
+            "action": entry.action,
+            "target_kind": entry.target_kind,
+            "target_id": entry.target_id,
+            "summary": entry.summary,
+            "details": details,
+        })
+
+    return {
+        "entries": entries,
+        "next_cursor": rows[-1][0].id if has_more and rows else None,
+    }
+
+
+@app.get("/api/admin/audit/stats", response_model=schemas.AuditStats)
+async def admin_audit_stats(
+    since: str | None = None,            # ISO-8601 UTC; default = 30 days ago
+    _admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Per-admin tallies grouped by action, for the leaderboard view. One
+    GROUP BY query plus a single users lookup; cheap even on a busy log."""
+    if since is None:
+        # Match the format _now_iso() writes into admin_audit_log.created_at
+        # ('YYYY-MM-DDTHH:MM:SSZ') so the lexicographic >= comparison agrees
+        # with chronological order. datetime.isoformat() would produce a
+        # '...+00:00' suffix that sorts BEFORE 'Z' at the boundary second.
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = (
+        db.query(
+            models.AdminAuditLog.actor_user_id,
+            models.AdminAuditLog.action,
+            func.count().label("n"),
+        )
+        .filter(models.AdminAuditLog.created_at >= since)
+        .group_by(models.AdminAuditLog.actor_user_id, models.AdminAuditLog.action)
+        .all()
+    )
+    by_actor: dict[int, dict[str, int]] = {}
+    for actor_id, act, n in rows:
+        by_actor.setdefault(actor_id, {})[act] = n
+
+    users = (
+        db.query(models.User)
+          .filter(models.User.id.in_(by_actor.keys()))
+          .all()
+        if by_actor else []
+    )
+    user_by_id = {u.id: u for u in users}
+
+    leaders = []
+    for actor_id, totals in by_actor.items():
+        u = user_by_id.get(actor_id)
+        if not u:
+            continue  # actor user was deleted; skip the row (FKs aren't enforced in this SQLite)
+        leaders.append({
+            "actor": _audit_actor_dict(u),
+            "totals": totals,
+            "total": sum(totals.values()),
+        })
+    leaders.sort(key=lambda r: r["total"], reverse=True)
+
+    return {"since": since, "leaders": leaders}
 
 
 # ==============================================================================

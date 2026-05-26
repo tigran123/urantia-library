@@ -181,6 +181,62 @@ export const adminApproveComment = (commentId: number) =>
 export const adminDeleteComment = (commentId: number) =>
   api.delete(`/admin/comments/${commentId}`)
 
+// ---------- Librarian audit log ----------
+
+export interface AuditActor {
+  id: number
+  email: string
+  real_name: string | null
+  avatar_url: string | null
+}
+
+export interface AuditLogEntry {
+  id: number
+  created_at: string
+  actor: AuditActor
+  action: string
+  target_kind: string | null
+  target_id: string | null
+  summary: string
+  details: Record<string, unknown> | null
+}
+
+export interface AuditFeed {
+  entries: AuditLogEntry[]
+  next_cursor: number | null
+}
+
+export interface AuditLeaderEntry {
+  actor: AuditActor
+  totals: Record<string, number>
+  total: number
+}
+
+export interface AuditStats {
+  since: string
+  leaders: AuditLeaderEntry[]
+}
+
+export interface AuditFeedParams {
+  limit?: number
+  cursor?: number | null
+  actor_user_id?: number | null
+  action?: string | null
+  since?: string | null
+}
+
+export const adminAuditFeed = (params: AuditFeedParams = {}) => {
+  // Drop null/undefined so axios doesn't serialise them as "null" strings.
+  const clean: Record<string, string | number> = {}
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== null && v !== undefined) clean[k] = v as string | number
+  }
+  return api.get<AuditFeed>('/admin/audit', { params: clean })
+}
+
+export const adminAuditStats = (since?: string | null) =>
+  api.get<AuditStats>('/admin/audit/stats', { params: since ? { since } : {} })
+
 // ---------- Feedback / contact-admin ----------
 
 export type FeedbackStatus =

@@ -228,3 +228,26 @@ class AdminFeedbackSettings(Base):
     urgent_bypass         = Column(Boolean, nullable=False, default=True)
     extra_recipients      = Column(Text, nullable=False, default="")
     updated_at            = Column(String, nullable=False)
+
+
+class AdminAuditLog(Base):
+    """Append-only log of administrative actions (uploads, edits, deletes,
+    moderation decisions, …). Surfaced in the Admin panel as both a timeline
+    and a per-admin leaderboard. Rows are written via _audit() in main.py
+    within the caller's transaction — a rolled-back action leaves no audit
+    ghost. Never UPDATEd or DELETEd in normal operation."""
+    __tablename__ = "admin_audit_log"
+    __table_args__ = (
+        Index("idx_admin_audit_log_created_at", "created_at"),
+        Index("idx_admin_audit_log_actor",      "actor_user_id"),
+        Index("idx_admin_audit_log_action",     "action"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    created_at    = Column(String, nullable=False)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    action        = Column(String, nullable=False)
+    target_kind   = Column(String, nullable=True)
+    target_id     = Column(String, nullable=True)
+    summary       = Column(String, nullable=False)
+    details_json  = Column(Text, nullable=True)

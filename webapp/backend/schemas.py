@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, EmailStr
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -432,3 +432,47 @@ class AdminFeedbackSettingsResponse(AdminFeedbackSettingsPayload):
     last_digest_at: Optional[str] = None
     next_eligible_at: Optional[str] = None
     pending_count: int = 0
+
+
+# --- Librarian audit log -----------------------------------------------------
+
+class AuditActor(BaseModel):
+    """Compact actor reference embedded in feed entries and leaderboard rows.
+    Resolved server-side via a JOIN so the UI can render avatar + name without
+    a second roundtrip per row.
+
+    `email` is plain `str` (not `EmailStr`) deliberately: the audit log is the
+    last-resort observability tool, so it must render even if a legacy user
+    row has a malformed email, and the feed uses the empty string when the
+    actor row was hard-deleted (see admin_audit_feed in main.py)."""
+    id: int
+    email: str
+    real_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class AuditLogEntry(BaseModel):
+    id: int
+    created_at: str
+    actor: AuditActor
+    action: str
+    target_kind: Optional[str] = None
+    target_id: Optional[str] = None
+    summary: str
+    details: Optional[Dict[str, Any]] = None    # parsed from admin_audit_log.details_json
+
+
+class AuditFeed(BaseModel):
+    entries: List[AuditLogEntry]
+    next_cursor: Optional[int] = None           # pass back as ?cursor= to fetch the next page; null = end of feed
+
+
+class AuditLeaderEntry(BaseModel):
+    actor: AuditActor
+    totals: Dict[str, int]                      # action → count, e.g. {"book.upload": 12, "book.edit": 5}
+    total: int                                  # sum of all action counts in `totals`
+
+
+class AuditStats(BaseModel):
+    since: str                                  # ISO-8601 UTC; entries with created_at >= this are counted (inclusive)
+    leaders: List[AuditLeaderEntry]             # sorted by total desc

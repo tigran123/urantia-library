@@ -581,7 +581,50 @@ const messages = {
         diag_disclosure: 'Auto-attached diagnostics',
         save: 'Save',
         saved: 'Saved.'
-      }
+      },
+      audit: {
+        tab: 'Audit log',
+        mode_timeline: 'Timeline',
+        mode_leaderboard: 'Leaderboard',
+        filter_action: 'Action',
+        clear_actor_filter: 'Clear actor filter',
+        filtered_by_actor: 'Filtered to one actor',
+        empty: 'No audit entries yet.',
+        load_more: 'Load more',
+        end_of_feed: 'End of feed.',
+        show_details: 'Show details',
+        hide_details: 'Hide details',
+        click_to_filter: 'Click to filter the timeline by this admin',
+        range: {
+          '24h': 'Last 24h',
+          '7d':  'Last 7 days',
+          '30d': 'Last 30 days',
+          all:   'All time',
+        },
+        leader: {
+          actor: 'Admin',
+          total: 'Total',
+        },
+        action: {
+          all:                     'All actions',
+          book_upload:             'Upload',
+          book_edit:               'Edit',
+          book_delete:             'Delete',
+          book_move:               'Move',
+          book_cover:              'Cover',
+          book_clearance:          'Clearance',
+          user_clearance:          'User role',
+          user_session_terminate:  'Terminate session',
+          comment_moderate:        'Comment',
+          annotation_moderate:     'Annotation',
+        },
+        rel: {
+          just_now:  'just now',
+          minutes:   '{n} min ago',
+          hours:     '{n} h ago',
+          days:      '{n} d ago',
+        },
+      },
     }
   },
   ru: {
@@ -1164,7 +1207,50 @@ const messages = {
         diag_disclosure: 'Автоматическая диагностика',
         save: 'Сохранить',
         saved: 'Сохранено.'
-      }
+      },
+      audit: {
+        tab: 'Журнал',
+        mode_timeline: 'Лента',
+        mode_leaderboard: 'Рейтинг',
+        filter_action: 'Действие',
+        clear_actor_filter: 'Сбросить фильтр по администратору',
+        filtered_by_actor: 'Фильтр по одному администратору',
+        empty: 'Записей пока нет.',
+        load_more: 'Загрузить ещё',
+        end_of_feed: 'Конец ленты.',
+        show_details: 'Подробнее',
+        hide_details: 'Скрыть подробности',
+        click_to_filter: 'Кликните, чтобы отфильтровать ленту по этому администратору',
+        range: {
+          '24h': 'За 24 ч',
+          '7d':  'За 7 дней',
+          '30d': 'За 30 дней',
+          all:   'За всё время',
+        },
+        leader: {
+          actor: 'Администратор',
+          total: 'Всего',
+        },
+        action: {
+          all:                     'Все действия',
+          book_upload:             'Загрузка',
+          book_edit:               'Редактирование',
+          book_delete:             'Удаление',
+          book_move:               'Перемещение',
+          book_cover:              'Обложка',
+          book_clearance:          'Уровень доступа',
+          user_clearance:          'Роль пользователя',
+          user_session_terminate:  'Завершение сеанса',
+          comment_moderate:        'Комментарий',
+          annotation_moderate:     'Аннотация',
+        },
+        rel: {
+          just_now:  'только что',
+          minutes:   '{n} мин назад',
+          hours:     '{n} ч назад',
+          days:      '{n} д назад',
+        },
+      },
     }
   }
 }

@@ -241,6 +241,29 @@ CREATE TABLE admin_feedback_settings (
     updated_at               TEXT NOT NULL
 );
 
+-- ==============================================================================
+-- 7. Librarian Audit Log
+-- ==============================================================================
+
+-- Append-only log of administrative actions (book lifecycle, user management,
+-- moderation decisions). Surfaced in the Admin → Audit Log panel as both a
+-- timeline and a per-admin leaderboard. Rows are written via _audit() in
+-- main.py inside the caller's transaction — a rolled-back action leaves no
+-- audit ghost.
+CREATE TABLE admin_audit_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT    NOT NULL,                       -- ISO-8601 UTC
+    actor_user_id INTEGER NOT NULL REFERENCES users(id),
+    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate'
+    target_kind   VARCHAR,                                -- 'book' | 'user' | 'comment' | 'annotation' | NULL
+    target_id     VARCHAR,                                -- book hash, user id, comment id, … (VARCHAR holds either int or hash as text)
+    summary       VARCHAR NOT NULL,                       -- one-line human-readable
+    details_json  TEXT                                    -- optional structured payload (field diff, old/new values)
+);
+CREATE INDEX idx_admin_audit_log_created_at ON admin_audit_log(created_at);
+CREATE INDEX idx_admin_audit_log_actor      ON admin_audit_log(actor_user_id);
+CREATE INDEX idx_admin_audit_log_action     ON admin_audit_log(action);
+
 -- Schema version stamp. The runner at webapp/backend/migrate.py reads this
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
