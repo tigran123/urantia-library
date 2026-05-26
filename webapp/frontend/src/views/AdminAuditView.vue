@@ -205,94 +205,152 @@ const fieldLabel = (key: string): string => {
   return tx === `admin.audit.field.${key}` ? key : tx
 }
 
-// Build a localized summary from the action + structured details. Falls back
-// to the stored English summary (e.summary) for legacy rows whose details
-// don't carry the human-readable target label.
-const summaryLabel = (e: AuditLogEntry): string => {
-  const d = e.details || {}
+// Structured summary parts. The template feeds these into <i18n-t>, which
+// allows wrapping the {title} / {filename} placeholder in a <router-link>.
+// `link_slot` names which placeholder is the linkable one; `link_path` is the
+// /item/<path> target (snapshot at audit-write time — may be stale, the admin
+// is expected to interpret a dead link as "the book was moved/renamed").
+// Returns null for legacy rows where details lack the structured fields the
+// keypath needs — the template falls back to e.summary in that case.
+type SummaryParts = {
+  keypath: string
+  params: Record<string, string | number>
+  link_slot?: 'title' | 'filename'
+  link_path?: string | null
+}
+
+const summaryParts = (e: AuditLogEntry): SummaryParts | null => {
+  const d = (e.details || {}) as Record<string, unknown>
   const get = (k: string): string | null => {
-    const v = (d as Record<string, unknown>)[k]
+    const v = d[k]
     return typeof v === 'string' || typeof v === 'number' ? String(v) : null
   }
   const fields = (): string | null => {
-    const changed = (d as Record<string, unknown>).changed
+    const changed = d.changed
     if (!changed || typeof changed !== 'object') return null
     return Object.keys(changed as Record<string, unknown>).map(fieldLabel).join(', ')
   }
+  const path = get('path')
 
   switch (e.action) {
     case 'book.upload': {
-      const title = get('title'), path = get('path')
-      if (title && path) return t('admin.audit.summary.book_upload', { title, path })
+      const title = get('title')
+      if (title && path) return {
+        keypath: 'admin.audit.summary.book_upload',
+        params: { title, path },
+        link_slot: 'title', link_path: path,
+      }
       break
     }
     case 'book.edit': {
       const title = get('title'), f = fields()
-      if (title && f) return t('admin.audit.summary.book_edit', { title, fields: f })
+      if (title && f) return {
+        keypath: 'admin.audit.summary.book_edit',
+        params: { title, fields: f },
+        link_slot: 'title', link_path: path,
+      }
       break
     }
     case 'book.delete': {
       const title = get('title')
-      if (title) return t('admin.audit.summary.book_delete', { title })
+      if (title) return {
+        keypath: 'admin.audit.summary.book_delete',
+        params: { title },
+        link_slot: 'title', link_path: path,
+      }
       break
     }
     case 'book.move': {
       const src = get('src'), dst = get('dst'), kind = get('kind')
       if (kind === 'file') {
         const filename = get('filename')
-        if (filename && src !== null && dst !== null)
-          return t('admin.audit.summary.book_move_file', { filename, src, dst })
+        if (filename && src !== null && dst !== null) return {
+          keypath: 'admin.audit.summary.book_move_file',
+          params: { filename, src, dst },
+          link_slot: 'filename', link_path: path,
+        }
       } else if (kind === 'directory') {
         const count = get('count')
-        if (count !== null && src !== null && dst !== null)
-          return t('admin.audit.summary.book_move_dir', { count, src, dst })
+        if (count !== null && src !== null && dst !== null) return {
+          keypath: 'admin.audit.summary.book_move_dir',
+          params: { count, src, dst },
+        }
       }
       break
     }
     case 'book.cover': {
       const title = get('title'), mode = get('mode')
-      if (title && mode === 'upload')    return t('admin.audit.summary.book_cover_upload',    { title })
-      if (title && mode === 'reextract') return t('admin.audit.summary.book_cover_reextract', { title })
+      if (title && (mode === 'upload' || mode === 'reextract')) return {
+        keypath: mode === 'upload'
+          ? 'admin.audit.summary.book_cover_upload'
+          : 'admin.audit.summary.book_cover_reextract',
+        params: { title },
+        link_slot: 'title', link_path: path,
+      }
       break
     }
     case 'book.clearance': {
       const n = get('new')
-      if ((d as Record<string, unknown>).bulk) {
+      if (d.bulk) {
         const count = get('count')
-        if (count !== null && n !== null)
-          return t('admin.audit.summary.book_clearance_bulk', { count, n })
+        if (count !== null && n !== null) return {
+          keypath: 'admin.audit.summary.book_clearance_bulk',
+          params: { count, n },
+        }
       } else {
         const title = get('title')
-        if (title && n !== null)
-          return t('admin.audit.summary.book_clearance_one', { title, n })
+        if (title && n !== null) return {
+          keypath: 'admin.audit.summary.book_clearance_one',
+          params: { title, n },
+          link_slot: 'title', link_path: path,
+        }
       }
       break
     }
     case 'user.clearance': {
       const email = get('email'), f = fields()
-      if (email && f) return t('admin.audit.summary.user_clearance', { email, fields: f })
+      if (email && f) return {
+        keypath: 'admin.audit.summary.user_clearance',
+        params: { email, fields: f },
+      }
       break
     }
     case 'user.session_terminate': {
       const email = get('email')
-      if (email) return t('admin.audit.summary.user_session_terminate', { email })
+      if (email) return {
+        keypath: 'admin.audit.summary.user_session_terminate',
+        params: { email },
+      }
       break
     }
     case 'comment.moderate': {
       const author = get('author'), decision = get('decision')
-      if (author && decision === 'approve') return t('admin.audit.summary.comment_approve', { author })
-      if (author && decision === 'delete')  return t('admin.audit.summary.comment_delete',  { author })
+      if (author && (decision === 'approve' || decision === 'delete')) return {
+        keypath: decision === 'approve'
+          ? 'admin.audit.summary.comment_approve'
+          : 'admin.audit.summary.comment_delete',
+        params: { author },
+      }
       break
     }
     case 'annotation.moderate': {
       const author = get('author'), decision = get('decision')
-      if (author && decision === 'approve') return t('admin.audit.summary.annotation_approve', { author })
-      if (author && decision === 'delete')  return t('admin.audit.summary.annotation_delete',  { author })
+      if (author && (decision === 'approve' || decision === 'delete')) return {
+        keypath: decision === 'approve'
+          ? 'admin.audit.summary.annotation_approve'
+          : 'admin.audit.summary.annotation_delete',
+        params: { author },
+      }
       break
     }
   }
-  return e.summary
+  return null
 }
+
+// Memoised per-render parts so the template doesn't recompute on every slot.
+const entriesWithParts = computed(() =>
+  entries.value.map(e => ({ e, parts: summaryParts(e) }))
+)
 
 const toggleExpand = (id: number) => {
   if (expanded.value.has(id)) expanded.value.delete(id)
@@ -399,7 +457,7 @@ onMounted(() => {
         <p v-else-if="!entries.length" class="text-gray-500 dark:text-gray-400">{{ t('admin.audit.empty') }}</p>
         <template v-else>
           <ul class="divide-y divide-gray-100 dark:divide-gray-700">
-            <li v-for="e in entries" :key="e.id" class="py-3">
+            <li v-for="{ e, parts } in entriesWithParts" :key="e.id" class="py-3">
               <div class="flex items-start gap-3">
                 <!-- avatar -->
                 <img
@@ -422,7 +480,37 @@ onMounted(() => {
                     >{{ actionLabel(e.action) }}</span>
                     <span :title="formatDate(e.created_at)">{{ relativeTime(e.created_at) }}</span>
                   </div>
-                  <p class="mt-0.5 text-sm text-gray-800 dark:text-gray-200">{{ summaryLabel(e) }}</p>
+                  <p class="mt-0.5 text-sm text-gray-800 dark:text-gray-200">
+                    <i18n-t v-if="parts" :keypath="parts.keypath" tag="span">
+                      <template #title>
+                        <router-link
+                          v-if="parts.link_slot === 'title' && parts.link_path"
+                          :to="`/item/${parts.link_path}`"
+                          target="_blank"
+                          class="text-blue-600 dark:text-blue-400 hover:underline"
+                        >{{ parts.params.title }}</router-link>
+                        <span v-else>{{ parts.params.title }}</span>
+                      </template>
+                      <template #filename>
+                        <router-link
+                          v-if="parts.link_slot === 'filename' && parts.link_path"
+                          :to="`/item/${parts.link_path}`"
+                          target="_blank"
+                          class="text-blue-600 dark:text-blue-400 hover:underline"
+                        >{{ parts.params.filename }}</router-link>
+                        <span v-else>{{ parts.params.filename }}</span>
+                      </template>
+                      <template #email>{{ parts.params.email }}</template>
+                      <template #author>{{ parts.params.author }}</template>
+                      <template #path>{{ parts.params.path }}</template>
+                      <template #src>{{ parts.params.src }}</template>
+                      <template #dst>{{ parts.params.dst }}</template>
+                      <template #fields>{{ parts.params.fields }}</template>
+                      <template #count>{{ parts.params.count }}</template>
+                      <template #n>{{ parts.params.n }}</template>
+                    </i18n-t>
+                    <span v-else>{{ e.summary }}</span>
+                  </p>
                   <button
                     v-if="e.details"
                     @click="toggleExpand(e.id)"

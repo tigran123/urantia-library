@@ -389,6 +389,17 @@ def _audit(
     ))
 
 
+def _first_book_path(db: Session, hash_id: str) -> str | None:
+    """Return one current symlink path for `hash_id`, or None if the book has
+    no registered locations. Used by audit-write sites to snapshot a /item/<path>
+    link target — the path freezes at audit time, so a later move/delete will
+    surface to the admin as a broken link (intentional)."""
+    row = db.query(models.BookLocation.symlink_path).filter(
+        models.BookLocation.hash_id == hash_id
+    ).first()
+    return row[0] if row else None
+
+
 def _book_clearance(file_hash: str | None, db: Session) -> int:
     """Return the clearance required to read `file_hash`. 0 (public) if the
     hash is unknown or has no row in `books` — matches the design decision
@@ -1417,7 +1428,9 @@ async def admin_set_book_clearance(
         _audit(db, admin, "book.clearance",
                target_kind="book", target_id=hash_id,
                summary=f'Set clearance of "{book.title or hash_id[:12]}" to {payload.clearance}',
-               details={"title": book.title or hash_id[:12], "old": old, "new": payload.clearance})
+               details={"title": book.title or hash_id[:12],
+                        "path": _first_book_path(db, hash_id),
+                        "old": old, "new": payload.clearance})
     book.clearance = payload.clearance
     db.commit()
     return {"hash_id": hash_id, "clearance": book.clearance}
@@ -1537,7 +1550,8 @@ async def admin_update_book(
         _audit(db, admin, "book.edit",
                target_kind="book", target_id=hash_id,
                summary=f'Edited "{original_title}": {", ".join(diff.keys())}',
-               details={"title": original_title, "changed": diff})
+               details={"title": original_title, "path": _first_book_path(db, hash_id),
+                        "changed": diff})
     db.commit()
     db.refresh(book)
     return _book_to_admin_detail(book, db)
@@ -1598,7 +1612,9 @@ async def admin_delete_book(
     _audit(db, admin, "book.delete",
            target_kind="book", target_id=hash_id,
            summary=f'Deleted "{deleted_title}"',
-           details={"title": deleted_title, "locations": locations})
+           details={"title": deleted_title,
+                    "path": locations[0] if locations else None,
+                    "locations": locations})
     db.commit()
     return {"deleted": hash_id, "locations": locations, "errors": errors}
 
@@ -1786,7 +1802,10 @@ async def admin_move(
             filename = m.src.rsplit("/", 1)[-1]
             summary = f'Moved "{filename}" from /{src} to /{dst}'
             target_id: str | None = m.hash_id
-            move_details = {"filename": filename, "src": src, "dst": dst,
+            # `path` snapshots the post-move symlink so the audit row links to
+            # where the book lives now, not where it came from.
+            move_details = {"filename": filename, "path": m.dst,
+                            "src": src, "dst": dst,
                             "kind": kind, "count": len(moved)}
         else:
             summary = f"Moved {len(moved)} books from /{src}/ to /{dst}/"
@@ -2243,7 +2262,8 @@ async def admin_replace_book_cover(
     _audit(db, admin, "book.cover",
            target_kind="book", target_id=hash_id,
            summary=f'Replaced cover of "{book.title or hash_id[:12]}"',
-           details={"title": book.title or hash_id[:12], "mode": "upload"})
+           details={"title": book.title or hash_id[:12],
+                    "path": _first_book_path(db, hash_id), "mode": "upload"})
     db.commit()
     return {"cover_url": cover_url}
 
@@ -2289,7 +2309,8 @@ async def admin_reextract_book_cover(
     _audit(db, admin, "book.cover",
            target_kind="book", target_id=hash_id,
            summary=f'Re-extracted cover of "{book.title or hash_id[:12]}"',
-           details={"title": book.title or hash_id[:12], "mode": "reextract"})
+           details={"title": book.title or hash_id[:12],
+                    "path": _first_book_path(db, hash_id), "mode": "reextract"})
     db.commit()
     return {"cover_url": cover_url}
 
