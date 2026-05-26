@@ -109,10 +109,10 @@ const handleLogin = async () => {
     <p class="mt-4 text-center text-xs text-gray-500 dark:text-gray-400">
       <i18n-t keypath="auth.loginLegalNote" tag="span">
         <template #privacy>
-          <router-link :to="{ name: 'privacy' }" target="_blank" class="hover:underline">{{ t('app.legal.privacy') }}</router-link>
+          <router-link :to="{ name: 'privacy' }" target="_blank" class="hover:underline">{{ t('app.legal.privacy_instr') }}</router-link>
         </template>
         <template #terms>
-          <router-link :to="{ name: 'terms' }" target="_blank" class="hover:underline">{{ t('app.legal.terms') }}</router-link>
+          <router-link :to="{ name: 'terms' }" target="_blank" class="hover:underline">{{ t('app.legal.terms_instr') }}</router-link>
         </template>
       </i18n-t>
     </p>

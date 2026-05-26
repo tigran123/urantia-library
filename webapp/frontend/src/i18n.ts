@@ -117,6 +117,11 @@ const messages = {
       legal: {
         privacy: 'Privacy Policy',
         terms: 'Terms of Service',
+        // Variants used in consent sentences where Russian needs the instrumental
+        // case ("с Политикой конфиденциальности и Условиями использования").
+        // English has no case inflection, so these stay identical to the nominative.
+        privacy_instr: 'Privacy Policy',
+        terms_instr: 'Terms of Service',
       },
     },
     auth: {
@@ -888,6 +893,10 @@ const messages = {
       legal: {
         privacy: 'Политика конфиденциальности',
         terms: 'Условия использования',
+        // Instrumental case — used in consent sentences like
+        // «согласен с Политикой конфиденциальности и Условиями использования».
+        privacy_instr: 'Политикой конфиденциальности',
+        terms_instr: 'Условиями использования',
       },
     },
     auth: {

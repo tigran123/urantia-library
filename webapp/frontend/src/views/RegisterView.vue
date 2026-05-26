@@ -104,10 +104,10 @@ const handleRegister = async () => {
           <span>
             <i18n-t keypath="auth.acceptLegal" tag="span">
               <template #privacy>
-                <router-link :to="{ name: 'privacy' }" target="_blank" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.legal.privacy') }}</router-link>
+                <router-link :to="{ name: 'privacy' }" target="_blank" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.legal.privacy_instr') }}</router-link>
               </template>
               <template #terms>
-                <router-link :to="{ name: 'terms' }" target="_blank" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.legal.terms') }}</router-link>
+                <router-link :to="{ name: 'terms' }" target="_blank" class="text-blue-600 dark:text-blue-400 hover:underline">{{ t('app.legal.terms_instr') }}</router-link>
               </template>
             </i18n-t>
           </span>
