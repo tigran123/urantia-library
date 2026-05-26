@@ -595,8 +595,29 @@ async def library_stats(
         .scalar() or 0
     )
 
+    def _ext_suffix_filter(exts: set[str]):
+        return or_(*(
+            func.lower(models.Book.original_filename).like(f"%.{e}")
+            for e in exts
+        ))
+
+    total_audio = (
+        accessible_books
+        .filter(_ext_suffix_filter(_AUDIO_EXTS))
+        .with_entities(func.count(func.distinct(models.Book.id)))
+        .scalar() or 0
+    )
+    total_video = (
+        accessible_books
+        .filter(_ext_suffix_filter(_VIDEO_EXTS))
+        .with_entities(func.count(func.distinct(models.Book.id)))
+        .scalar() or 0
+    )
+
     response: dict[str, int] = {
         "total_books": int(total_books),
+        "total_audio": int(total_audio),
+        "total_video": int(total_video),
         "total_directories": int(total_directories),
         "total_languages": int(total_languages),
         "books_added_7d": int(books_added_7d),
@@ -1851,7 +1872,11 @@ _AVATAR_MAX_BYTES = 5 * 1024 * 1024
 _ACCEPTED_BOOK_EXTS = {
     "fb2", "zip", "epub", "pdf", "djvu", "mobi", "azw", "azw3", "prc",
     "docx", "odt", "html", "rtf", "txt", "jpg", "jpeg",
+    "mp3", "wav", "ogg", "flac", "m4a", "aac",
+    "mp4", "webm", "mkv", "avi", "mov",
 }
+_AUDIO_EXTS = {"mp3", "wav", "ogg", "flac", "m4a", "aac"}
+_VIDEO_EXTS = {"mp4", "webm", "mkv", "avi", "mov"}
 
 
 
@@ -1948,6 +1973,21 @@ def _extract_upload_metadata(src_path: str, fmt: str) -> dict:
                     elif key == "isbn":
                         out["identifiers"] = val if val.startswith("isbn:") else f"isbn:{val}"
                     elif key == "lang": out["languages"] = val.lower()
+        elif fmt in _AUDIO_EXTS or fmt in _VIDEO_EXTS:
+            r = _run(["ffprobe", "-v", "error", "-print_format", "json",
+                     "-show_format", src_path], timeout=10)
+            if r.returncode == 0:
+                data = json.loads(r.stdout or "{}")
+                tags = {k.lower(): v for k, v in (data.get("format", {}).get("tags") or {}).items()}
+                if tags.get("title"): out["title"] = tags["title"]
+                if tags.get("artist"): out["author"] = tags["artist"]
+                elif tags.get("album_artist"): out["author"] = tags["album_artist"]
+                if tags.get("album"): out["series"] = tags["album"]
+                if tags.get("date"):
+                    d = tags["date"]
+                    out["published"] = d[:4] if re.match(r"^\d{4}", d) else d
+                if tags.get("genre"): out["tags"] = tags["genre"]
+                if tags.get("comment"): out["description"] = tags["comment"]
         else:
             # ebook-meta dispatches on extension; ensure src_path keeps its name.
             r = _run(["ebook-meta", src_path], timeout=15)
@@ -2022,6 +2062,20 @@ def _extract_cover_to(src_path: str, fmt: str, dest_jpg: str) -> Optional[tuple[
             # produce nothing useful. Skip cleanly so the upload continues
             # without a cover (the UI shows the striped placeholder).
             return None
+        elif fmt in _AUDIO_EXTS:
+            raw = os.path.join(tmp_dir, "cover.jpg")
+            r = _run(["ffmpeg", "-y", "-i", src_path, "-map", "0:v:0",
+                     "-frames:v", "1", raw], timeout=30)
+            if r.returncode != 0 or not os.path.exists(raw):
+                return None
+        elif fmt in _VIDEO_EXTS:
+            raw = os.path.join(tmp_dir, "cover.jpg")
+            # Grab a frame ~3s in; ffmpeg falls back to the first frame for
+            # very short clips.
+            r = _run(["ffmpeg", "-y", "-ss", "00:00:03", "-i", src_path,
+                     "-frames:v", "1", raw], timeout=30)
+            if r.returncode != 0 or not os.path.exists(raw):
+                return None
         else:
             raw = os.path.join(tmp_dir, "cover.jpg")
             r = _run(["ebook-meta", src_path, f"--get-cover={raw}"], timeout=30)

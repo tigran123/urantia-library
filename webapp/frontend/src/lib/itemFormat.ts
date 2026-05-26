@@ -20,6 +20,17 @@ const FORMAT_LABELS: Record<string, string> = {
   html: 'HTML',
   htm: 'HTML',
   cpp: 'C++',
+  mp3: 'MP3',
+  wav: 'WAV',
+  ogg: 'OGG',
+  flac: 'FLAC',
+  m4a: 'M4A',
+  aac: 'AAC',
+  mp4: 'MP4',
+  webm: 'WebM',
+  mkv: 'MKV',
+  avi: 'AVI',
+  mov: 'MOV',
 }
 
 const CODE_EXTS = new Set([

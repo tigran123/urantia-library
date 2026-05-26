@@ -449,6 +449,14 @@ const handleLogout = async () => {
     <footer v-if="!isAuthRoute" class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-6 text-center text-sm text-gray-500 dark:text-gray-400 mt-auto">
       <template v-if="stats">
         <span>{{ t('app.stats.books', { n: nFmt(stats.total_books) }, stats.total_books) }}</span>
+        <template v-if="stats.total_audio > 0">
+          <span class="mx-2">·</span>
+          <span>{{ t('app.stats.audio', { n: nFmt(stats.total_audio) }, stats.total_audio) }}</span>
+        </template>
+        <template v-if="stats.total_video > 0">
+          <span class="mx-2">·</span>
+          <span>{{ t('app.stats.video', { n: nFmt(stats.total_video) }, stats.total_video) }}</span>
+        </template>
         <span class="mx-2">·</span>
         <span>{{ t('app.stats.directories', { n: nFmt(stats.total_directories) }, stats.total_directories) }}</span>
         <span class="mx-2">·</span>

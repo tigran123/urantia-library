@@ -37,6 +37,8 @@ const isTxt = computed(() => lower.value.endsWith('.txt'))
 const isHtml = computed(() => lower.value.endsWith('.html') || lower.value.endsWith('.htm')
   || lower.value.endsWith('.html.zip') || lower.value.endsWith('.htm.zip'))
 const isImage = computed(() => /\.(jpe?g|png|gif|webp|svg)$/i.test(lower.value))
+const isAudio = computed(() => /\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(lower.value))
+const isVideo = computed(() => /\.(mp4|webm|mkv|avi|mov)$/i.test(lower.value))
 
 // Build a full URL (including baseURL) for the <img> tag, since axios doesn't
 // proxy <img>. Matches ItemView.getDownloadUrl()'s strategy.
@@ -55,6 +57,8 @@ const imageSrc = computed(() => {
     <MdViewer v-else-if="isMd || isTxt" :source="source" />
     <HtmlViewer v-else-if="isHtml" :source="source" />
     <ImageViewer v-else-if="isImage" :src="imageSrc" />
+    <audio v-else-if="isAudio" controls class="w-full" :src="imageSrc" />
+    <video v-else-if="isVideo" controls class="w-full max-h-[60vh]" :src="imageSrc" />
     <div v-else class="p-8 text-center text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 rounded">
       <DocumentIcon class="mx-auto h-12 w-12 mb-2 text-gray-300 dark:text-gray-600" />
       <p class="text-sm">{{ t('admin.upload.review.preview_unsupported') }}</p>

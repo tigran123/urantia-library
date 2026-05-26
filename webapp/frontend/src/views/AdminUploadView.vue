@@ -60,8 +60,8 @@ type CommittedBook = ExistingBook & {
   original_filename: string
 }
 
-const ACCEPTED = ['FB2', 'FB2.ZIP', 'EPUB', 'PDF', 'DJVU', 'MOBI', 'AZW', 'AZW3', 'PRC', 'DOCX', 'ODT', 'RTF', 'HTML', 'TXT', 'TXT.ZIP', 'JPG', 'JPEG']
-const ACCEPT_ATTR = '.fb2,.zip,.epub,.pdf,.djvu,.mobi,.azw,.azw3,.prc,.docx,.odt,.rtf,.html,.txt,.jpg,.jpeg'
+const ACCEPTED = ['FB2', 'FB2.ZIP', 'EPUB', 'PDF', 'DJVU', 'MOBI', 'AZW', 'AZW3', 'PRC', 'DOCX', 'ODT', 'RTF', 'HTML', 'TXT', 'TXT.ZIP', 'JPG', 'JPEG', 'MP3', 'WAV', 'OGG', 'FLAC', 'M4A', 'AAC', 'MP4', 'WebM', 'MKV', 'AVI', 'MOV']
+const ACCEPT_ATTR = '.fb2,.zip,.epub,.pdf,.djvu,.mobi,.azw,.azw3,.prc,.docx,.odt,.rtf,.html,.txt,.jpg,.jpeg,.mp3,.wav,.ogg,.flac,.m4a,.aac,.mp4,.webm,.mkv,.avi,.mov'
 const MAX_UPLOAD_BYTES = 850 * 1024 * 1024
 
 const stage = ref<Stage>('idle')
