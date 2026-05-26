@@ -24,7 +24,8 @@ CREATE TABLE registration_requests (
     source VARCHAR,
     purpose VARCHAR,
     token VARCHAR UNIQUE,
-    accepted_legal_at TEXT              -- ISO-8601 UTC; stamped at submit. NOT NULL in /api/register's validation, but column-level nullable for forward-compat.
+    accepted_legal_at TEXT,             -- ISO-8601 UTC; stamped at submit. NOT NULL in /api/register's validation, but column-level nullable for forward-compat.
+    language VARCHAR                    -- ISO-639-1 ('en' | 'ru') captured at submit so the approval/rejection email matches the locale the requester used. NULL = legacy pre-0002 row, treated as English.
 );
 
 -- ==============================================================================

@@ -8,6 +8,10 @@ class UserCreate(BaseModel):
     # The registration form's required "I accept the Privacy Policy and Terms"
     # checkbox; /api/register rejects with 400 when this is False.
     accepted_legal: bool = False
+    # ISO-639-1 of the UI locale at submit time; the admin's approval/rejection
+    # email is rendered in this language. /api/register normalizes unknown
+    # values to NULL, which the email helpers treat as English.
+    language: Optional[str] = None
 
 class UserResponse(BaseModel):
     email: EmailStr

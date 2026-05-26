@@ -59,18 +59,36 @@ def send_admin_notification(user_email: str, token: str, source: str = None, pur
     """
     _send_email(ADMIN_EMAIL, "New Registration Request", html)
 
-def send_user_approval(user_email: str, token: str):
+def send_user_approval(user_email: str, token: str, language: str = "en"):
     setup_link = f"{APP_URL}/#/set-password?token={token}"
-    html = f"""
-    <html>
-      <body>
-        <h3>Your request for Urantia Library has been approved!</h3>
-        <p>Welcome! You can now finalize your registration by setting up your password.</p>
-        <p><a href="{setup_link}">Click here to set your password and log in</a></p>
-      </body>
-    </html>
-    """
-    _send_email(user_email, "Registration Approved - Action Required", html)
+    bodies = {
+        "en": (
+            "Registration Approved - Action Required",
+            f"""
+            <html>
+              <body>
+                <h3>Your request for Urantia Library has been approved!</h3>
+                <p>Welcome! You can now finalize your registration by setting up your password.</p>
+                <p><a href="{setup_link}">Click here to set your password and log in</a></p>
+              </body>
+            </html>
+            """,
+        ),
+        "ru": (
+            "Регистрация одобрена — требуется действие",
+            f"""
+            <html>
+              <body>
+                <h3>Ваш запрос в Урантийскую библиотеку одобрен!</h3>
+                <p>Добро пожаловать! Чтобы завершить регистрацию, задайте пароль.</p>
+                <p><a href="{setup_link}">Нажмите здесь, чтобы задать пароль и войти</a></p>
+              </body>
+            </html>
+            """,
+        ),
+    }
+    subject, html = bodies.get(language, bodies["en"])
+    _send_email(user_email, subject, html)
 
 def send_moderation_digest(pending_count: int):
     """Throttled digest sent to the admin when book comments await moderation."""
@@ -87,16 +105,33 @@ def send_moderation_digest(pending_count: int):
     """
     _send_email(ADMIN_EMAIL, "Comments awaiting moderation", html)
 
-def send_user_rejection(user_email: str):
-    html = f"""
-    <html>
-      <body>
-        <h3>Update on your Urantia Library registration</h3>
-        <p>Thank you for your interest. Unfortunately, we are unable to grant you access at this time.</p>
-      </body>
-    </html>
-    """
-    _send_email(user_email, "Registration Update", html)
+def send_user_rejection(user_email: str, language: str = "en"):
+    bodies = {
+        "en": (
+            "Registration Update",
+            """
+            <html>
+              <body>
+                <h3>Update on your Urantia Library registration</h3>
+                <p>Thank you for your interest. Unfortunately, we are unable to grant you access at this time.</p>
+              </body>
+            </html>
+            """,
+        ),
+        "ru": (
+            "Обновление по вашей регистрации",
+            """
+            <html>
+              <body>
+                <h3>Обновление по вашей регистрации в Урантийской библиотеке</h3>
+                <p>Спасибо за интерес к проекту. К сожалению, мы не можем предоставить вам доступ в данный момент.</p>
+              </body>
+            </html>
+            """,
+        ),
+    }
+    subject, html = bodies.get(language, bodies["en"])
+    _send_email(user_email, subject, html)
 
 
 # ==============================================================================

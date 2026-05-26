@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 
-const { t } = useI18n({ useScope: 'global' })
+const { t, locale } = useI18n({ useScope: 'global' })
 const email = ref('')
 const source = ref('')
 const purpose = ref('')
@@ -22,7 +22,8 @@ const handleRegister = async () => {
       email: email.value,
       source: source.value || null,
       purpose: purpose.value || null,
-      accepted_legal: acceptedLegal.value
+      accepted_legal: acceptedLegal.value,
+      language: locale.value
     })
     successMsg.value = t('auth.registerSuccess')
     // Clear form

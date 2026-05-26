@@ -1475,12 +1475,14 @@ async def register_user(request: Request, user: schemas.UserCreate, db: Session 
         )
         raise HTTPException(status_code=400, detail="Registration request already pending")
 
+    lang = user.language if user.language in ("en", "ru") else None
     db_req = models.RegistrationRequest(
         email=user.email,
         source=user.source,
         purpose=user.purpose,
         status="pending",
         accepted_legal_at=_now_iso(),
+        language=lang,
     )
     db.add(db_req)
     db.commit()
@@ -1512,8 +1514,8 @@ async def approve_user(token: str, db: Session = Depends(get_db)):
     db_req.status = "approved"
     db.commit()
 
-    # Notify user to set password
-    email_utils.send_user_approval(db_req.email, db_req.token)
+    # Notify user to set password — in the locale they registered in.
+    email_utils.send_user_approval(db_req.email, db_req.token, language=db_req.language or "en")
 
     return JSONResponse(status_code=200, content={"message": "User approved successfully. Email sent to set password."})
 
@@ -1564,11 +1566,12 @@ async def reject_user(token: str, db: Session = Depends(get_db)):
         return JSONResponse(status_code=404, content={"message": "Invalid or expired token."})
 
     user_email = db_req.email
+    lang = db_req.language or "en"
     db.delete(db_req)
     db.commit()
 
-    # Notify user
-    email_utils.send_user_rejection(user_email)
+    # Notify user — in the locale they registered in.
+    email_utils.send_user_rejection(user_email, language=lang)
 
     return JSONResponse(status_code=200, content={"message": "User rejected successfully."})
 

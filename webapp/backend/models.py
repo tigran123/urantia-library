@@ -27,6 +27,7 @@ class RegistrationRequest(Base):
     purpose = Column(String, nullable=True)  # Optional context: purpose for registering
     token = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
     accepted_legal_at = Column(String, nullable=True)   # ISO-8601 UTC; stamped at submit. NULL on a row = legacy pre-0003 request.
+    language = Column(String, nullable=True)            # ISO-639-1 ('en' | 'ru'); NULL on a row = legacy pre-0002 request, treated as English by the email helpers.
 
 class Favorite(Base):
     __tablename__ = "favorites"
