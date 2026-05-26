@@ -59,13 +59,47 @@ const error = ref('')
 const totalPages = ref(0)
 const currentPage = ref(1)
 const renderedScale = ref(1)
-// Fixed-width zoom readout: integer at/above 100%, one decimal below. The
-// constant string width matters — a variable-width label reflows the toolbar,
-// whose height feeds back into the fit scale and can oscillate forever.
-const zoomPercent = computed(() =>
-  renderedScale.value >= 1
-    ? Math.round(renderedScale.value * 100).toString()
-    : (renderedScale.value * 100).toFixed(1))
+// Editable zoom readout. Width is fixed via `w-14 tabular-nums` — a
+// variable-width label reflows the toolbar, whose height feeds back into the
+// fit scale and can oscillate forever.
+const zoomInput = ref('100')
+const formatScale = (s: number) =>
+  s >= 1 ? Math.round(s * 100).toString() : (s * 100).toFixed(1)
+watch(renderedScale, (s) => { zoomInput.value = formatScale(s) }, { immediate: true })
+const commitZoomInput = () => {
+  // Guard: when commit triggers a render, loadingPage flips to true → the
+  // :disabled binding force-blurs the focused input → @blur fires another
+  // commit. Skip the second one (pdf.js errors on concurrent renders to the
+  // same canvas).
+  if (loadingPage.value) return
+  const raw = zoomInput.value.replace(',', '.').replace('%', '').trim()
+  const pct = parseFloat(raw)
+  if (!Number.isFinite(pct) || pct <= 0) {
+    zoomInput.value = formatScale(renderedScale.value)
+    return
+  }
+  // Guard only against absurd values; users can freely enter anything sane.
+  const scale = Math.min(100, Math.max(0.001, pct / 100))
+  // No-op when the typed value already matches the current scale. Without the
+  // fitMode check, this also makes Escape→restore-on-blur a no-op when the
+  // user was in fit-width/-height mode.
+  if (Math.abs(scale - renderedScale.value) < 1e-6) {
+    zoomInput.value = formatScale(renderedScale.value)
+    return
+  }
+  customScale.value = scale
+  fitMode.value = 'custom'
+  renderPage(currentPage.value)
+}
+const onZoomEnter = (e: Event) => {
+  // Route Enter through blur so commit runs through a single path; otherwise
+  // the synthetic blur from :disabled flipping mid-render would commit twice.
+  ;(e.currentTarget as HTMLInputElement).blur()
+}
+const cancelZoomInput = (e: Event) => {
+  zoomInput.value = formatScale(renderedScale.value)
+  ;(e.currentTarget as HTMLInputElement).blur()
+}
 const isDoublePage = ref(false)
 // Whether odd page numbers fall on the right (evince default): spreads run
 // [1] [2,3] [4,5]…. When false, odd pages fall on the left: [1,2] [3,4]….
@@ -332,12 +366,19 @@ const computeFitScale = (page: PDFPageProxy): number => {
   const padX = 32
   const padY = 32
   const gap = isDoublePage.value ? 8 : 0
+  // Use offsetWidth/offsetHeight (the outer box, unaffected by an internal
+  // scrollbar toggling) and reserve a constant for a possible perpendicular
+  // scrollbar. Otherwise fit-height oscillates when the scaled page width
+  // sits right on the horizontal-scrollbar threshold: the scrollbar appears,
+  // clientHeight shrinks, the recomputed scale drops, scrollbar disappears,
+  // clientHeight grows back, loop.
+  const scrollbar = 18
   if (fitMode.value === 'height') {
-    const h = container.value.clientHeight - padY
+    const h = container.value.offsetHeight - padY - scrollbar
     return Math.max(0.05, h / base.height)
   }
   // fit-width
-  const usableW = container.value.clientWidth - padX - gap
+  const usableW = container.value.offsetWidth - padX - gap - scrollbar
   const perPage = isDoublePage.value ? usableW / 2 : usableW
   return Math.max(0.05, perPage / base.width)
 }
@@ -531,13 +572,19 @@ const goToPage = (e: Event) => {
   renderPage(p)
 }
 
+// Step the zoom by 5 percentage points, snapping to a 5 % grid so the user
+// always lands on round values (95, 100, 105, …) regardless of where they
+// started. Additive — not multiplicative — so the step size is independent
+// of the current zoom and the window size.
 const zoomIn = () => {
-  customScale.value = Math.min(5, (fitMode.value === 'custom' ? customScale.value : renderedScale.value) * 1.2)
+  const cur = fitMode.value === 'custom' ? customScale.value : renderedScale.value
+  customScale.value = Math.min(100, (Math.floor(cur * 20) + 1) / 20)
   fitMode.value = 'custom'
   renderPage(currentPage.value)
 }
 const zoomOut = () => {
-  customScale.value = Math.max(0.05, (fitMode.value === 'custom' ? customScale.value : renderedScale.value) / 1.2)
+  const cur = fitMode.value === 'custom' ? customScale.value : renderedScale.value
+  customScale.value = Math.max(0.001, (Math.ceil(cur * 20) - 1) / 20)
   fitMode.value = 'custom'
   renderPage(currentPage.value)
 }
@@ -820,7 +867,21 @@ onBeforeUnmount(() => {
         >
           <ArrowsUpDownIcon class="h-5 w-5" />
         </button>
-        <span class="w-12 shrink-0 text-center text-sm text-gray-600 dark:text-gray-400 tabular-nums select-none">{{ zoomPercent }}%</span>
+        <div class="flex items-center gap-0.5 shrink-0">
+          <input
+            v-model="zoomInput"
+            type="text"
+            inputmode="decimal"
+            :title="t('app.zoom_set')"
+            :disabled="loadingPage"
+            @focus="($event.target as HTMLInputElement).select()"
+            @keydown.enter.prevent="onZoomEnter"
+            @keydown.escape.prevent="cancelZoomInput"
+            @blur="commitZoomInput"
+            class="w-14 px-1 text-center text-sm tabular-nums bg-transparent rounded border border-transparent hover:border-gray-300 dark:hover:border-gray-600 focus:border-blue-500 focus:bg-white dark:focus:bg-gray-800 outline-none text-gray-600 dark:text-gray-400 disabled:opacity-50"
+          />
+          <span class="text-sm text-gray-600 dark:text-gray-400 select-none">%</span>
+        </div>
         <button @click="zoomIn" :disabled="loadingPage" :title="t('app.zoom_in')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded transition-colors disabled:opacity-50">
           <MagnifyingGlassPlusIcon class="h-5 w-5" />
         </button>
