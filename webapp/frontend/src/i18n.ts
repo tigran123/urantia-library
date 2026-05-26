@@ -16,6 +16,7 @@ const messages = {
     app: {
       title: 'Urantia Library',
       search_placeholder: 'Search library...',
+      search_in_path: 'Search in {path}',
       settings: 'Settings',
       logout: 'Sign Out',
       bookshelf: 'My Bookshelf',
@@ -805,6 +806,7 @@ const messages = {
     app: {
       title: 'Библиотека Урантии',
       search_placeholder: 'Поиск по библиотеке...',
+      search_in_path: 'Искать в {path}',
       settings: 'Настройки',
       logout: 'Выйти',
       bookshelf: 'Моя полка',

@@ -324,7 +324,7 @@ const handleLogout = async () => {
               </div>
               <div v-if="currentBrowsePath && !hasCurrentPathFilter" class="absolute top-full left-0 mt-1 pl-1 text-xs text-gray-500 dark:text-gray-400">
                 <button type="button" @click="applyCurrentPathFilter()" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer">
-                  Search in "{{ currentBrowsePath }}"
+                  {{ t('app.search_in_path', { path: currentBrowsePath }) }}
                 </button>
               </div>
             </form>
@@ -443,7 +443,7 @@ const handleLogout = async () => {
           </div>
           <div v-if="currentBrowsePath && !hasCurrentPathFilter" class="absolute top-full left-0 mt-1 pl-1 text-xs text-gray-500 dark:text-gray-400">
             <button type="button" @click="applyCurrentPathFilter()" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer">
-              Search in "{{ currentBrowsePath }}"
+              {{ t('app.search_in_path', { path: currentBrowsePath }) }}
             </button>
           </div>
         </form>
