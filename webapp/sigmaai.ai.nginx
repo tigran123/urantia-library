@@ -1,3 +1,9 @@
+# Per-IP rate limit for the library's credential-facing endpoints. 10 req/min
+# steady, burst of 5, applied below to /library/api/login and /library/api/register.
+# Lives at http context because limit_req_zone can only be declared there —
+# the include from /etc/nginx/nginx.conf puts everything in this file inside http {}.
+limit_req_zone $binary_remote_addr zone=urantia_auth:10m rate=10r/m;
+
 server {
     listen 127.0.0.1:8080;
     server_name sigmaai.ai;
@@ -100,6 +106,24 @@ server {
         proxy_read_timeout 600s;          # slow uplinks need more than the 60s default
 
         proxy_pass http://127.0.0.1:8000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Rate-limit credential endpoints to slow credential-stuffing + registration
+    # spam. Burst absorbs typos/autofill retries; nodelay returns 429 instantly
+    # past that rather than queueing the request.
+    location ~ ^/library/api/(login|register)$ {
+        allow 89.242.93.253;
+        deny all;
+
+        limit_req zone=urantia_auth burst=5 nodelay;
+        limit_req_status 429;
+
+        rewrite ^/library/(.*)$ /$1 break;
+        proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
