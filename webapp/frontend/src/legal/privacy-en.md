@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: 26 May 2026_
+_Last updated: 29 May 2026_
 
 This Privacy Policy explains what information this library collects, why, and what your rights are. It applies to everyone who visits or uses this library, including unregistered visitors.
 
