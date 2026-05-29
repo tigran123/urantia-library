@@ -85,6 +85,28 @@ export const startIntegrityJob = (payload: {
 export const setBulkBookClearance = (payload: { hash_ids: string[]; clearance: number }) =>
   api.post<{ updated: number; clearance: number }>('/admin/books/clearance', payload)
 
+export interface RecommendationResponse {
+  hash_id: string
+  recommended_by: number
+  recommended_by_name: string | null
+  recommended_at: string
+  symlink_path: string | null
+}
+
+export const recommendBook = (hashId: string) =>
+  api.post<RecommendationResponse>(`/admin/books/${encodeURIComponent(hashId)}/recommend`)
+
+export const unrecommendBook = (hashId: string) =>
+  api.delete<{ ok: true; removed: string[] }>(`/admin/books/${encodeURIComponent(hashId)}/recommend`)
+
+export const recommendBooksBulk = (hashIds: string[]) =>
+  api.post<{ recommended: number; unchanged: number; errors: { hash_id: string; reason: string }[] }>(
+    '/admin/books/recommend/bulk', { hash_ids: hashIds })
+
+export const unrecommendBooksBulk = (hashIds: string[]) =>
+  api.post<{ unrecommended: number; unchanged: number; errors: { hash_id: string; reason: string }[] }>(
+    '/admin/books/unrecommend/bulk', { hash_ids: hashIds })
+
 export const getIntegrityJob = (jobId: string, include: 'failures' | 'all' = 'failures') =>
   api.get<IntegrityJobDetail>(
     `/admin/integrity/jobs/${encodeURIComponent(jobId)}`,

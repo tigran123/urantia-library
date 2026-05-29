@@ -41,11 +41,15 @@ const ACTION_OPTIONS: { value: string, key: string }[] = [
   { value: 'book.move',            key: 'admin.audit.action.book_move' },
   { value: 'book.cover',           key: 'admin.audit.action.book_cover' },
   { value: 'book.clearance',       key: 'admin.audit.action.book_clearance' },
+  { value: 'book.recommend',       key: 'admin.audit.action.book_recommend' },
+  { value: 'book.unrecommend',     key: 'admin.audit.action.book_unrecommend' },
   { value: 'user.clearance',       key: 'admin.audit.action.user_clearance' },
   { value: 'user.session_terminate', key: 'admin.audit.action.user_session_terminate' },
   { value: 'comment.moderate',     key: 'admin.audit.action.comment_moderate' },
   { value: 'annotation.moderate',  key: 'admin.audit.action.annotation_moderate' },
+  { value: 'usage.kinds_update',   key: 'admin.audit.action.usage_kinds_update' },
 ]
+
 const actionFilter = ref('')
 const actorFilter = ref<number | null>(null)   // set by clicking a leaderboard row
 
@@ -58,10 +62,13 @@ const ACTION_CHIP_CLASSES: Record<string, string> = {
   'book.move':              'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
   'book.cover':             'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300',
   'book.clearance':         'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  'book.recommend':         'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+  'book.unrecommend':       'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
   'user.clearance':         'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300',
   'user.session_terminate': 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
   'comment.moderate':       'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
   'annotation.moderate':    'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
+  'usage.kinds_update':     'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
 }
 const chipClass = (action: string) =>
   ACTION_CHIP_CLASSES[action] || 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
@@ -75,10 +82,13 @@ const ACTION_SEGMENT_CLASSES: Record<string, string> = {
   'book.move':              'bg-violet-500 dark:bg-violet-400',
   'book.cover':             'bg-pink-500 dark:bg-pink-400',
   'book.clearance':         'bg-amber-500 dark:bg-amber-400',
+  'book.recommend':         'bg-green-500 dark:bg-green-400',
+  'book.unrecommend':       'bg-rose-500 dark:bg-rose-400',
   'user.clearance':         'bg-indigo-500 dark:bg-indigo-400',
   'user.session_terminate': 'bg-orange-500 dark:bg-orange-400',
   'comment.moderate':       'bg-teal-500 dark:bg-teal-400',
   'annotation.moderate':    'bg-cyan-500 dark:bg-cyan-400',
+  'usage.kinds_update':     'bg-slate-500 dark:bg-slate-400',
 }
 const segmentClass = (action: string) =>
   ACTION_SEGMENT_CLASSES[action] || 'bg-gray-400 dark:bg-gray-500'
@@ -188,6 +198,14 @@ const actorDisplay = (e: { actor: { real_name: string | null, email: string } })
 const actionLabel = (action: string): string => {
   const opt = ACTION_OPTIONS.find(o => o.value === action)
   return opt ? t(opt.key) : action
+}
+
+// Localised label for a usage-event kind (page, book_open, recommend, …) —
+// used to render the usage.kinds_update summary. Falls back to the raw key.
+const usageKindLabel = (kind: string): string => {
+  const key = `admin.usage.kind.${kind}`
+  const tx = t(key)
+  return tx === key ? kind : tx
 }
 
 // Translate a field name from the controlled list used by book.edit /
@@ -300,6 +318,40 @@ const summaryParts = (e: AuditLogEntry): SummaryParts | null => {
       }
       break
     }
+    case 'book.recommend': {
+      if (d.bulk) {
+        const count = get('count')
+        if (count !== null) return {
+          keypath: 'admin.audit.summary.book_recommend_bulk',
+          params: { count },
+        }
+      } else {
+        const title = get('title')
+        if (title) return {
+          keypath: 'admin.audit.summary.book_recommend',
+          params: { title },
+          link_slot: 'title', link_path: path,
+        }
+      }
+      break
+    }
+    case 'book.unrecommend': {
+      if (d.bulk) {
+        const count = get('count')
+        if (count !== null) return {
+          keypath: 'admin.audit.summary.book_unrecommend_bulk',
+          params: { count },
+        }
+      } else {
+        const title = get('title')
+        if (title) return {
+          keypath: 'admin.audit.summary.book_unrecommend',
+          params: { title },
+          link_slot: 'title', link_path: path,
+        }
+      }
+      break
+    }
     case 'user.clearance': {
       const email = get('email'), f = fields()
       if (email && f) return {
@@ -335,6 +387,19 @@ const summaryParts = (e: AuditLogEntry): SummaryParts | null => {
         params: { author },
       }
       break
+    }
+    case 'usage.kinds_update': {
+      // details.new is a JSON-encoded array of the now-enabled kind keys.
+      let kinds: string[] = []
+      try {
+        const parsed = JSON.parse(String(d.new ?? '[]'))
+        if (Array.isArray(parsed)) kinds = parsed.map(String)
+      } catch { /* malformed — fall through to empty */ }
+      const labels = kinds.map(usageKindLabel).sort((a, b) => a.localeCompare(b)).join(', ')
+      return {
+        keypath: 'admin.audit.summary.usage_kinds_update',
+        params: { kinds: labels || t('admin.audit.summary.usage_kinds_none') },
+      }
     }
   }
   return null
@@ -501,6 +566,7 @@ onMounted(() => {
                       <template #fields>{{ parts.params.fields }}</template>
                       <template #count>{{ parts.params.count }}</template>
                       <template #n>{{ parts.params.n }}</template>
+                      <template #kinds>{{ parts.params.kinds }}</template>
                     </i18n-t>
                     <span v-else>{{ e.summary }}</span>
                   </p>

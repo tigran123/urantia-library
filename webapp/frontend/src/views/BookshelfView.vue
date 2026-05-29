@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, inject, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import api from '../api'
 import { DocumentIcon, BookmarkIcon, TrashIcon, ArrowLeftIcon, FolderIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
+import QualityMark from '../components/QualityMark.vue'
+import { recommendedTooltip } from '../lib/recommended'
 
+const { t, locale } = useI18n({ useScope: 'global' })
+const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_by_name, it?.recommended_at)
 const router = useRouter()
 const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
 const favorites = ref<any[]>([])
@@ -115,7 +120,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <div class="relative flex items-center">
             <router-link :to="`/browse/${dir.path}`" :class="['flex-1 flex items-center p-4 pr-16 min-w-0', !dir.exists && 'cursor-not-allowed']">
               <div class="h-12 w-10 flex-shrink-0 mr-4 rounded bg-blue-50/50 dark:bg-gray-900 flex items-center justify-center" :class="{ 'opacity-60': !dir.exists }">
-                <FolderIcon class="h-6 w-6 text-blue-400 dark:text-blue-500" />
+                <QualityMark v-if="dir.path === 'Recommended'" class="h-6 w-6 text-green-600 dark:text-green-400" :title="$t('app.recommended_badge_tooltip')" />
+                <FolderIcon v-else class="h-6 w-6 text-blue-400 dark:text-blue-500" />
               </div>
               <div class="flex-1 min-w-0 pr-8" :class="{ 'opacity-60': !dir.exists }">
                 <p class="text-base font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="dir.path">{{ dir.name }}</p>
@@ -151,7 +157,12 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 </div>
               </div>
               <div class="flex-1 min-w-0 pr-8" :class="{ 'opacity-60': !match.path }">
-                <p class="text-base font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="match.title || match.original_filename">{{ match.title || formatFilename(match.original_filename || '', false) }}</p>
+                <p class="text-base font-medium text-gray-900 dark:text-gray-100 break-words line-clamp-2" :title="match.title || match.original_filename">
+                  <QualityMark
+                    v-if="match.is_recommended"
+                    class="inline-block h-4 w-4 mr-1 text-green-600 dark:text-green-400 align-text-bottom"
+                    :title="recTip(match)"
+                  />{{ match.title || formatFilename(match.original_filename || '', false) }}</p>
                 <p v-if="match.author" class="text-sm text-gray-600 dark:text-gray-300 truncate mt-0.5" :title="match.author">{{ match.author }}</p>
                 <span v-if="!match.path" class="inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">{{ $t('app.missing_file') }}</span>
                 <p v-if="match.description" class="text-sm text-gray-500 dark:text-gray-400 line-clamp-3 mt-0.5" v-html="match.description"></p>

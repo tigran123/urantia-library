@@ -132,6 +132,17 @@ CREATE UNIQUE INDEX ix_book_comments_one_toplevel
 CREATE INDEX idx_book_comments_hash_status ON book_comments(hash_id, status);
 CREATE INDEX idx_book_comments_parent ON book_comments(parent_id);
 
+-- Admin-curated "recommended book" flag. A row here means the book has a
+-- companion symlink under /Books/Recommended/ (registered in book_locations
+-- like any other location). One row per recommended book; re-recommending
+-- overwrites recommended_by + recommended_at.
+CREATE TABLE book_recommendations (
+    hash_id        VARCHAR PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
+    recommended_by INTEGER NOT NULL REFERENCES users(id),
+    recommended_at TEXT    NOT NULL                       -- ISO-8601 UTC
+);
+CREATE INDEX ix_book_recommendations_at ON book_recommendations(recommended_at DESC);
+
 -- Small key/value store for app-wide state (e.g. moderation digest throttle).
 CREATE TABLE app_meta (
     key TEXT PRIMARY KEY,
@@ -257,7 +268,7 @@ CREATE TABLE admin_audit_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at    TEXT    NOT NULL,                       -- ISO-8601 UTC
     actor_user_id INTEGER NOT NULL REFERENCES users(id),
-    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate'
+    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update'
     target_kind   VARCHAR,                                -- 'book' | 'user' | 'comment' | 'annotation' | NULL
     target_id     VARCHAR,                                -- book hash, user id, comment id, … (VARCHAR holds either int or hash as text)
     summary       VARCHAR NOT NULL,                       -- one-line human-readable
@@ -293,7 +304,7 @@ CREATE TABLE usage_events (
     user_agent   TEXT,                                                -- truncated to ~500 chars
     geo_country  TEXT,                                                -- ISO-2 (e.g. 'AM','RU') or NULL
     geo_city     TEXT,                                                -- English name from GeoLite2 or NULL
-    kind         TEXT NOT NULL,                                       -- 'page'|'book_open'|'search'|'login'|'register'
+    kind         TEXT NOT NULL,                                       -- 'page'|'book_open'|'search'|'login'|'register'|'recommend'|'unrecommend'
     path         TEXT,                                                -- normalized request path or filtered ?path= value
     hash_id      TEXT REFERENCES books(id) ON DELETE SET NULL,        -- book hash for kind='book_open', else NULL
     extra_json   TEXT                                                 -- per-kind details (search query+count, login success, …)
@@ -308,4 +319,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '3');

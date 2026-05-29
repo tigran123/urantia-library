@@ -107,7 +107,22 @@ FEEDBACK_ATTACHMENT_DIR = os.environ.get(
     "FEEDBACK_ATTACHMENT_DIR", os.path.join(DATA_DIR, "feedback_attachments")
 )
 os.makedirs(FEEDBACK_ATTACHMENT_DIR, exist_ok=True)
+# The Recommended/ pseudo-directory is managed exclusively by the
+# recommend/unrecommend endpoints. It is browsable, but the generic
+# file-management paths (upload, move, directory delete) must refuse it so it
+# can't be populated, relocated, or destroyed out-of-band. It is NOT in
+# _TOPDIR_SKIPLIST — we want it to appear in /api/browse — but it IS excluded
+# from the upload tree picker (/api/admin/dirs).
+RECOMMENDED_SUBDIR = "Recommended"
+RECOMMENDED_DIR = os.path.join(BOOKS_DIR, RECOMMENDED_SUBDIR)
+os.makedirs(RECOMMENDED_DIR, exist_ok=True)
 _TOPDIR_SKIPLIST = {".claude", ".antigravitycli", ".vscode", ".data", "CLAUDE.md", "GEMINI.md", "urantia-library"}
+
+
+def _is_recommended_path(rel: str) -> bool:
+    """True if `rel` (a BOOKS_DIR-relative POSIX path) is the Recommended
+    pseudo-directory or anything beneath it."""
+    return rel == RECOMMENDED_SUBDIR or rel.startswith(RECOMMENDED_SUBDIR + "/")
 
 # Offline IP→geo lookup for usage_events. The .mmdb is refreshed monthly by
 # scripts/update_geoip.sh; the reader here is opened once at module load, so
@@ -525,6 +540,23 @@ def _first_book_path(db: Session, hash_id: str) -> str | None:
     return row[0] if row else None
 
 
+def _primary_topic_path(db: Session, hash_id: str) -> str | None:
+    """Return a current symlink path for `hash_id` that is NOT under
+    Recommended/, or None. Used when recording usage events for
+    recommend/unrecommend so the timeline's Path column shows the book's real
+    topic location (e.g. Religions/Urantia/...) instead of the API URL or the
+    synthetic Recommended/ symlink."""
+    row = (
+        db.query(models.BookLocation.symlink_path)
+        .filter(
+            models.BookLocation.hash_id == hash_id,
+            models.BookLocation.symlink_path.notlike("Recommended/%"),
+        )
+        .first()
+    )
+    return row[0] if row else None
+
+
 def _book_clearance(file_hash: str | None, db: Session) -> int:
     """Return the clearance required to read `file_hash`. 0 (public) if the
     hash is unknown or has no row in `books` — matches the design decision
@@ -556,6 +588,44 @@ def _rating_stats(db: Session, hash_ids) -> dict[str, dict]:
         hid: {"avg_rating": round(float(avg), 3), "rating_count": int(cnt)}
         for hid, avg, cnt in rows
     }
+
+
+def _attach_recommendations(items: list[dict], db: Session) -> None:
+    """For each item dict carrying a `hash_id`, set `is_recommended` (bool)
+    and — when recommended — `recommended_at` + `recommended_by_name`. One
+    LEFT JOIN against book_recommendations + users for the full batch. Items
+    without a hash_id (directories, unmanaged files) are left untouched.
+
+    `recommended_by_name` is the admin's real_name only — never their email.
+    Email is PII and these results flow out to anonymous browsers via
+    /api/browse and /api/search; an admin who hasn't filled in a real_name
+    shows up as None (frontend falls back to a generic "Recommended" label).
+    The User join is a LEFT JOIN so a hard-deleted admin row leaves the
+    recommendation visible rather than silently flipping it off."""
+    hash_ids = [it["hash_id"] for it in items if it.get("hash_id")]
+    if not hash_ids:
+        return
+    rows = (
+        db.query(
+            models.BookRecommendation.hash_id,
+            models.BookRecommendation.recommended_at,
+            models.User.real_name,
+        )
+        .outerjoin(models.User, models.User.id == models.BookRecommendation.recommended_by)
+        .filter(models.BookRecommendation.hash_id.in_(hash_ids))
+        .all()
+    )
+    recs = {h: (at, rn) for h, at, rn in rows}
+    for it in items:
+        h = it.get("hash_id")
+        if not h:
+            continue
+        if h in recs:
+            it["is_recommended"] = True
+            it["recommended_at"] = recs[h][0]
+            it["recommended_by_name"] = recs[h][1]
+        else:
+            it["is_recommended"] = False
 
 
 def assert_can_read_path(symlink_fs_path: str, user: models.User | None, db: Session) -> None:
@@ -1038,6 +1108,36 @@ async def browse(request: Request, path: str = "", current_user: models.User | N
         it["avg_rating"] = s["avg_rating"] if s else None
         it["rating_count"] = s["rating_count"] if s else 0
 
+    # Attach every symlink_path under which each managed book is reachable. A
+    # single book can be hard-linked into more than one topic; ItemView shows
+    # the full list so users see all the places they can find it.
+    #
+    # Per CLAUDE.md, any endpoint that lists directories/paths must route
+    # through the same clearance check as `_accessible_locations_query`.
+    # Each `hash_id` here belongs to an item that already passed the per-book
+    # clearance gate at L1063-66, so the JOIN below is redundant in steady
+    # state — but it's defense-in-depth against any future regression that
+    # lets a high-clearance book leak into the items list.
+    hash_ids = [it.get("hash_id") for it in items if it.get("hash_id")]
+    if hash_ids:
+        loc_q = db.query(models.BookLocation.hash_id, models.BookLocation.symlink_path).filter(
+            models.BookLocation.hash_id.in_(hash_ids)
+        )
+        if not _is_admin(current_user):
+            loc_q = loc_q.join(
+                models.Book, models.Book.id == models.BookLocation.hash_id
+            ).filter(models.Book.clearance <= _clearance_of(current_user))
+        loc_rows = loc_q.all()
+        locs_by_hash: dict[str, list[str]] = {}
+        for h, p in loc_rows:
+            locs_by_hash.setdefault(h, []).append(p)
+        for it in items:
+            h = it.get("hash_id")
+            if h:
+                it["locations"] = sorted(locs_by_hash.get(h, []))
+
+    _attach_recommendations(items, db)
+
     _record_usage_event(request, "page", user=current_user, path=path or "/")
     return {"path": path, "items": items}
 
@@ -1429,6 +1529,8 @@ async def search(
         m["avg_rating"] = s["avg_rating"] if s else None
         m["rating_count"] = s["rating_count"] if s else 0
 
+    _attach_recommendations(matches, db)
+
     # Record only non-empty searches; an empty `q` was short-circuited above.
     _record_usage_event(
         request, "search",
@@ -1759,6 +1861,342 @@ async def admin_bulk_set_book_clearance(
     return {"updated": updated, "clearance": payload.clearance}
 
 
+def _sanitize_for_fs(name: str, max_len: int = 200) -> str:
+    """Sanitize a string for use as a single path component. Replaces path
+    separators and control chars with spaces, collapses runs of whitespace,
+    strips leading/trailing dots (so the result can't be a hidden file or '.'
+    / '..'). Returns the empty string when nothing usable is left — callers
+    fall back to original_filename in that case."""
+    cleaned = re.sub(r"[\\/\x00-\x1f\x7f]+", " ", name or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().strip(".")
+    return cleaned[:max_len]
+
+
+def _recommended_basename(book: models.Book) -> str:
+    """Filename to use for the symlink under RECOMMENDED_DIR. Prefer a
+    sanitized version of the book title + the format extension carried by
+    original_filename; fall back to a sanitized original_filename when the
+    title is empty, and to the truncated hash when even that yields nothing
+    after sanitization. Every return value goes through `_sanitize_for_fs`
+    so `os.path.join(RECOMMENDED_DIR, ...)` cannot escape RECOMMENDED_DIR
+    via `../` segments in user-controlled metadata."""
+    title = _sanitize_for_fs(book.title or "")
+    ext = ""
+    if book.original_filename and "." in book.original_filename:
+        ext = "." + _sanitize_for_fs(book.original_filename.rsplit(".", 1)[-1])
+        if ext == ".":
+            ext = ""
+    if title:
+        return f"{title}{ext}" if ext else title
+    fallback = _sanitize_for_fs(book.original_filename or "")
+    return fallback or book.id[:12]
+
+
+def _find_free_recommended_name(base: str) -> str:
+    """Append `-2`, `-3`, … to the stem until the name is free under
+    RECOMMENDED_DIR. Uses os.path.lexists so broken symlinks still count as
+    collisions."""
+    if not os.path.lexists(os.path.join(RECOMMENDED_DIR, base)):
+        return base
+    if "." in base:
+        stem, _, ext = base.rpartition(".")
+        ext = "." + ext
+    else:
+        stem, ext = base, ""
+    i = 2
+    while True:
+        candidate = f"{stem}-{i}{ext}"
+        if not os.path.lexists(os.path.join(RECOMMENDED_DIR, candidate)):
+            return candidate
+        i += 1
+
+
+def _create_recommendation(db: Session, admin: models.User, book: models.Book) -> str:
+    """Materialise a recommendation: create the symlink in RECOMMENDED_DIR,
+    add a book_locations row, insert a book_recommendations row. Returns the
+    chosen relative symlink_path (e.g. ``"Recommended/Voyna i mir.pdf"``).
+
+    Does NOT commit — caller is responsible. Caller MUST also have verified
+    the book is not already recommended; this helper does not re-check, so a
+    second call for the same book leaves a duplicate symlink behind.
+    """
+    base = _recommended_basename(book)
+    if not base:
+        raise HTTPException(status_code=400, detail="Cannot derive a filename for recommendation")
+    os.makedirs(RECOMMENDED_DIR, exist_ok=True)
+    name = _find_free_recommended_name(base)
+    rel = f"Recommended/{name}"
+    dst_abs = os.path.join(RECOMMENDED_DIR, name)
+    # Defense-in-depth: `_recommended_basename` already sanitises both branches,
+    # but a future regression that lets `..` segments through must not be able
+    # to land the symlink outside RECOMMENDED_DIR. Mirrors the abspath guard
+    # used throughout main.py for BOOKS_DIR.
+    if not os.path.abspath(dst_abs).startswith(os.path.abspath(RECOMMENDED_DIR) + os.sep):
+        raise HTTPException(status_code=400, detail="Cannot derive a filename for recommendation")
+    vault_path = os.path.join(DATA_DIR, book.id)
+    target = os.path.relpath(vault_path, RECOMMENDED_DIR)
+    try:
+        os.symlink(target, dst_abs)
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Recommended path collided mid-flight")
+    try:
+        db.add(models.BookLocation(hash_id=book.id, symlink_path=rel))
+        db.add(models.BookRecommendation(
+            hash_id=book.id,
+            recommended_by=admin.id,
+            recommended_at=_now_iso(),
+        ))
+    except Exception:
+        try:
+            os.unlink(dst_abs)
+        except OSError:
+            pass
+        raise
+    return rel
+
+
+def _remove_recommendation(db: Session, hash_id: str) -> tuple[list[str], bool]:
+    """Tear down a recommendation: unlink every Recommended/ symlink for this
+    hash (FileNotFoundError tolerated), delete those book_locations rows, and
+    drop the book_recommendations row. Returns (removed_symlink_paths,
+    had_recommendation_row). Does NOT commit — caller is responsible."""
+    rec_locs = db.query(models.BookLocation).filter(
+        models.BookLocation.hash_id == hash_id,
+        models.BookLocation.symlink_path.like("Recommended/%"),
+    ).all()
+    removed: list[str] = []
+    for loc in rec_locs:
+        abs_path = os.path.join(BOOKS_DIR, loc.symlink_path)
+        try:
+            os.unlink(abs_path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logging.warning("unrecommend: failed to unlink %s: %s", loc.symlink_path, e)
+        db.delete(loc)
+        removed.append(loc.symlink_path)
+    deleted_rec = db.query(models.BookRecommendation).filter(
+        models.BookRecommendation.hash_id == hash_id
+    ).delete(synchronize_session=False)
+    return removed, bool(deleted_rec)
+
+
+@app.post("/api/admin/books/{hash_id}/recommend", response_model=schemas.RecommendationResponse)
+async def admin_recommend_book(
+    request: Request,
+    hash_id: str,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Mark a book as recommended. Creates a symlink under
+    /Books/Recommended/ named from the book's title (or original_filename when
+    title is empty), registers the new book_locations row, and stores
+    who/when in book_recommendations. Idempotent: re-recommending an already-
+    recommended book is a no-op that returns the existing record."""
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    rec = db.query(models.BookRecommendation).filter(
+        models.BookRecommendation.hash_id == hash_id
+    ).first()
+    topic_path = _primary_topic_path(db, hash_id)
+    new_symlink: Optional[str] = None
+    if rec is None:
+        new_symlink = _create_recommendation(db, admin, book)
+        _audit(db, admin, "book.recommend",
+               target_kind="book", target_id=hash_id,
+               summary=f'Recommended "{book.title or book.original_filename}"',
+               details={"title": book.title or book.original_filename,
+                        "path": topic_path,
+                        "symlink_path": new_symlink})
+        # Symlink is already on disk; if the commit fails the DB rolls back but
+        # the symlink would orphan unless we tear it down too.
+        try:
+            db.commit()
+        except Exception:
+            try:
+                os.unlink(os.path.join(BOOKS_DIR, new_symlink))
+            except OSError:
+                pass
+            raise
+        rec = db.query(models.BookRecommendation).filter(
+            models.BookRecommendation.hash_id == hash_id
+        ).first()
+    if new_symlink:
+        _record_usage_event(request, "recommend", user=admin,
+                            hash_id=hash_id,
+                            path=topic_path,
+                            extra={"title": book.title or book.original_filename,
+                                   "symlink_path": new_symlink})
+    rec_user = db.query(models.User).filter(models.User.id == rec.recommended_by).first()
+    return schemas.RecommendationResponse(
+        hash_id=hash_id,
+        recommended_by=rec.recommended_by,
+        recommended_by_name=rec_user.real_name if rec_user else None,
+        recommended_at=rec.recommended_at,
+        symlink_path=new_symlink,
+    )
+
+
+@app.delete("/api/admin/books/{hash_id}/recommend", response_model=schemas.UnrecommendResponse)
+async def admin_unrecommend_book(
+    request: Request,
+    hash_id: str,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove a book from the Recommended set. Deletes every book_locations
+    row whose path is under Recommended/ for this hash, unlinks each symlink
+    on disk (FileNotFoundError ignored), and drops the book_recommendations
+    row. Idempotent: returns ok with removed=[] when the book wasn't
+    recommended in the first place."""
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    # Snapshot a real topic path before we tear down the Recommended/ entries,
+    # so the usage event's Path column points at the book's actual location.
+    topic_path = _primary_topic_path(db, hash_id)
+    removed, had_rec = _remove_recommendation(db, hash_id)
+    changed = bool(removed) or had_rec
+    if changed:
+        _audit(db, admin, "book.unrecommend",
+               target_kind="book", target_id=hash_id,
+               summary=f'Removed recommendation for "{book.title or book.original_filename}"',
+               details={"title": book.title or book.original_filename,
+                        "path": topic_path,
+                        "removed": removed})
+    db.commit()
+    if changed:
+        _record_usage_event(request, "unrecommend", user=admin,
+                            hash_id=hash_id,
+                            path=topic_path,
+                            extra={"title": book.title or book.original_filename})
+    return {"ok": True, "removed": removed}
+
+
+@app.post("/api/admin/books/recommend/bulk", response_model=schemas.BulkRecommendResponse)
+async def admin_recommend_bulk(
+    request: Request,
+    payload: schemas.BulkRecommendRequest,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Bulk-recommend the listed books. Idempotent per book: already-
+    recommended hashes are silently counted as `unchanged`. One audit row +
+    one usage event per newly-recommended hash, so the per-book timeline
+    filters at /api/admin/usage and /api/me/activity surface each action."""
+    out = schemas.BulkRecommendResponse()
+    if not payload.hash_ids:
+        return out
+    # Dedup while preserving order — a client posting ["abc", "abc"] would
+    # otherwise pass the `already` pre-check twice and produce duplicate
+    # symlinks (Recommended/X.pdf, Recommended/X-2.pdf) plus a PK conflict at
+    # commit. Frontend currently dedups, but the API contract makes no such
+    # guarantee.
+    hash_ids = list(dict.fromkeys(payload.hash_ids))
+    books = {b.id: b for b in db.query(models.Book).filter(
+        models.Book.id.in_(hash_ids)
+    ).all()}
+    already = {
+        r[0] for r in db.query(models.BookRecommendation.hash_id).filter(
+            models.BookRecommendation.hash_id.in_(hash_ids)
+        ).all()
+    }
+    newly: list[tuple[str, str, str]] = []   # (hash_id, symlink_path, topic_path)
+    for hid in hash_ids:
+        book = books.get(hid)
+        if not book:
+            out.errors.append({"hash_id": hid, "reason": "not found"})
+            continue
+        if hid in already:
+            out.unchanged += 1
+            continue
+        try:
+            topic_path = _primary_topic_path(db, hid)
+            symlink_path = _create_recommendation(db, admin, book)
+            newly.append((hid, symlink_path, topic_path))
+            out.recommended += 1
+        except HTTPException as e:
+            out.errors.append({"hash_id": hid, "reason": str(e.detail)})
+        except Exception as e:
+            out.errors.append({"hash_id": hid, "reason": f"unexpected: {e}"})
+    if newly:
+        _audit(db, admin, "book.recommend",
+               target_kind="book", target_id=None,
+               summary=f"Recommended {len(newly)} books",
+               details={"bulk": True, "count": len(newly),
+                        "hash_ids": [h for h, _s, _p in newly][:25]})
+    # Every entry in `newly` already has its symlink on disk; if the commit
+    # fails the DB rolls back but those symlinks would orphan unless we tear
+    # them down too.
+    try:
+        db.commit()
+    except Exception:
+        for _hid, sym, _tp in newly:
+            try:
+                os.unlink(os.path.join(BOOKS_DIR, sym))
+            except OSError:
+                pass
+        raise
+    for hid, symlink_path, topic_path in newly:
+        book = books[hid]
+        _record_usage_event(request, "recommend", user=admin,
+                            hash_id=hid,
+                            path=topic_path,
+                            extra={"bulk": True,
+                                   "title": book.title or book.original_filename,
+                                   "symlink_path": symlink_path})
+    return out
+
+
+@app.post("/api/admin/books/unrecommend/bulk", response_model=schemas.BulkUnrecommendResponse)
+async def admin_unrecommend_bulk(
+    request: Request,
+    payload: schemas.BulkRecommendRequest,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Bulk-unrecommend the listed books — the "select all inside Recommended/
+    and remove them" workflow. Idempotent per book: hashes that weren't
+    recommended are counted as `unchanged`. One audit row + one usage event
+    per affected hash, so per-book timeline filters surface each action."""
+    out = schemas.BulkUnrecommendResponse()
+    if not payload.hash_ids:
+        return out
+    # Dedup while preserving order — see admin_recommend_bulk for why.
+    hash_ids = list(dict.fromkeys(payload.hash_ids))
+    affected: list[tuple[str, str]] = []   # (hash_id, topic_path)
+    for hid in hash_ids:
+        try:
+            topic_path = _primary_topic_path(db, hid)
+            removed, had_rec = _remove_recommendation(db, hid)
+            if removed or had_rec:
+                affected.append((hid, topic_path))
+                out.unrecommended += 1
+            else:
+                out.unchanged += 1
+        except Exception as e:
+            out.errors.append({"hash_id": hid, "reason": f"unexpected: {e}"})
+    if affected:
+        _audit(db, admin, "book.unrecommend",
+               target_kind="book", target_id=None,
+               summary=f"Removed recommendation for {len(affected)} books",
+               details={"bulk": True, "count": len(affected),
+                        "hash_ids": [h for h, _p in affected][:25]})
+    db.commit()
+    titles = {b.id: (b.title or b.original_filename)
+              for b in db.query(models.Book).filter(
+                  models.Book.id.in_([h for h, _p in affected])
+              ).all()} if affected else {}
+    for hid, topic_path in affected:
+        _record_usage_event(request, "unrecommend", user=admin,
+                            hash_id=hid,
+                            path=topic_path,
+                            extra={"bulk": True,
+                                   "title": titles.get(hid)})
+    return out
+
+
 def _cover_url_for(hash_id: str) -> Optional[str]:
     """Return a cache-busted URL for the book's cover if the JPEG exists in
     the vault, else None."""
@@ -1894,6 +2332,7 @@ async def admin_delete_book(
     db.query(models.ReadingProgress).filter(models.ReadingProgress.hash_id == hash_id).delete()
     db.query(models.BookRating).filter(models.BookRating.hash_id == hash_id).delete()
     db.query(models.BookComment).filter(models.BookComment.hash_id == hash_id).delete()
+    db.query(models.BookRecommendation).filter(models.BookRecommendation.hash_id == hash_id).delete()
     db.delete(book)
     _audit(db, admin, "book.delete",
            target_kind="book", target_id=hash_id,
@@ -1948,6 +2387,15 @@ async def admin_move(
     by `hash_id`, so they survive the move automatically."""
     src = _rel_under_books(payload.src)
     dst = _rel_under_books(payload.dst)
+
+    # The Recommended/ tree is managed only by the recommend/unrecommend
+    # endpoints. Refuse to move books into it, out of it, or to relocate the
+    # directory itself — use the (un)recommend action instead.
+    if _is_recommended_path(src) or _is_recommended_path(dst):
+        raise HTTPException(
+            status_code=400,
+            detail="The Recommended directory is managed automatically; use the recommend action instead of moving files.",
+        )
 
     if src == dst:
         return schemas.MoveResponse(
@@ -2406,6 +2854,11 @@ def admin_delete_dir(
     sub = _safe_subpath(path)
     if not sub:
         raise HTTPException(status_code=400, detail="Cannot delete root directory")
+    if _is_recommended_path(sub):
+        raise HTTPException(
+            status_code=400,
+            detail="The Recommended directory cannot be deleted. Remove individual books by unrecommending them.",
+        )
 
     target_dir = os.path.abspath(os.path.join(BOOKS_DIR, sub))
     books_root = os.path.abspath(BOOKS_DIR)
@@ -2538,6 +2991,10 @@ def admin_dirs(
                     dirs.add(entry)
         except OSError:
             pass
+    # Recommended/ is browsable but not a valid upload/move destination, so it
+    # must not appear as a pickable node in the upload directory tree.
+    if not sub:
+        dirs.discard(RECOMMENDED_SUBDIR)
     return {"path": sub, "dirs": sorted(dirs)}
 
 
@@ -3026,6 +3483,11 @@ async def admin_commit_book(
     # uploading directly under root.
     rel_parts = [seg for seg in (top_dir, subpath) if seg]
     rel_dir = "/".join(rel_parts)
+    if _is_recommended_path(rel_dir):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot upload into the Recommended directory; recommend a book from its page instead.",
+        )
     rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
     abs_target_dir = os.path.abspath(os.path.join(BOOKS_DIR, rel_dir))
     abs_target = os.path.abspath(os.path.join(BOOKS_DIR, rel_path))
@@ -4598,7 +5060,9 @@ async def get_favorites(current_user: models.User | None = Depends(get_optional_
                 "percent": progress_map.get(fav.hash_id),
             }
 
-    return {"items": list(fav_dict.values())}
+    items = list(fav_dict.values())
+    _attach_recommendations(items, db)
+    return {"items": items}
 
 @app.post("/api/favorites", response_model=schemas.FavoriteResponse)
 async def add_favorite(fav: schemas.FavoriteCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -5554,7 +6018,8 @@ async def admin_audit_stats(
 # /api/admin/usage/settings. Module-level set is replaced (not mutated)
 # whenever the admin saves, so readers in _record_usage_event need no lock —
 # CPython's GIL guarantees an atomic name rebind, and `in` on a set is O(1).
-_USAGE_KINDS_ALL = ("page", "book_open", "search", "login", "register")
+_USAGE_KINDS_ALL = ("page", "book_open", "search", "login", "register",
+                    "recommend", "unrecommend")
 _enabled_kinds: frozenset[str] = frozenset(_USAGE_KINDS_ALL)
 
 

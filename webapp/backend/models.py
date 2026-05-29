@@ -90,6 +90,23 @@ class BookLocation(Base):
     symlink_path = Column(String, primary_key=True)
 
 
+class BookRecommendation(Base):
+    """Admin-curated "recommended book" flag. A row here means the book has a
+    companion symlink under /Books/Recommended/. The symlink lives in
+    book_locations like any other location, so the location panel and the
+    multi-location browse logic Just Work. This table only records the
+    "who/when" of the most recent recommend action — re-recommending overwrites
+    `recommended_by` + `recommended_at`."""
+    __tablename__ = "book_recommendations"
+
+    hash_id        = Column(String, ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
+    recommended_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # ISO-8601 UTC. `index=True` ensures `metadata.create_all` materialises
+    # `ix_book_recommendations_at` on a fresh-install path that doesn't run
+    # the migration (matches the same index in migrations/0003 + lib_schema.sql).
+    recommended_at = Column(String, nullable=False, index=True)
+
+
 class BookRating(Base):
     """One 1-5 star rating per user per book. Not moderated — a rating counts
     toward the book's average as soon as it is submitted."""

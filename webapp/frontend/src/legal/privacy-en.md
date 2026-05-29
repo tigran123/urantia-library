@@ -18,6 +18,9 @@ When you visit any page in this library, the following is automatically recorded
 - **Browser identifier** (User-Agent) — the kind of browser and operating system you use.
 - **The pages you visit** — directories you browse, books you open, searches you make.
 - **Login and registration events** — the time you sign in, whether successfully or not.
+- **Administrative actions** (only if you have administrator privileges) — for example, recommending a book or removing it from the Recommended list.
+
+When you take such an action as an administrator, your display name (the **Real name** field on your profile — never your email address) is shown to other users, including unregistered visitors, alongside the affected book, so it is transparent who curates content. Administrators who leave the Real name field blank are not identified by name.
 
 If you are signed in, these events are linked to your account. If you visit without an account, they are linked only to your IP address.
 

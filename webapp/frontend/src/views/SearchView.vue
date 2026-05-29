@@ -2,12 +2,15 @@
 import { ref, onMounted, onUnmounted, watch, computed, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api, { startIntegrityJob, setBulkBookClearance, searchHashIds, type IntegrityMode } from '../api'
+import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, searchHashIds, type IntegrityMode } from '../api'
 
-const { t } = useI18n({ useScope: 'global' })
+const { t, locale } = useI18n({ useScope: 'global' })
+const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_by_name, it?.recommended_at)
 import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon, FolderIcon, ArrowUpIcon, ArrowDownIcon, ScaleIcon, LockClosedIcon, CursorArrowRaysIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
+import QualityMark from '../components/QualityMark.vue'
+import { recommendedTooltip, bulkResultAlert } from '../lib/recommended'
 import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultiple } from '../composables/useGridItemSize'
 import { formatBytes, fileTypeLabel } from '../lib/itemFormat'
 
@@ -29,6 +32,7 @@ const selectMode = ref(false)
 const selected = ref<Set<string>>(new Set())
 const verifyStarting = ref(false)
 const clearanceSaving = ref(false)
+const recommendingBulk = ref(false)
 
 const toggleSelectMode = () => {
   selectMode.value = !selectMode.value
@@ -125,6 +129,25 @@ const startSelectionSetClearance = async () => {
     alert(err?.response?.data?.detail || err?.message || 'error')
   } finally {
     clearanceSaving.value = false
+  }
+}
+
+const startSelectionRecommend = async () => {
+  const ids = Array.from(selected.value)
+  if (!ids.length) return
+  recommendingBulk.value = true
+  try {
+    const res = await recommendBooksBulk(ids)
+    const idSet = new Set(ids)
+    for (const m of matches.value) {
+      if (m.hash_id && idSet.has(m.hash_id)) m.is_recommended = true
+    }
+    clearSelection()
+    bulkResultAlert(t, 'recommend', res.data)
+  } catch (err: any) {
+    alert(err?.response?.data?.detail || err?.message || 'error')
+  } finally {
+    recommendingBulk.value = false
   }
 }
 
@@ -680,6 +703,11 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   </div>
 
                   <div class="mt-2 text-xs text-gray-400 dark:text-gray-500 flex items-center gap-2 flex-wrap">
+                     <QualityMark
+                       v-if="match.is_recommended"
+                       class="h-4 w-4 text-green-600 dark:text-green-400"
+                       :title="recTip(match)"
+                     />
                      <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" />
                      <span v-if="match.rating_count" class="text-gray-300 dark:text-gray-600">·</span>
                      <span v-if="fileTypeLabel(match.name)" class="font-semibold">{{ fileTypeLabel(match.name) }}</span>
@@ -687,7 +715,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                      <span v-if="match.size != null">{{ formatBytes(match.size) }}</span>
                      <span v-if="fileTypeLabel(match.name) || match.size != null" class="text-gray-300 dark:text-gray-600">·</span>
                      <span class="flex items-center gap-1">
-                       {{ $t('app.location') }}
+                       {{ $t('app.location') }}:
                        <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 dark:hover:text-blue-400 hover:underline">
                          /{{ match.parent_dir || 'Root' }}
                        </router-link>
@@ -741,6 +769,13 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <CheckCircleIconSolid v-if="isSelected(match.hash_id)" class="h-6 w-6 text-emerald-500" />
               <CheckCircleIcon v-else class="h-6 w-6 text-gray-400 dark:text-gray-500" />
             </div>
+            <span
+              v-if="match.is_recommended"
+              :class="['absolute top-2 left-2 z-10 inline-flex items-center justify-center rounded-full bg-white/80 dark:bg-gray-800/80 shadow-sm backdrop-blur-sm border border-gray-100 dark:border-gray-600', gridCls.iconBtn]"
+              :title="recTip(match)"
+            >
+              <QualityMark :class="[gridCls.icon, 'text-green-600 dark:text-green-400']" />
+            </span>
             <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(match.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
               <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" :class="gridCls.icon" />
               <BookmarkIcon v-else :class="gridCls.icon" />
@@ -748,7 +783,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             <button
               v-if="currentUser?.is_admin && match.hash_id"
               @click.prevent="editBookClearance(match, $event)"
-              :class="['absolute top-2 left-2 z-10 rounded font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800', gridCls.badge]"
+              :class="['absolute top-2 left-1/2 -translate-x-1/2 z-10 rounded font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800', gridCls.badge]"
               :title="t('admin.edit_clearance_tooltip')"
             >🔒 {{ match.clearance ?? 0 }}</button>
 
@@ -827,6 +862,17 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       >
         <LockClosedIcon class="h-4 w-4" />
         {{ t('admin.integrity.set_clearance_selected') }}
+      </button>
+      <!-- Search results aren't path-scoped, so the "Unrecommend selected"
+           variant (BrowseView, only when inside /Recommended/) has no analogue
+           here — search only offers Recommend. -->
+      <button
+        @click="startSelectionRecommend()"
+        :disabled="!selected.size || recommendingBulk"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <QualityMark class="h-4 w-4" />
+        {{ t('admin.recommend_selected') }}
       </button>
       <button
         @click="clearSelection()"

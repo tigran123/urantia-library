@@ -225,6 +225,44 @@ class BookRatingStats(BaseModel):
     rating_count: int = 0
 
 
+class RecommendationResponse(BaseModel):
+    """Returned by POST /api/admin/books/{hash_id}/recommend. Names the
+    admin who flipped the flag (`recommended_by_name` is real_name only —
+    email is PII and these results flow to anonymous browsers, so the
+    fallback is None rather than the admin's address) and surfaces the
+    freshly-created symlink_path so the UI can patch `item.locations`
+    locally without a full refetch."""
+    hash_id: str
+    recommended_by: int
+    recommended_by_name: Optional[str] = None
+    recommended_at: str
+    symlink_path: Optional[str] = None    # path of the Recommended/* symlink; None when already-recommended
+
+
+class BulkRecommendRequest(BaseModel):
+    hash_ids: List[str]
+
+
+class BulkRecommendResponse(BaseModel):
+    recommended: int = 0      # number of books newly recommended in this batch
+    unchanged: int = 0        # already-recommended, skipped silently
+    errors: List[dict] = []   # [{hash_id, reason}]
+
+
+class BulkUnrecommendResponse(BaseModel):
+    unrecommended: int = 0    # number of books removed from Recommended in this batch
+    unchanged: int = 0        # weren't recommended, skipped silently
+    errors: List[dict] = []   # [{hash_id, reason}]
+
+
+class UnrecommendResponse(BaseModel):
+    """Returned by DELETE /api/admin/books/{hash_id}/recommend. `removed` lists
+    the Recommended/* symlink paths the call actually unlinked — empty when the
+    book wasn't recommended in the first place (idempotent no-op)."""
+    ok: bool = True
+    removed: List[str] = []
+
+
 class CommentCreate(BaseModel):
     body: str
     parent_id: Optional[int] = None

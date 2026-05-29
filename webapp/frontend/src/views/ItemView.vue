@@ -5,11 +5,14 @@ import api, {
   verifyBook,
   getMyRating, setMyRating,
   getComments, postComment, editComment, deleteComment,
+  recommendBook, unrecommendBook,
   type IntegrityCheckResult, type IntegrityMode, type CommentNode,
 } from '../api'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, FlagIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
+import QualityMark from '../components/QualityMark.vue'
+import { recommendedTooltip, recommendedByValue } from '../lib/recommended'
 import { useI18n } from 'vue-i18n'
 import DjvuViewer from '../components/DjvuViewer.vue'
 import EpubViewer from '../components/EpubViewer.vue'
@@ -21,7 +24,9 @@ import BookMetadataEditor from '../components/BookMetadataEditor.vue'
 // pdfjs-dist is ~1MB; keep it out of the main bundle by lazy-loading.
 const PdfViewer = defineAsyncComponent(() => import('../components/PdfViewer.vue'))
 
-const { t } = useI18n({ useScope: 'global' })
+const { t, locale } = useI18n({ useScope: 'global' })
+const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_by_name, it?.recommended_at)
+const recByValue = (it: any) => recommendedByValue(t, locale.value, it?.recommended_by_name, it?.recommended_at)
 const route = useRoute()
 const router = useRouter()
 const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
@@ -153,6 +158,37 @@ const requireAuth = (): boolean => {
     return false
   }
   return true
+}
+
+const toggleRecommend = async () => {
+  if (!item.value || !item.value.hash_id) return
+  if (!currentUser.value?.is_admin) return
+  const id = item.value.hash_id
+  try {
+    if (item.value.is_recommended) {
+      const res = await unrecommendBook(id)
+      const removed = new Set(res.data.removed || [])
+      item.value.is_recommended = false
+      item.value.recommended_at = null
+      item.value.recommended_by_name = null
+      if (Array.isArray(item.value.locations)) {
+        item.value.locations = item.value.locations.filter((p: string) => !removed.has(p))
+      }
+    } else {
+      const res = await recommendBook(id)
+      item.value.is_recommended = true
+      item.value.recommended_at = res.data.recommended_at
+      item.value.recommended_by_name = res.data.recommended_by_name
+      if (res.data.symlink_path) {
+        const next = Array.isArray(item.value.locations) ? [...item.value.locations] : []
+        if (!next.includes(res.data.symlink_path)) next.push(res.data.symlink_path)
+        next.sort()
+        item.value.locations = next
+      }
+    }
+  } catch (err) {
+    console.error('Failed to toggle recommendation', err)
+  }
 }
 
 const toggleFavorite = async () => {
@@ -466,6 +502,11 @@ const submitReply = async () => {
         <!-- Left Column: Cover Image -->
         <div class="md:col-span-1 flex flex-col items-center">
           <div class="w-full max-w-sm aspect-[3/4] rounded-lg shadow-xl overflow-hidden bg-white dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700 relative">
+            <QualityMark
+              v-if="item.is_recommended"
+              class="absolute top-3 left-3 z-10 h-8 w-8 text-green-600 dark:text-green-400 drop-shadow"
+              :title="recTip(item)"
+            />
             <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" :alt="item.name" class="w-full h-full object-contain" />
             <template v-else-if="(isMd || isTxt || isCode) && (textPreview.html || textPreview.text)">
               <div
@@ -488,8 +529,43 @@ const submitReply = async () => {
             </template>
             <DocumentIcon v-else class="w-32 h-32 text-gray-300 dark:text-gray-600" />
           </div>
-          <div v-if="item.hash_id && currentUser" class="mt-4 flex justify-center">
+          <div v-if="item.hash_id && item.rating_count" class="mt-3 flex justify-center">
+            <StarRating :rating="item.avg_rating" :count="item.rating_count" size="h-5 w-5" />
+          </div>
+          <div v-if="item.hash_id" class="mt-3 flex items-center justify-center gap-1">
+            <button
+              v-if="currentUser?.is_admin"
+              @click.prevent="openEditor()"
+              class="p-2 rounded-full text-gray-400 hover:text-blue-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              :title="t('admin.edit_book')"
+            >
+              <PencilSquareIcon class="h-7 w-7" />
+            </button>
+            <button
+              v-if="currentUser?.is_admin"
+              @click.prevent="openVerify()"
+              class="p-2 rounded-full text-gray-400 hover:text-emerald-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              :title="t('admin.integrity.verify_tooltip')"
+            >
+              <ShieldCheckIcon class="h-7 w-7" />
+            </button>
+            <button
+              v-if="currentUser?.is_admin"
+              @click.prevent="toggleRecommend()"
+              class="p-2 rounded-full transition-colors hover:bg-gray-200 dark:hover:bg-gray-700"
+              :class="item.is_recommended
+                ? 'text-green-600 dark:text-green-400'
+                : 'text-gray-400 hover:text-green-600 dark:hover:text-green-400'"
+              :title="item.is_recommended ? t('app.unrecommend') : t('app.recommend')"
+            >
+              <QualityMark class="h-7 w-7" />
+            </button>
+            <button @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? t('app.remove_favorite') : t('app.add_favorite')">
+              <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-7 w-7" />
+              <BookmarkIcon v-else class="h-7 w-7" />
+            </button>
             <router-link
+              v-if="currentUser"
               :to="{
                 name: 'feedback-compose',
                 query: {
@@ -499,61 +575,26 @@ const submitReply = async () => {
                   book_author: item.author || '',
                 },
               }"
-              class="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/50 hover:border-amber-400 dark:hover:border-amber-600 transition-colors"
+              class="p-2 rounded-full text-gray-400 hover:text-amber-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              :title="t('feedback.report')"
             >
-              <FlagIcon class="h-4 w-4" />
-              {{ t('feedback.report') }}
+              <FlagIcon class="h-7 w-7" />
             </router-link>
           </div>
         </div>
 
         <!-- Right Column: Metadata & Actions -->
         <div class="md:col-span-2 flex flex-col justify-center space-y-6">
-          <div>
-            <div class="flex items-start justify-between gap-4">
-              <h1 class="text-2xl md:text-4xl font-serif font-bold text-gray-900 dark:text-gray-100 break-words leading-tight">
-                {{ item.title || item.name.replace(/\.[^/.]+$/, "") }}
-              </h1>
-              <div class="flex items-center gap-1 flex-shrink-0 mt-1">
-                <button
-                  v-if="currentUser?.is_admin && item.hash_id"
-                  @click.prevent="openEditor()"
-                  class="p-2 rounded-full text-gray-400 hover:text-blue-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  :title="t('admin.edit_book')"
-                >
-                  <PencilSquareIcon class="h-7 w-7" />
-                </button>
-                <button
-                  v-if="currentUser?.is_admin && item.hash_id"
-                  @click.prevent="openVerify()"
-                  class="p-2 rounded-full text-gray-400 hover:text-emerald-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  :title="t('admin.integrity.verify_tooltip')"
-                >
-                  <ShieldCheckIcon class="h-7 w-7" />
-                </button>
-                <button v-if="item.hash_id" @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? t('app.remove_favorite') : t('app.add_favorite')">
-                  <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-7 w-7" />
-                  <BookmarkIcon v-else class="h-7 w-7" />
-                </button>
-              </div>
-            </div>
-            <h2 v-if="item.author" class="mt-2 text-xl md:text-2xl text-gray-700 dark:text-gray-300 font-medium">
-              {{ item.author }}
-            </h2>
-            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400 font-sans break-all">
-              {{ item.name }}
-            </p>
-            <div v-if="item.hash_id && item.rating_count" class="mt-2">
-              <StarRating :rating="item.avg_rating" :count="item.rating_count" size="h-5 w-5" />
-            </div>
-          </div>
-          
           <!-- Details (collapsible metadata panel; expanded by default) -->
           <details open class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm group overflow-hidden">
             <summary class="px-6 py-4 cursor-pointer font-medium text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700/50 list-none flex items-center justify-between">
               <span>{{ t('app.details') }}</span>
               <span class="transition-transform group-open:rotate-90 text-gray-400">›</span>
             </summary>
+            <div v-if="item.description" class="px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+              <div class="font-medium text-gray-900 dark:text-gray-100 mb-2">{{ t('app.description') }}</div>
+              <div class="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 whitespace-pre-wrap" v-html="item.description"></div>
+            </div>
             <table class="w-full text-sm text-left border-t border-gray-200 dark:border-gray-700">
               <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
                 <tr v-if="item.title" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
@@ -597,12 +638,26 @@ const submitReply = async () => {
                   <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ formatBytes(item.size, 0) }} ({{ item.size }} {{ t('app.bytes') }})</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.location') }}</th>
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">
+                    {{ t(item.locations && item.locations.length > 1 ? 'app.locations' : 'app.location') }}
+                  </th>
                   <td class="px-6 py-3 text-gray-600 dark:text-gray-400">
-                    <router-link :to="`/browse/${currentPath.split('/').slice(0, -1).join('/')}`" class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline">
-                      /{{ currentPath.split('/').slice(0, -1).join('/') || 'Root' }}
-                    </router-link>
+                    <div
+                      v-for="loc in (item.locations && item.locations.length ? item.locations : [currentPath])"
+                      :key="loc"
+                      class="break-all"
+                      :class="{ 'font-semibold text-gray-900 dark:text-gray-100': loc === currentPath }"
+                    >
+                      <router-link
+                        :to="`/browse/${loc.split('/').slice(0, -1).join('/')}`"
+                        class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+                      >/{{ loc.split('/').slice(0, -1).join('/') || 'Root' }}</router-link>/<span class="font-normal">{{ loc.split('/').slice(-1)[0] }}</span>
+                    </div>
                   </td>
+                </tr>
+                <tr v-if="item.is_recommended && item.recommended_by_name" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.recommended_by_label') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ recByValue(item) }}</td>
                 </tr>
                 <tr v-if="currentUser?.is_admin && item.hash_id" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('admin.integrity.last_verified') }}</th>
@@ -631,10 +686,6 @@ const submitReply = async () => {
                 </tr>
               </tbody>
             </table>
-            <div v-if="item.description" class="px-6 py-4 border-t border-gray-200 dark:border-gray-700">
-              <div class="font-medium text-gray-900 dark:text-gray-100 mb-2">{{ t('app.description') }}</div>
-              <div class="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 whitespace-pre-wrap" v-html="item.description"></div>
-            </div>
           </details>
 
           <!-- Actions -->

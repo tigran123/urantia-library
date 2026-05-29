@@ -2,9 +2,10 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api, { startIntegrityJob, setBulkBookClearance, type IntegrityMode } from '../api'
+import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, unrecommendBooksBulk, type IntegrityMode } from '../api'
 
-const { t } = useI18n({ useScope: 'global' })
+const { t, locale } = useI18n({ useScope: 'global' })
+const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_by_name, it?.recommended_at)
 const currentUser = inject<Ref<{ is_admin?: boolean, email?: string } | null>>('currentUser', ref(null))
 const router = useRouter()
 
@@ -12,6 +13,7 @@ const selectMode = ref(false)
 const selected = ref<Set<string>>(new Set())
 const verifyStarting = ref(false)
 const clearanceSaving = ref(false)
+const recommendingBulk = ref(false)
 
 const toggleSelectMode = () => {
   selectMode.value = !selectMode.value
@@ -108,6 +110,44 @@ const startSelectionSetClearance = async () => {
   }
 }
 
+const startSelectionRecommend = async () => {
+  const ids = Array.from(selected.value)
+  if (!ids.length) return
+  recommendingBulk.value = true
+  try {
+    const res = await recommendBooksBulk(ids)
+    const idSet = new Set(ids)
+    for (const it of items.value) {
+      if (it.hash_id && idSet.has(it.hash_id)) it.is_recommended = true
+    }
+    clearSelection()
+    bulkResultAlert(t, 'recommend', res.data)
+  } catch (err: any) {
+    alert(err?.response?.data?.detail || err?.message || 'error')
+  } finally {
+    recommendingBulk.value = false
+  }
+}
+
+const startSelectionUnrecommend = async () => {
+  const ids = Array.from(selected.value)
+  if (!ids.length) return
+  recommendingBulk.value = true
+  try {
+    const res = await unrecommendBooksBulk(ids)
+    // Inside /Recommended/, the removed books no longer belong here — drop them
+    // from the listing so the view reflects the new state without a reload.
+    const idSet = new Set(ids)
+    items.value = items.value.filter((it: any) => !(it.hash_id && idSet.has(it.hash_id)))
+    clearSelection()
+    bulkResultAlert(t, 'unrecommend', res.data)
+  } catch (err: any) {
+    alert(err?.response?.data?.detail || err?.message || 'error')
+  } finally {
+    recommendingBulk.value = false
+  }
+}
+
 const editBookClearance = async (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
@@ -130,6 +170,8 @@ const editBookClearance = async (item: any, event: Event) => {
 import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon, LockClosedIcon, CursorArrowRaysIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
+import QualityMark from '../components/QualityMark.vue'
+import { recommendedTooltip, bulkResultAlert } from '../lib/recommended'
 import { gridItemSize, GRID_CLASSES, gridCls } from '../composables/useGridItemSize'
 import { formatBytes, fileTypeLabel } from '../lib/itemFormat'
 
@@ -138,6 +180,14 @@ const items = ref<any[]>([])
 const loading = ref(true)
 const error = ref('')
 const currentPath = ref('')
+
+// The Recommended/ pseudo-directory is special: it lives only at root, shows
+// the знак качества instead of a folder icon, can't be deleted, and is the
+// one place where bulk-select "remove" means "unrecommend".
+const RECOMMENDED_DIR_NAME = 'Recommended'
+const isRecommendedDir = (item: any) =>
+  currentPath.value === '' && item.is_dir && item.name === RECOMMENDED_DIR_NAME
+const isInRecommended = computed(() => currentPath.value === RECOMMENDED_DIR_NAME)
 const savedViewMode = localStorage.getItem('viewMode')
 const viewMode = ref<'grid' | 'list'>(savedViewMode === 'list' ? 'list' : 'grid')
 const favoriteIds = ref<Set<string>>(new Set())
@@ -436,6 +486,13 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <CheckCircleIconSolid v-if="isSelected(item.hash_id)" class="h-6 w-6 text-emerald-500" />
               <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
             </div>
+            <span
+              v-if="item.is_recommended"
+              :class="['absolute top-2 left-2 z-10 inline-flex items-center justify-center rounded-full bg-white/80 dark:bg-gray-800/80 shadow-sm backdrop-blur-sm border border-gray-100 dark:border-gray-600', gridCls.iconBtn]"
+              :title="recTip(item)"
+            >
+              <QualityMark :class="[gridCls.icon, 'text-green-600 dark:text-green-400']" />
+            </span>
             <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(item.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
               <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" :class="gridCls.icon" />
               <BookmarkIcon v-else :class="gridCls.icon" />
@@ -443,11 +500,11 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             <button
               v-if="currentUser?.is_admin && item.hash_id"
               @click.prevent="editBookClearance(item, $event)"
-              :class="['absolute top-2 left-2 z-10 rounded font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800', gridCls.badge]"
+              :class="['absolute top-2 left-1/2 -translate-x-1/2 z-10 rounded font-mono bg-amber-100 dark:bg-amber-900/70 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-800', gridCls.badge]"
               :title="t('admin.edit_clearance_tooltip')"
             >🔒 {{ item.clearance ?? 0 }}</button>
             <button
-              v-if="currentUser?.is_admin && item.is_dir"
+              v-if="currentUser?.is_admin && item.is_dir && !isRecommendedDir(item)"
               @click.prevent="deleteDirectory(item.path, item.name, $event)"
               :class="['absolute top-2 left-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 dark:hover:text-red-400 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn]"
               :title="t('admin.delete_directory')"
@@ -461,14 +518,30 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             <template v-if="item.is_dir">
               <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500', gridCls.card]">
                 <div :class="['aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors', gridCls.coverMargin]">
-                  <FolderIcon :class="[gridCls.bigIcon, 'text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400']" />
+                  <QualityMark
+                    v-if="isRecommendedDir(item)"
+                    :class="[gridCls.bigIcon, 'text-green-600 dark:text-green-400']"
+                    :title="t('app.recommended_badge_tooltip')"
+                  />
+                  <FolderIcon
+                    v-else
+                    :class="[gridCls.bigIcon, 'text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400']"
+                  />
                 </div>
                 <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words']" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
                 <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
               </a>
               <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500', gridCls.card]">
                 <div :class="['aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors', gridCls.coverMargin]">
-                  <FolderIcon :class="[gridCls.bigIcon, 'text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400']" />
+                  <QualityMark
+                    v-if="isRecommendedDir(item)"
+                    :class="[gridCls.bigIcon, 'text-green-600 dark:text-green-400']"
+                    :title="t('app.recommended_badge_tooltip')"
+                  />
+                  <FolderIcon
+                    v-else
+                    :class="[gridCls.bigIcon, 'text-blue-400 dark:text-blue-500 group-hover:text-blue-500 dark:group-hover:text-blue-400']"
+                  />
                 </div>
                 <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words']" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
                 <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
@@ -520,7 +593,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <!-- Icon / Cover -->
               <div class="flex-shrink-0">
                 <div v-if="item.is_dir" class="h-16 w-12 flex items-center justify-center bg-blue-50/50 dark:bg-gray-700/50 rounded shadow-sm border border-gray-200 dark:border-gray-700">
-                  <FolderIcon class="h-8 w-8 text-blue-400 dark:text-blue-500" />
+                  <QualityMark v-if="isRecommendedDir(item)" class="h-8 w-8 text-green-600 dark:text-green-400" :title="t('app.recommended_badge_tooltip')" />
+                  <FolderIcon v-else class="h-8 w-8 text-blue-400 dark:text-blue-500" />
                 </div>
                 <div v-else class="h-16 w-12 flex items-center justify-center bg-gray-100 dark:bg-gray-900 rounded shadow-sm overflow-hidden border border-gray-200 dark:border-gray-700">
                   <img v-if="item.cover_url" :src="getFullUrl(item.cover_url)" class="w-full h-full object-contain" />
@@ -550,6 +624,11 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 </div>
 
                 <div v-if="!item.is_dir" class="mt-2 text-xs text-gray-400 flex items-center gap-2 flex-wrap">
+                  <QualityMark
+                    v-if="item.is_recommended"
+                    class="h-4 w-4 text-green-600 dark:text-green-400"
+                    :title="recTip(item)"
+                  />
                   <StarRating v-if="item.rating_count" :rating="item.avg_rating" :count="item.rating_count" />
                   <span v-if="item.rating_count && (fileTypeLabel(item.name) || item.size != null)" class="text-gray-300">·</span>
                   <span v-if="fileTypeLabel(item.name)" class="font-semibold">{{ fileTypeLabel(item.name) }}</span>
@@ -630,6 +709,24 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       >
         <LockClosedIcon class="h-4 w-4" />
         {{ t('admin.integrity.set_clearance_selected') }}
+      </button>
+      <button
+        v-if="!isInRecommended"
+        @click="startSelectionRecommend()"
+        :disabled="!selected.size || recommendingBulk"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <QualityMark class="h-4 w-4" />
+        {{ t('admin.recommend_selected') }}
+      </button>
+      <button
+        v-else
+        @click="startSelectionUnrecommend()"
+        :disabled="!selected.size || recommendingBulk"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <QualityMark class="h-4 w-4" />
+        {{ t('admin.unrecommend_selected') }}
       </button>
       <button
         @click="clearSelection()"

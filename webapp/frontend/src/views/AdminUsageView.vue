@@ -5,6 +5,14 @@ import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
 
 const { t } = useI18n({ useScope: 'global' })
+
+// Localised label for a usage-event kind (page, book_open, recommend, …).
+// Falls back to the raw key when a translation is missing.
+const kindLabel = (kind: string): string => {
+  const key = `admin.usage.kind.${kind}`
+  const tx = t(key)
+  return tx === key ? kind : tx
+}
 const currentUser = inject<Ref<{ search_per_page?: number | null } | null>>(
   'currentUser',
   ref(null) as unknown as Ref<{ search_per_page?: number | null } | null>,
@@ -275,7 +283,7 @@ function formatExtra(extra: Record<string, any> | null): string {
         <h3 class="text-sm font-medium mb-3">{{ t('admin.usage.byKindTitle') }}</h3>
         <div class="space-y-1 text-sm">
           <div v-for="(n, kind) in overview.by_kind" :key="kind" class="flex items-center gap-2">
-            <span class="inline-block w-24 text-gray-600 dark:text-gray-400">{{ kind }}</span>
+            <span class="inline-block w-32 text-gray-600 dark:text-gray-400">{{ kindLabel(kind) }}</span>
             <span class="font-mono">{{ n }}</span>
           </div>
         </div>
@@ -465,7 +473,7 @@ function formatExtra(extra: Record<string, any> | null): string {
               </td>
               <td class="px-3 py-2 font-mono text-xs">{{ ev.ip }}</td>
               <td class="px-3 py-2 text-xs">{{ [ev.geo_city, ev.geo_country].filter(Boolean).join(', ') || '—' }}</td>
-              <td class="px-3 py-2 text-xs">{{ ev.kind }}</td>
+              <td class="px-3 py-2 text-xs">{{ kindLabel(ev.kind) }}</td>
               <td class="px-3 py-2 max-w-xs truncate font-mono text-xs" :title="ev.path || ''">{{ ev.path }}</td>
               <td class="px-3 py-2 max-w-xs truncate font-mono text-xs text-gray-500" :title="formatExtra(ev.extra)">{{ formatExtra(ev.extra) }}</td>
             </tr>
@@ -510,7 +518,7 @@ function formatExtra(extra: Record<string, any> | null): string {
             v-model="settingsLocalEnabled[kind]"
             class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
           />
-          <span class="font-mono text-sm">{{ kind }}</span>
+          <span class="text-sm font-medium">{{ kindLabel(kind) }}</span>
           <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.usage.settings.kindHint.' + kind) }}</span>
         </label>
       </div>
