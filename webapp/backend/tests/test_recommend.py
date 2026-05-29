@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from sqlalchemy import text as sa_text
 
 
 def _setup(tmp_path, monkeypatch, helpers, *, books=(("Topic/old.pdf", "Test Book"),)):
@@ -208,3 +209,145 @@ def test_bulk_recommend_then_unrecommend(app_ctx, tmp_path, monkeypatch):
         assert json.loads(rec_bulk.details_json).get("bulk") is True
     finally:
         db.close()
+
+
+def test_unrecommend_keeps_state_when_unlink_fails(app_ctx, tmp_path, monkeypatch):
+    """When os.unlink raises a non-FileNotFound OSError (PermissionError, RO
+    FS, …), `_remove_recommendation` must NOT delete the book_locations row
+    and must NOT drop the book_recommendations row. Previously these ran
+    unconditionally, leaving an orphan symlink on disk with no DB pointer
+    and falsely reporting `removed: [path]` to the caller.
+
+    Symptom of the old bug: the API said the book was unrecommended; the
+    symlink file remained under /Books/Recommended/; the next /api/browse
+    no longer marked the book as recommended; the next re-recommend picked
+    a different basename (`Foo-2.pdf`) because the orphan still occupied
+    the original slot."""
+    helpers, _captured, TestSession = app_ctx
+    main, models = helpers["main"], helpers["models"]
+    helpers["make_user"]("admin@x.com", admin=True)
+    ac = helpers["client_for"]("admin@x.com")
+    (hash_id,) = _setup(tmp_path, monkeypatch, helpers)
+
+    r = ac.post(f"/api/admin/books/{hash_id}/recommend")
+    assert r.status_code == 200, r.text
+
+    # Sabotage os.unlink so the unrecommend can't actually remove the symlink.
+    def fail_unlink(path):
+        raise PermissionError(f"simulated lock on {path}")
+    monkeypatch.setattr(main.os, "unlink", fail_unlink)
+
+    r2 = ac.delete(f"/api/admin/books/{hash_id}/recommend")
+    assert r2.status_code == 200, r2.text
+    # The API must NOT claim removal succeeded when unlink failed.
+    assert r2.json()["removed"] == []
+
+    db = TestSession()
+    try:
+        # book_recommendations row still present (would have caused orphan).
+        assert db.query(models.BookRecommendation).filter_by(hash_id=hash_id).count() == 1
+        # Recommended/* book_locations row still present.
+        recs = db.query(models.BookLocation).filter(
+            models.BookLocation.hash_id == hash_id,
+            models.BookLocation.symlink_path.like("Recommended/%"),
+        ).count()
+        assert recs == 1, "book_locations row must survive a failed unlink so retry can complete"
+    finally:
+        db.close()
+
+
+def test_recommend_returns_409_on_concurrent_unrecommend_race(app_ctx, tmp_path, monkeypatch):
+    """admin_recommend_book re-fetches the BookRecommendation row after
+    commit. If a concurrent DELETE /recommend lands between our commit and
+    the re-read, that row is gone — and the pre-fix code would dereference
+    `rec.recommended_by` → AttributeError 500. The fix raises 409 instead.
+
+    To simulate the race deterministically: patch Session.commit so that
+    the very first commit (the one inside admin_recommend_book) is followed
+    by a side-by-side session that DELETEs the just-committed row. The
+    endpoint's subsequent re-fetch then finds None and must 409."""
+    helpers, _captured, TestSession = app_ctx
+    main, models = helpers["main"], helpers["models"]
+    helpers["make_user"]("admin@x.com", admin=True)
+    ac = helpers["client_for"]("admin@x.com")
+    (hash_id,) = _setup(tmp_path, monkeypatch, helpers)
+
+    from sqlalchemy.orm import Session
+    original_commit = Session.commit
+    fired = {"once": False}
+    def commit_then_concurrent_delete(self):
+        result = original_commit(self)
+        if not fired["once"]:
+            fired["once"] = True
+            other = TestSession()
+            try:
+                other.query(models.BookRecommendation).filter_by(hash_id=hash_id).delete()
+                other.commit()
+            finally:
+                other.close()
+        return result
+    monkeypatch.setattr(Session, "commit", commit_then_concurrent_delete)
+
+    r = ac.post(f"/api/admin/books/{hash_id}/recommend")
+    assert r.status_code == 409, r.text
+
+
+def test_migration_0005_adds_usage_kinds_to_existing_row(app_ctx):
+    """Existing prod's app_meta.usage_events_enabled_kinds row was written
+    before _USAGE_KINDS_ALL gained `recommend` and `unrecommend`. After
+    deploy, _load_enabled_kinds intersects the loaded JSON with the in-code
+    tuple, silently dropping the two new kinds. Migration 0005 patches the
+    persisted JSON in place. Verify by simulating the pre-migration state,
+    invoking the upgrade function, then reading back."""
+    helpers, _captured, _TestSession = app_ctx
+    import json as _json
+    import importlib.util
+    import sqlite3
+    from pathlib import Path
+    from database import engine
+
+    # Seed an OLD-vocabulary row.
+    old_vocab = ["page", "book_open", "search", "login", "register"]
+    with engine.begin() as conn:
+        conn.execute(sa_text(
+            "INSERT OR REPLACE INTO app_meta(key, value) "
+            "VALUES ('usage_events_enabled_kinds', :v)"
+        ), {"v": _json.dumps(old_vocab)})
+
+    # migrate.py uses a raw sqlite3.Connection for .py upgrades — match that.
+    mig_path = Path(__file__).resolve().parent.parent / "migrations" / "0005_usage_kinds_add_recommend.py"
+    spec = importlib.util.spec_from_file_location("mig0005", mig_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # SQLAlchemy's in-memory StaticPool engine shares one underlying
+    # connection — we can extract it via raw_connection().
+    raw = engine.raw_connection()
+    try:
+        mod.upgrade(raw.driver_connection)
+        raw.commit()
+    finally:
+        raw.close()
+
+    with engine.connect() as conn:
+        row = conn.execute(sa_text(
+            "SELECT value FROM app_meta WHERE key='usage_events_enabled_kinds'"
+        )).fetchone()
+    after = _json.loads(row[0])
+    assert "recommend" in after and "unrecommend" in after
+    # Existing entries must be preserved.
+    assert set(old_vocab).issubset(after)
+
+    # Idempotent — re-running yields no further change.
+    before2 = sorted(after)
+    raw = engine.raw_connection()
+    try:
+        mod.upgrade(raw.driver_connection)
+        raw.commit()
+    finally:
+        raw.close()
+    with engine.connect() as conn:
+        row2 = conn.execute(sa_text(
+            "SELECT value FROM app_meta WHERE key='usage_events_enabled_kinds'"
+        )).fetchone()
+    assert sorted(_json.loads(row2[0])) == before2

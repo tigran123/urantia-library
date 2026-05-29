@@ -318,8 +318,6 @@ def test_blast_emails_all_active_users_only(app_ctx):
     finally:
         db.close()
 
-    # Reset any blast accumulated at import time.
-    captured.clear()
     main._send_legal_blast_emails()
 
     sent_to = sorted(e["to"] for e in captured)
@@ -378,6 +376,30 @@ def test_blast_throttle_fires_when_version_advances(app_ctx, monkeypatch):
     assert fired == [1], "second call must not re-fire — claim is one-shot per version"
 
 
+def test_import_main_does_not_fire_blast(app_ctx):
+    """Regression guard: importing main (e.g. from reimport_orphans.py) must
+    NOT fire the legal-blast trigger. Only uvicorn's ASGI lifespan startup
+    should — otherwise maintenance scripts can steal the one-shot claim on
+    app_meta.legal_blast_version, and the real service restart silently
+    skips the notification.
+
+    The conftest already imported main before this test ran. If that import
+    had fired the blast, the throttle key in the test DB would now equal
+    LEGAL_VERSION even though no test seeded it. Assert it hasn't been
+    touched (no row in app_meta exists for legal_blast_version)."""
+    helpers, _captured, _TestSession = app_ctx
+    from database import engine
+    with engine.connect() as conn:
+        row = conn.execute(sa_text(
+            "SELECT value FROM app_meta WHERE key='legal_blast_version'"
+        )).fetchone()
+    assert row is None, (
+        f"importing main fired the blast trigger — legal_blast_version "
+        f"already claimed at value={row[0]!r}. This means maintenance "
+        f"scripts can race the production startup."
+    )
+
+
 def test_blast_seeded_throttle_does_not_fire_on_rollout(app_ctx, monkeypatch):
     """At rollout time, migrations/0004 seeds legal_blast_version equal to the
     new LEGAL_VERSION, so the very first backend restart doesn't spam every
@@ -399,7 +421,74 @@ def test_blast_seeded_throttle_does_not_fire_on_rollout(app_ctx, monkeypatch):
     monkeypatch.setattr(main.threading, "Thread",
                         lambda target, daemon: type("FakeT", (), {"start": lambda self: target()})())
 
-    captured.clear()
     main._maybe_send_legal_blast()
     assert fired == [], "rollout must not mail anyone — throttle matches"
     assert captured == [], "no emails captured — the worker was never called"
+
+
+def test_blast_self_seeds_throttle_on_fresh_install(app_ctx, monkeypatch):
+    """A fresh install path that boots from lib_schema.sql alone (no migration
+    history) has no legal_blast_version row. The lifespan call must seed it
+    with the current LEGAL_VERSION (not ''), so the seeded admin user doesn't
+    get spammed on first boot."""
+    helpers, _captured, _TestSession = app_ctx
+    main = helpers["main"]
+    from database import LEGAL_VERSION, engine
+
+    helpers["make_user"]("admin@x.com")     # would be the only user on fresh install
+    with engine.begin() as conn:
+        conn.execute(sa_text("DELETE FROM app_meta WHERE key='legal_blast_version'"))
+
+    fired = []
+    monkeypatch.setattr(main, "_send_legal_blast_emails", lambda: fired.append(1))
+    monkeypatch.setattr(main.threading, "Thread",
+                        lambda target, daemon: type("FakeT", (), {"start": lambda self: target()})())
+
+    main._maybe_send_legal_blast()
+    assert fired == [], "fresh install must self-seed to LEGAL_VERSION, not blast"
+
+    with engine.connect() as conn:
+        row = conn.execute(sa_text(
+            "SELECT value FROM app_meta WHERE key='legal_blast_version'"
+        )).fetchone()
+    assert row is not None and row[0] == LEGAL_VERSION
+
+
+def test_lifespan_swallows_blast_trigger_exception(app_ctx, monkeypatch):
+    """If the SQLite write lock is briefly held (e.g. nightly_backup.sh at
+    03:00 UTC), _maybe_send_legal_blast can raise OperationalError. The
+    lifespan must catch + log so uvicorn still finishes startup.
+
+    Using TestClient as a context manager triggers the lifespan; if the
+    exception escaped, the `with` block would raise."""
+    helpers, _captured, _TestSession = app_ctx
+    main = helpers["main"]
+    from fastapi.testclient import TestClient
+
+    def boom():
+        raise RuntimeError("simulated startup-time DB lock")
+    monkeypatch.setattr(main, "_maybe_send_legal_blast", boom)
+
+    with TestClient(main.app) as c:
+        r = c.get("/api/legal/meta")
+        assert r.status_code == 200, r.text         # app booted despite the raise
+
+
+def test_lifespan_creates_recommended_dir(app_ctx, monkeypatch, tmp_path):
+    """The module-level os.makedirs(RECOMMENDED_DIR) used to run on bare
+    `import main` — which polluted maintenance hosts (reimport_orphans.py
+    imports main). The mkdir was moved into the lifespan. Verify the
+    directory is created when uvicorn enters the lifespan and not before."""
+    helpers, _captured, _TestSession = app_ctx
+    main = helpers["main"]
+    from fastapi.testclient import TestClient
+
+    target = tmp_path / "Recommended"
+    monkeypatch.setattr(main, "RECOMMENDED_DIR", str(target))
+    assert not target.exists()
+
+    with TestClient(main.app):
+        pass
+
+    assert target.is_dir(), "lifespan should have created RECOMMENDED_DIR"
+

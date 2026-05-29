@@ -23,4 +23,10 @@ UPDATE registration_requests
 -- rollout itself doesn't spam everyone. The first real blast fires only on
 -- the NEXT bump (when the operator next edits a .md and advances
 -- LEGAL_VERSION in database.py). See _maybe_send_legal_blast in main.py.
-INSERT OR REPLACE INTO app_meta(key, value) VALUES ('legal_blast_version', '2026-05-29');
+--
+-- OR IGNORE (not OR REPLACE) so a manual re-application — schema_version
+-- hand-rolled back for re-testing, restore-from-backup that already had a
+-- newer throttle — doesn't clobber a live value and re-fire the blast.
+-- (`_maybe_send_legal_blast` itself also self-seeds via INSERT OR IGNORE,
+-- so the fresh-install path that runs lib_schema.sql alone is covered.)
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('legal_blast_version', '2026-05-29');

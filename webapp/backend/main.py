@@ -23,6 +23,7 @@ from pathlib import Path
 import json
 import logging
 from datetime import datetime, timezone, timedelta
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import models
 import schemas
@@ -62,13 +63,20 @@ def _maybe_send_legal_blast():
     """At startup, fire the legal-update email blast iff LEGAL_VERSION has
     advanced since the last successful claim. Race-safe via a conditional
     UPDATE on app_meta — mirrors _maybe_send_feedback_digest and
-    _maybe_send_moderation_digest. The migration seeds legal_blast_version
-    to the current LEGAL_VERSION at deploy time so the rollout itself doesn't
-    spam everyone; the first real blast fires only on the NEXT bump."""
+    _maybe_send_moderation_digest.
+
+    Self-seeds the throttle key with the CURRENT LEGAL_VERSION on first
+    observation: a fresh install that booted from lib_schema.sql alone (no
+    migration history) starts at the current version, so no spam blast
+    fires for the seeded admin user. Migration 0004 seeds the same value
+    on existing installs at upgrade time. The first real blast fires only
+    on the NEXT LEGAL_VERSION bump."""
     with engine.begin() as conn:
-        conn.execute(sa_text(
-            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('legal_blast_version', '')"
-        ))
+        conn.execute(
+            sa_text("INSERT OR IGNORE INTO app_meta(key, value) "
+                    "VALUES ('legal_blast_version', :v)"),
+            {"v": LEGAL_VERSION},
+        )
         result = conn.execute(
             sa_text("UPDATE app_meta SET value = :new "
                     "WHERE key = 'legal_blast_version' AND value != :new"),
@@ -80,9 +88,35 @@ def _maybe_send_legal_blast():
     threading.Thread(target=_send_legal_blast_emails, daemon=True).start()
 
 
-_maybe_send_legal_blast()
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Fires on uvicorn ASGI startup — NOT on bare `import main`. This is
+    where one-time webapp startup side effects live (NOT module-level), so
+    maintenance scripts (reimport_orphans.py, migrate.py) that import main
+    don't trigger them.
 
-app = FastAPI()
+    Each step is wrapped in try/except so a transient failure (e.g. the
+    nightly online-backup briefly holding the SQLite write lock) doesn't
+    block uvicorn from coming up and serving requests. The state these
+    steps set up is either retried on the next restart or already covered
+    by a lazy fallback inside the request path."""
+    try:
+        os.makedirs(RECOMMENDED_DIR, exist_ok=True)
+    except OSError:
+        # Logged but not fatal — `_create_recommendation` has its own lazy
+        # `os.makedirs(..., exist_ok=True)`, so the next recommend action will
+        # retry; routes that don't touch Recommended/ are unaffected.
+        logging.exception("startup: failed to create RECOMMENDED_DIR")
+    try:
+        _maybe_send_legal_blast()
+    except Exception:
+        # Fire-and-forget telemetry, same posture as _record_usage_event. The
+        # conditional UPDATE that claims the throttle key never committed on
+        # an exception path, so the next restart will retry the claim.
+        logging.exception("startup: legal blast trigger failed; will retry on next restart")
+    yield
+
+app = FastAPI(lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -162,7 +196,9 @@ os.makedirs(FEEDBACK_ATTACHMENT_DIR, exist_ok=True)
 # from the upload tree picker (/api/admin/dirs).
 RECOMMENDED_SUBDIR = "Recommended"
 RECOMMENDED_DIR = os.path.join(BOOKS_DIR, RECOMMENDED_SUBDIR)
-os.makedirs(RECOMMENDED_DIR, exist_ok=True)
+# Directory creation is deferred to `_lifespan` (so bare `import main` from
+# maintenance scripts like reimport_orphans.py doesn't have a filesystem side
+# effect) and to `_create_recommendation` (lazy first-use fallback).
 _TOPDIR_SKIPLIST = {".claude", ".antigravitycli", ".vscode", ".data", "CLAUDE.md", "GEMINI.md", "urantia-library"}
 
 
@@ -2075,19 +2111,33 @@ def _remove_recommendation(db: Session, hash_id: str) -> tuple[list[str], bool]:
         models.BookLocation.symlink_path.like("Recommended/%"),
     ).all()
     removed: list[str] = []
+    all_unlinked = True
     for loc in rec_locs:
         abs_path = os.path.join(BOOKS_DIR, loc.symlink_path)
         try:
             os.unlink(abs_path)
         except FileNotFoundError:
-            pass
+            pass                                # already gone — desired post-state achieved
         except OSError as e:
+            # Real unlink failure (PermissionError, ReadOnly FS, …). Leave the
+            # book_locations row in place so a retry can complete the operation
+            # instead of falsely reporting `removed: [...]` while the symlink
+            # lingers on disk.
             logging.warning("unrecommend: failed to unlink %s: %s", loc.symlink_path, e)
+            all_unlinked = False
+            continue
         db.delete(loc)
         removed.append(loc.symlink_path)
-    deleted_rec = db.query(models.BookRecommendation).filter(
-        models.BookRecommendation.hash_id == hash_id
-    ).delete(synchronize_session=False)
+    # Only drop the recommendation row when every symlink for this hash was
+    # actually removed. If any unlink failed, keep the row so the book is
+    # still considered "recommended" (and its remaining symlink + book_location
+    # still match), letting the operator retry without falling into an orphan
+    # state where the file is on disk with no DB row pointing at it.
+    deleted_rec = 0
+    if all_unlinked:
+        deleted_rec = db.query(models.BookRecommendation).filter(
+            models.BookRecommendation.hash_id == hash_id
+        ).delete(synchronize_session=False)
     return removed, bool(deleted_rec)
 
 
@@ -2132,6 +2182,13 @@ async def admin_recommend_book(
         rec = db.query(models.BookRecommendation).filter(
             models.BookRecommendation.hash_id == hash_id
         ).first()
+        if rec is None:
+            # Race: a concurrent DELETE /recommend landed between our commit
+            # and this re-read, removing the row (and its book_locations +
+            # on-disk symlink) we just wrote. Surface as 409 so the client
+            # retries from fresh state rather than getting a 500 on
+            # rec.recommended_by below.
+            raise HTTPException(status_code=409, detail="Recommendation state changed mid-request")
     if new_symlink:
         _record_usage_event(request, "recommend", user=admin,
                             hash_id=hash_id,

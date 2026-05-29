@@ -13,7 +13,7 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{_BOOKS_DIR}/.data/db/lib.db"
 # from the DB and refuses to start when the two don't match — so a git pull
 # without a corresponding `python migrate.py` on prod fails loudly instead of
 # silently serving 500s from missing columns.
-EXPECTED_SCHEMA_VERSION = 4
+EXPECTED_SCHEMA_VERSION = 5
 
 # Bump this whenever you make a *material* change to one of the Privacy Policy
 # or Terms of Service .md files in webapp/frontend/src/legal/. Any
