@@ -1702,7 +1702,19 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
     if not db_req or db_req.status != "approved":
         raise HTTPException(status_code=400, detail="Invalid or unapproved token.")
 
-    # Create active user
+    # SetPasswordView now shows the same Privacy + ToS checkbox as registration,
+    # so the user re-acknowledges the *current* docs at this final onboarding
+    # step. Matches /api/register's wording at the analogous gate above.
+    if not data.accepted_legal:
+        raise HTTPException(
+            status_code=400,
+            detail="You must accept the Privacy Policy and Terms of Service to set your password.",
+        )
+
+    # Create active user. The checkbox click is a fresh consent event against
+    # the current LEGAL_VERSION — overriding whatever was recorded at registration
+    # submit (which may be stale if the admin took days to approve, or NULL for
+    # pre-0003 super-legacy requests).
     hashed_password = get_password_hash(data.password)
     real_name = (data.real_name or "").strip()[:100] or None
     new_user = models.User(
@@ -1710,20 +1722,19 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
         hashed_password=hashed_password,
         real_name=real_name,
         is_active=True,
-        # Carry the original consent timestamp forward to the user row. Pre-0003
-        # requests may have NULL here — fall back to "now" so the new user row
-        # always has a non-NULL acceptance timestamp (they had to walk through
-        # the approval email link, so they're consenting at this moment anyway).
-        accepted_legal_at=db_req.accepted_legal_at or _now_iso(),
-        # Do NOT default to LEGAL_VERSION here: SetPasswordView shows no legal
-        # text, so we cannot truthfully claim the user accepted the current
-        # version. Carry the request row's value verbatim — NULL for pre-0003
-        # super-legacy requests, or the backfilled previous-version stamp for
-        # 0003-era ones. The re-acceptance modal fires on first /api/me poll
-        # either way and asks for an explicit ack against the current docs.
-        legal_version_accepted=db_req.legal_version_accepted,
+        accepted_legal_at=_now_iso(),
+        legal_version_accepted=LEGAL_VERSION,
     )
     db.add(new_user)
+    # Flush so new_user.id is assigned by autoincrement before _audit() reads it
+    # for actor_user_id. Without this the row is still pending and id is None.
+    db.flush()
+    _audit(db, new_user, "legal.accept",
+           target_kind="user", target_id=str(new_user.id),
+           summary=f"Accepted legal version {LEGAL_VERSION}",
+           details={"version": LEGAL_VERSION,
+                    "previous_version": db_req.legal_version_accepted,
+                    "during": "set_password"})
     db.delete(db_req)
     db.commit()
 

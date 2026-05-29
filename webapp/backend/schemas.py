@@ -180,6 +180,10 @@ class UserSetPassword(BaseModel):
     token: str
     password: str
     real_name: Optional[str] = None
+    # Privacy Policy + ToS consent at the set-password step. Defaults to False
+    # so an older client tab from before this field was added gets a clean
+    # 400 instead of silently completing without consent.
+    accepted_legal: bool = False
 
 class FavoriteCreate(BaseModel):
     hash_id: str

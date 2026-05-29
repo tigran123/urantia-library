@@ -141,15 +141,17 @@ def test_anonymous_legal_accept_is_401(app_ctx):
     assert r.status_code == 401, r.text
 
 
-def test_set_password_does_not_stamp_legal_version_for_legacy_request(app_ctx):
-    """Pre-0003 super-legacy registration_requests rows have NULL
-    accepted_legal_at AND NULL legal_version_accepted. SetPasswordView never
-    shows the legal docs, so the resulting User row must carry NULL forward
-    — not silently inherit LEGAL_VERSION. The re-acceptance modal then fires
-    on first /api/me poll and forces an explicit ack."""
+def test_set_password_with_checkbox_stamps_current_version(app_ctx):
+    """SetPasswordView now shows the acceptance checkbox, so a user who
+    completes the set-password flow has just looked at the current docs.
+    The resulting users row gets LEGAL_VERSION + freshly-stamped
+    accepted_legal_at, and one legal.accept audit row is written with
+    during=set_password. Works even for pre-0003 super-legacy requests
+    (NULL accepted_legal_at AND NULL legal_version_accepted on the request)."""
     helpers, _captured, TestSession = app_ctx
     main, models = helpers["main"], helpers["models"]
     from fastapi.testclient import TestClient
+    from database import LEGAL_VERSION
 
     db = TestSession()
     try:
@@ -170,6 +172,7 @@ def test_set_password_does_not_stamp_legal_version_for_legacy_request(app_ctx):
         "token": "legacy-tok",
         "password": "hunter2",
         "real_name": "Legacy User",
+        "accepted_legal": True,
     })
     assert r.status_code == 200, r.text
 
@@ -177,15 +180,97 @@ def test_set_password_does_not_stamp_legal_version_for_legacy_request(app_ctx):
     try:
         u = db.query(models.User).filter_by(email="legacy@x.com").first()
         assert u is not None
-        from database import LEGAL_VERSION
-        assert u.legal_version_accepted is None, (
-            f"set-password silently stamped {u.legal_version_accepted!r} "
-            f"for a legacy request — bypassing the re-acceptance gate"
-        )
-        # `accepted_legal_at` is still backfilled to now (the user clicked the
-        # approval link), but version stays unknown.
+        assert u.legal_version_accepted == LEGAL_VERSION
         assert u.accepted_legal_at is not None
-        assert LEGAL_VERSION  # silence linter — just confirms the import works
+
+        rows = db.query(models.AdminAuditLog).filter_by(action="legal.accept").all()
+        assert len(rows) == 1
+        import json
+        d = json.loads(rows[0].details_json)
+        assert d["version"] == LEGAL_VERSION
+        assert d["previous_version"] is None         # legacy request had NULL
+        assert d["during"] == "set_password"
+        assert rows[0].actor_user_id == u.id
+        assert rows[0].target_id == str(u.id)
+    finally:
+        db.close()
+
+
+def test_set_password_without_checkbox_is_400(app_ctx):
+    """Critical guard: a client that fails to send accepted_legal=true (e.g.
+    a stale tab from before this deploy) must be rejected, and no users row
+    is left behind. Matches the analogous check on /api/register."""
+    helpers, _captured, TestSession = app_ctx
+    main, models = helpers["main"], helpers["models"]
+    from fastapi.testclient import TestClient
+
+    db = TestSession()
+    try:
+        db.add(models.RegistrationRequest(
+            email="nobox@x.com", status="approved", token="nobox-tok",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    c = TestClient(main.app)
+    r = c.post("/api/set-password", json={
+        "token": "nobox-tok",
+        "password": "hunter2",
+        # accepted_legal omitted — server-side default False
+    })
+    assert r.status_code == 400, r.text
+    assert "Privacy Policy" in r.json()["detail"]
+
+    db = TestSession()
+    try:
+        assert db.query(models.User).filter_by(email="nobox@x.com").count() == 0
+        # registration_requests row must NOT have been deleted either.
+        assert db.query(models.RegistrationRequest).filter_by(email="nobox@x.com").count() == 1
+    finally:
+        db.close()
+
+
+def test_set_password_audit_row_carries_previous_version(app_ctx):
+    """0003-era requests (after migration 0004's backfill) have
+    legal_version_accepted='2026-05-26'. The audit row written at
+    set-password must surface that in details.previous_version so an operator
+    can see the version transition, not just the final stamp."""
+    helpers, _captured, TestSession = app_ctx
+    main, models = helpers["main"], helpers["models"]
+    from fastapi.testclient import TestClient
+    from database import LEGAL_VERSION
+
+    db = TestSession()
+    try:
+        db.add(models.RegistrationRequest(
+            email="backfilled@x.com",
+            status="approved",
+            token="bf-tok",
+            accepted_legal_at="2026-05-26T10:00:00+00:00",
+            legal_version_accepted="2026-05-26",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    c = TestClient(main.app)
+    r = c.post("/api/set-password", json={
+        "token": "bf-tok",
+        "password": "hunter2",
+        "accepted_legal": True,
+    })
+    assert r.status_code == 200, r.text
+
+    db = TestSession()
+    try:
+        row = db.query(models.AdminAuditLog).filter_by(action="legal.accept").first()
+        assert row is not None
+        import json
+        d = json.loads(row.details_json)
+        assert d["previous_version"] == "2026-05-26"
+        assert d["version"] == LEGAL_VERSION
+        assert d["during"] == "set_password"
     finally:
         db.close()
 
