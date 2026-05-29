@@ -141,6 +141,55 @@ def test_anonymous_legal_accept_is_401(app_ctx):
     assert r.status_code == 401, r.text
 
 
+def test_set_password_does_not_stamp_legal_version_for_legacy_request(app_ctx):
+    """Pre-0003 super-legacy registration_requests rows have NULL
+    accepted_legal_at AND NULL legal_version_accepted. SetPasswordView never
+    shows the legal docs, so the resulting User row must carry NULL forward
+    — not silently inherit LEGAL_VERSION. The re-acceptance modal then fires
+    on first /api/me poll and forces an explicit ack."""
+    helpers, _captured, TestSession = app_ctx
+    main, models = helpers["main"], helpers["models"]
+    from fastapi.testclient import TestClient
+
+    db = TestSession()
+    try:
+        req = models.RegistrationRequest(
+            email="legacy@x.com",
+            status="approved",
+            token="legacy-tok",
+            accepted_legal_at=None,
+            legal_version_accepted=None,
+        )
+        db.add(req)
+        db.commit()
+    finally:
+        db.close()
+
+    c = TestClient(main.app)
+    r = c.post("/api/set-password", json={
+        "token": "legacy-tok",
+        "password": "hunter2",
+        "real_name": "Legacy User",
+    })
+    assert r.status_code == 200, r.text
+
+    db = TestSession()
+    try:
+        u = db.query(models.User).filter_by(email="legacy@x.com").first()
+        assert u is not None
+        from database import LEGAL_VERSION
+        assert u.legal_version_accepted is None, (
+            f"set-password silently stamped {u.legal_version_accepted!r} "
+            f"for a legacy request — bypassing the re-acceptance gate"
+        )
+        # `accepted_legal_at` is still backfilled to now (the user clicked the
+        # approval link), but version stays unknown.
+        assert u.accepted_legal_at is not None
+        assert LEGAL_VERSION  # silence linter — just confirms the import works
+    finally:
+        db.close()
+
+
 def test_register_stamps_legal_version(app_ctx):
     helpers, _captured, TestSession = app_ctx
     main, models = helpers["main"], helpers["models"]

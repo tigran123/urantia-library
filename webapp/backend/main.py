@@ -1715,10 +1715,13 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
         # always has a non-NULL acceptance timestamp (they had to walk through
         # the approval email link, so they're consenting at this moment anyway).
         accepted_legal_at=db_req.accepted_legal_at or _now_iso(),
-        # Same fallback for the version stamp — legacy requests get treated as
-        # accepting the version that's current right now (they had to read the
-        # set-password page, which would show today's version).
-        legal_version_accepted=db_req.legal_version_accepted or LEGAL_VERSION,
+        # Do NOT default to LEGAL_VERSION here: SetPasswordView shows no legal
+        # text, so we cannot truthfully claim the user accepted the current
+        # version. Carry the request row's value verbatim — NULL for pre-0003
+        # super-legacy requests, or the backfilled previous-version stamp for
+        # 0003-era ones. The re-acceptance modal fires on first /api/me poll
+        # either way and asks for an explicit ack against the current docs.
+        legal_version_accepted=db_req.legal_version_accepted,
     )
     db.add(new_user)
     db.delete(db_req)
