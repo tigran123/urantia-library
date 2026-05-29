@@ -1,4 +1,5 @@
 TODO
+.github/
 webapp/backend/initdb.sh
 webapp/secrets.env
 # Python
