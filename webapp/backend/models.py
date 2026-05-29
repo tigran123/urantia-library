@@ -15,7 +15,8 @@ class User(Base):
     avatar_url = Column(String, nullable=True)
     real_name = Column(String, nullable=True)
     search_per_page = Column(Integer, nullable=True)
-    accepted_legal_at = Column(String, nullable=True)   # ISO-8601 UTC; NULL = not yet accepted current Privacy/ToS
+    accepted_legal_at = Column(String, nullable=True)   # ISO-8601 UTC; timestamp of the user's most-recent acceptance (any version)
+    legal_version_accepted = Column(String, nullable=True)   # which LEGAL_VERSION the user accepted at accepted_legal_at; NULL or != current → re-prompt
 
 class RegistrationRequest(Base):
     __tablename__ = "registration_requests"
@@ -28,6 +29,7 @@ class RegistrationRequest(Base):
     token = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
     accepted_legal_at = Column(String, nullable=True)   # ISO-8601 UTC; stamped at submit. NULL on a row = legacy pre-0003 request.
     language = Column(String, nullable=True)            # ISO-639-1 ('en' | 'ru'); NULL on a row = legacy pre-0002 request, treated as English by the email helpers.
+    legal_version_accepted = Column(String, nullable=True)   # LEGAL_VERSION at submit; copied onto users.legal_version_accepted at approval
 
 class Favorite(Base):
     __tablename__ = "favorites"

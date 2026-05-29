@@ -9,7 +9,7 @@ import { gridItemSize, type GridItemSize } from '../composables/useGridItemSize'
 const { t } = useI18n()
 
 const props = defineProps<{
-  user: { email: string, avatar_url?: string, real_name?: string | null, search_per_page?: number | null } | null,
+  user: { email: string, avatar_url?: string | null, real_name?: string | null, search_per_page?: number | null } | null,
   isOpen: boolean
 }>()
 
@@ -339,7 +339,7 @@ const close = () => {
               <div class="shrink-0">
                 <img
                   v-if="previewUrl || user?.avatar_url"
-                  :src="previewUrl || getFullUrl(user?.avatar_url)"
+                  :src="previewUrl || getFullUrl(user?.avatar_url ?? undefined)"
                   class="h-24 w-24 object-cover rounded-full border border-gray-200 dark:border-gray-700"
                   alt="Avatar"
                 />

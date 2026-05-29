@@ -14,7 +14,8 @@ CREATE TABLE users (
     avatar_url VARCHAR,
     real_name VARCHAR,                  -- Optional display name shown on comments instead of the email local-part
     search_per_page INTEGER DEFAULT 50,
-    accepted_legal_at TEXT              -- ISO-8601 UTC; NULL = user has not yet accepted current Privacy/ToS
+    accepted_legal_at TEXT,             -- ISO-8601 UTC; timestamp of the user's most-recent acceptance (any LEGAL_VERSION)
+    legal_version_accepted TEXT         -- LEGAL_VERSION at the time of accepted_legal_at; NULL or != current → re-prompt
 );
 
 CREATE TABLE registration_requests (
@@ -25,7 +26,8 @@ CREATE TABLE registration_requests (
     purpose VARCHAR,
     token VARCHAR UNIQUE,
     accepted_legal_at TEXT,             -- ISO-8601 UTC; stamped at submit. NOT NULL in /api/register's validation, but column-level nullable for forward-compat.
-    language VARCHAR                    -- ISO-639-1 ('en' | 'ru') captured at submit so the approval/rejection email matches the locale the requester used. NULL = legacy pre-0002 row, treated as English.
+    language VARCHAR,                   -- ISO-639-1 ('en' | 'ru') captured at submit so the approval/rejection email matches the locale the requester used. NULL = legacy pre-0002 row, treated as English.
+    legal_version_accepted TEXT         -- LEGAL_VERSION at submit; copied onto users.legal_version_accepted at approval
 );
 
 -- ==============================================================================
@@ -268,7 +270,7 @@ CREATE TABLE admin_audit_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at    TEXT    NOT NULL,                       -- ISO-8601 UTC
     actor_user_id INTEGER NOT NULL REFERENCES users(id),
-    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update'
+    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update' | 'legal.accept'
     target_kind   VARCHAR,                                -- 'book' | 'user' | 'comment' | 'annotation' | NULL
     target_id     VARCHAR,                                -- book hash, user id, comment id, … (VARCHAR holds either int or hash as text)
     summary       VARCHAR NOT NULL,                       -- one-line human-readable
@@ -319,4 +321,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '3');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '4');

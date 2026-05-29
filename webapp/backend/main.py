@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Cookie, status, Response, UploadFile, File, Query
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_, not_, func, case, select
+from sqlalchemy import or_, and_, not_, func, case, select, text as sa_text
 from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 import os
 import re
@@ -26,7 +26,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi.middleware.cors import CORSMiddleware
 import models
 import schemas
-from database import engine, get_db, SessionLocal, verify_schema_version
+from database import engine, get_db, SessionLocal, verify_schema_version, LEGAL_VERSION
 from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 import email_utils
 import jwt
@@ -34,6 +34,53 @@ import geoip2.database
 
 models.Base.metadata.create_all(bind=engine)
 verify_schema_version(engine)
+
+
+def _send_legal_blast_emails():
+    """Background worker: mail every active user one bilingual notice that the
+    Privacy Policy / Terms of Service have changed. Idempotency lives in
+    `app_meta.legal_blast_version`; transient SMTP failures are accepted as
+    lost blasts (consistent with how digest emails handle failure today). The
+    in-app re-acceptance modal still fires on next login regardless of whether
+    the email landed — the email is a courtesy, the modal is the binding ack."""
+    db = SessionLocal()
+    try:
+        active = db.query(models.User).filter(models.User.is_active == True).all()
+        sent = 0
+        for u in active:
+            try:
+                email_utils.send_legal_update(u.email)
+                sent += 1
+            except Exception as e:
+                logging.warning("legal blast: failed to mail %s: %s", u.email, e)
+        logging.info("legal blast: mailed %d users for version %s", sent, LEGAL_VERSION)
+    finally:
+        db.close()
+
+
+def _maybe_send_legal_blast():
+    """At startup, fire the legal-update email blast iff LEGAL_VERSION has
+    advanced since the last successful claim. Race-safe via a conditional
+    UPDATE on app_meta — mirrors _maybe_send_feedback_digest and
+    _maybe_send_moderation_digest. The migration seeds legal_blast_version
+    to the current LEGAL_VERSION at deploy time so the rollout itself doesn't
+    spam everyone; the first real blast fires only on the NEXT bump."""
+    with engine.begin() as conn:
+        conn.execute(sa_text(
+            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('legal_blast_version', '')"
+        ))
+        result = conn.execute(
+            sa_text("UPDATE app_meta SET value = :new "
+                    "WHERE key = 'legal_blast_version' AND value != :new"),
+            {"new": LEGAL_VERSION},
+        )
+        won = result.rowcount > 0
+    if not won:
+        return
+    threading.Thread(target=_send_legal_blast_emails, daemon=True).start()
+
+
+_maybe_send_legal_blast()
 
 app = FastAPI()
 
@@ -733,16 +780,25 @@ async def logout(access_token: str = Cookie(None)):
                 db_local.close()
     return response
 
+def _user_response_dict(u: models.User) -> dict:
+    """Serialize a User row into the shape returned by /api/me, /api/legal/accept,
+    /api/users/me/settings, and /api/users/me/avatar. Kept here as a single
+    source of truth so adding a field doesn't drift between four endpoints."""
+    return {
+        "email": u.email,
+        "avatar_url": u.avatar_url,
+        "real_name": u.real_name,
+        "search_per_page": u.search_per_page,
+        "is_admin": bool(u.is_admin),
+        "clearance": int(u.clearance or 0),
+        "legal_version_accepted": u.legal_version_accepted,
+        "legal_acceptance_current": u.legal_version_accepted == LEGAL_VERSION,
+    }
+
+
 @app.get("/api/me", response_model=schemas.UserResponse)
 async def get_me(current_user: models.User = Depends(get_current_user)):
-    return {
-        "email": current_user.email,
-        "avatar_url": current_user.avatar_url,
-        "real_name": current_user.real_name,
-        "search_per_page": current_user.search_per_page,
-        "is_admin": bool(current_user.is_admin),
-        "clearance": int(current_user.clearance or 0),
-    }
+    return _user_response_dict(current_user)
 
 
 # ==============================================================================
@@ -958,7 +1014,7 @@ async def update_settings(
         current_user.real_name = cleaned or None
     db.commit()
     db.refresh(current_user)
-    return current_user
+    return _user_response_dict(current_user)
 
 AVATAR_DIR = os.path.join(DATA_DIR, "avatars")
 os.makedirs(AVATAR_DIR, exist_ok=True)
@@ -1000,7 +1056,7 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
     db.commit()
     db.refresh(current_user)
 
-    return current_user
+    return _user_response_dict(current_user)
 
 @app.get("/api/browse")
 async def browse(request: Request, path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
@@ -1603,6 +1659,7 @@ async def register_user(request: Request, user: schemas.UserCreate, db: Session 
         status="pending",
         accepted_legal_at=_now_iso(),
         language=lang,
+        legal_version_accepted=LEGAL_VERSION,
     )
     db.add(db_req)
     db.commit()
@@ -1658,6 +1715,10 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
         # always has a non-NULL acceptance timestamp (they had to walk through
         # the approval email link, so they're consenting at this moment anyway).
         accepted_legal_at=db_req.accepted_legal_at or _now_iso(),
+        # Same fallback for the version stamp — legacy requests get treated as
+        # accepting the version that's current right now (they had to read the
+        # set-password page, which would show today's version).
+        legal_version_accepted=db_req.legal_version_accepted or LEGAL_VERSION,
     )
     db.add(new_user)
     db.delete(db_req)
@@ -1672,11 +1733,46 @@ async def legal_meta():
     themselves are public. Falls back to ADMIN_EMAIL for the contact when
     LEGAL_CONTACT_EMAIL is unset. Jurisdiction wording is no longer
     interpolated (it was unsound to substitute one English string into the
-    Russian doc); it's hardcoded in each locale's markdown instead."""
+    Russian doc); it's hardcoded in each locale's markdown instead.
+
+    `current_version` is the LEGAL_VERSION constant in database.py — the
+    string each authenticated user's `legal_version_accepted` must match,
+    otherwise the re-acceptance modal fires."""
     contact = os.environ.get("LEGAL_CONTACT_EMAIL") or os.environ.get("ADMIN_EMAIL") or ""
     return {
         "contact_email": contact,
+        "current_version": LEGAL_VERSION,
     }
+
+
+@app.post("/api/legal/accept", response_model=schemas.UserResponse)
+async def legal_accept(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Record that the calling user accepts the *current* LEGAL_VERSION. The
+    act of POSTing is the acceptance — there is no body. The version comes
+    from server-side LEGAL_VERSION (not from the client), so a stale client
+    can't falsely "accept" an outdated version on the user's behalf.
+
+    Writes one `legal.accept` row to admin_audit_log so the operator can
+    answer "did user X actually accept version V, and when?" months later.
+    The actor IS the user — the audit log isn't admin-only despite the
+    table name; see _audit's docstring.
+
+    Returns the same shape as /api/me so the SPA can refresh its local
+    `currentUser` ref in one round-trip and unmount the re-acceptance modal."""
+    previous_version = current_user.legal_version_accepted
+    current_user.accepted_legal_at = _now_iso()
+    current_user.legal_version_accepted = LEGAL_VERSION
+    _audit(db, current_user, "legal.accept",
+           target_kind="user", target_id=str(current_user.id),
+           summary=f"Accepted legal version {LEGAL_VERSION}",
+           details={"version": LEGAL_VERSION,
+                    "previous_version": previous_version})
+    db.commit()
+    db.refresh(current_user)
+    return _user_response_dict(current_user)
 
 
 @app.get("/api/admin/reject")

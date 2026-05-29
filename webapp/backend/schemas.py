@@ -20,6 +20,12 @@ class UserResponse(BaseModel):
     search_per_page: Optional[int] = None
     is_admin: bool = False
     clearance: int = 0
+    # LEGAL_VERSION the user last accepted; None for legacy rows. The frontend
+    # gates on `legal_acceptance_current` rather than comparing this directly —
+    # the comparison rule lives server-side so a client release isn't needed
+    # if it ever changes.
+    legal_version_accepted: Optional[str] = None
+    legal_acceptance_current: bool = True
 
 class UserSettingsUpdate(BaseModel):
     search_per_page: Optional[int] = None

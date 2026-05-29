@@ -8,6 +8,8 @@ import { useI18n } from 'vue-i18n'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import ThemeSwitcher from './components/ThemeSwitcher.vue'
 import SettingsModal from './components/SettingsModal.vue'
+import LegalReacceptanceModal from './components/LegalReacceptanceModal.vue'
+import type { CurrentUser } from './api'
 
 const { t, n: nFmt } = useI18n({ useScope: 'global' })
 
@@ -18,8 +20,30 @@ const searchInputMobile = ref<HTMLInputElement | null>(null)
 const router = useRouter()
 const route = useRoute()
 
-const currentUser = ref<{ email: string, avatar_url?: string, real_name?: string | null, search_per_page?: number | null, is_admin?: boolean, clearance?: number } | null>(null)
+const currentUser = ref<CurrentUser | null>(null)
 provide('currentUser', currentUser)
+
+// Re-acceptance modal fires when LEGAL_VERSION in webapp/backend/database.py
+// has advanced past what the signed-in user last accepted. The /api/me payload
+// carries the server-computed `legal_acceptance_current` flag; the comparison
+// itself lives on the backend so a stale client can't disagree.
+//
+// Exception: the privacy/terms routes — the modal itself sends users there to
+// review the very documents it's asking them to accept, so it must NOT mount
+// over those views or the link is unusable (in either the original tab or a
+// target="_blank" new tab, since the SPA boots App.vue fresh in both).
+const needsLegalReacceptance = computed(() =>
+  !!currentUser.value
+  && currentUser.value.legal_acceptance_current === false
+  && route.name !== 'privacy'
+  && route.name !== 'terms'
+)
+
+const onLegalAccepted = (user: CurrentUser) => {
+  // Server returned the refreshed UserResponse — patch local state in place so
+  // the modal unmounts immediately without waiting for the next /me heartbeat.
+  currentUser.value = user
+}
 const isProfileMenuOpen = ref(false)
 const isSettingsModalOpen = ref(false)
 
@@ -525,6 +549,16 @@ const handleLogout = async () => {
       :user="currentUser"
       @close="isSettingsModalOpen = false"
       @update-user="currentUser = $event"
+    />
+
+    <!-- Legal re-acceptance modal — fires when LEGAL_VERSION advances past
+         what the signed-in user last accepted. Stays mounted until the user
+         either accepts (call /api/legal/accept, local state flips) or signs
+         out. Anonymous viewers don't see it; `currentUser` is null for them. -->
+    <LegalReacceptanceModal
+      v-if="needsLegalReacceptance"
+      @accepted="onLegalAccepted"
+      @signout="handleLogout"
     />
   </div>
 </template>

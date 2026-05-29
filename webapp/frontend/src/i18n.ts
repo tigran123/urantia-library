@@ -132,6 +132,8 @@ const messages = {
         // English has no case inflection, so these stay identical to the nominative.
         privacy_instr: 'Privacy Policy',
         terms_instr: 'Terms of Service',
+        privacy_acc: 'Privacy Policy',
+        terms_acc: 'Terms of Service',
       },
     },
     auth: {
@@ -157,6 +159,10 @@ const messages = {
       alreadyHaveAccount: 'Already have an account?',
       acceptLegal: 'I have read and agree to the {privacy} and {terms}.',
       loginLegalNote: 'By signing in you agree to the {privacy} and {terms}.',
+      reacceptTitle: 'Updated Privacy Policy and Terms',
+      reacceptBody: "We've updated the {privacy} and {terms}. Please review and accept to continue using the library.",
+      reacceptButton: 'I accept',
+      reacceptSignout: 'Sign out instead',
       setPasswordTitle: 'Set Your Password',
       setPasswordFullNameLabel: 'Full Name',
       setPasswordOptional: '(optional)',
@@ -746,6 +752,7 @@ const messages = {
           comment_moderate:        'Comment',
           annotation_moderate:     'Annotation',
           usage_kinds_update:      'Usage recording',
+          legal_accept:            'Legal acceptance',
         },
         summary: {
           book_upload:             'Uploaded "{title}" to /{path}',
@@ -769,6 +776,7 @@ const messages = {
           annotation_delete:       'Deleted annotation by {author}',
           usage_kinds_update:      'Usage recording set to: {kinds}',
           usage_kinds_none:        '(none)',
+          legal_accept:            'Accepted legal version {version}',
         },
         field: {
           title:           'title',
@@ -952,6 +960,8 @@ const messages = {
         // «согласен с Политикой конфиденциальности и Условиями использования».
         privacy_instr: 'Политикой конфиденциальности',
         terms_instr: 'Условиями использования',
+        privacy_acc: 'Политику конфиденциальности',
+        terms_acc: 'Условия использования',
       },
     },
     auth: {
@@ -977,6 +987,10 @@ const messages = {
       alreadyHaveAccount: 'Уже есть аккаунт?',
       acceptLegal: 'Я ознакомился(-ась) и согласен(-на) с {privacy} и {terms}.',
       loginLegalNote: 'Входя в систему, вы соглашаетесь с {privacy} и {terms}.',
+      reacceptTitle: 'Обновлённые Политика и Условия',
+      reacceptBody: 'Мы обновили {privacy} и {terms}. Прочтите и подтвердите согласие, чтобы продолжать пользоваться библиотекой.',
+      reacceptButton: 'Я согласен(-на)',
+      reacceptSignout: 'Выйти из системы',
       setPasswordTitle: 'Установите пароль',
       setPasswordFullNameLabel: 'Имя',
       setPasswordOptional: '(необязательно)',
@@ -1566,6 +1580,7 @@ const messages = {
           comment_moderate:        'Комментарий',
           annotation_moderate:     'Аннотация',
           usage_kinds_update:      'Запись активности',
+          legal_accept:            'Согласие с документами',
         },
         summary: {
           book_upload:             'Загружено «{title}» в /{path}',
@@ -1589,6 +1604,7 @@ const messages = {
           annotation_delete:       'Удалена аннотация от {author}',
           usage_kinds_update:      'Запись активности: {kinds}',
           usage_kinds_none:        '(нет)',
+          legal_accept:            'Принята версия документов: {version}',
         },
         field: {
           title:           'название',

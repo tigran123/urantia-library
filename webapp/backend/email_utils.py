@@ -105,6 +105,50 @@ def send_moderation_digest(pending_count: int):
     """
     _send_email(ADMIN_EMAIL, "Comments awaiting moderation", html)
 
+def send_legal_update(user_email: str) -> None:
+    """One-shot notice that the Privacy Policy / Terms of Service have changed
+    materially. Sent by _maybe_send_legal_blast in main.py at backend startup
+    when LEGAL_VERSION in database.py differs from app_meta.legal_blast_version.
+    Body is bilingual (en + ru stacked) because the `users` table has no
+    `language` column today; per-locale variants can come later if needed.
+    The user's in-app re-acceptance modal is the binding ack — this email is
+    a courtesy heads-up so the operator's policy promise (Section 10) is met."""
+    library_link = APP_URL
+    privacy_link = f"{APP_URL}/#/privacy"
+    terms_link = f"{APP_URL}/#/terms"
+    subject = "Urantia Library: Updated Privacy Policy and Terms / Обновлены Политика и Условия"
+    html = f"""
+    <html>
+      <body style="font-family: Arial, Helvetica, sans-serif; color: #1f2937;">
+        <h3>Updated Privacy Policy and Terms of Service</h3>
+        <p>We have updated the <a href="{privacy_link}">Privacy Policy</a> and the
+        <a href="{terms_link}">Terms of Service</a> for Urantia Library.</p>
+        <p>The next time you sign in, you'll be asked to review and accept the
+        updated documents before continuing.</p>
+        <p><a href="{library_link}" style="padding: 10px 16px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 5px; font-weight: 600;">Open the library</a></p>
+        <hr style="margin: 24px 0; border: none; border-top: 1px solid #e5e7eb;" />
+        <h3>Обновлены Политика конфиденциальности и Условия</h3>
+        <p>Мы обновили <a href="{privacy_link}">Политику конфиденциальности</a> и
+        <a href="{terms_link}">Условия использования</a> Урантийской библиотеки.</p>
+        <p>При следующем входе вам будет предложено ознакомиться с обновлёнными
+        документами и подтвердить согласие.</p>
+        <p><a href="{library_link}" style="padding: 10px 16px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 5px; font-weight: 600;">Открыть библиотеку</a></p>
+      </body>
+    </html>
+    """
+    plain = (
+        "Updated Privacy Policy and Terms of Service\n"
+        f"Privacy: {privacy_link}\n"
+        f"Terms:   {terms_link}\n"
+        "The next time you sign in, you'll be asked to review and accept the updated documents.\n\n"
+        "Обновлены Политика конфиденциальности и Условия использования\n"
+        f"Политика: {privacy_link}\n"
+        f"Условия:  {terms_link}\n"
+        "При следующем входе вам будет предложено подтвердить согласие.\n"
+    )
+    _send_email_multipart(user_email, subject, html, plain)
+
+
 def send_user_rejection(user_email: str, language: str = "en"):
     bodies = {
         "en": (

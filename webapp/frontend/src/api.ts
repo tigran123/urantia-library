@@ -122,6 +122,34 @@ export const cancelIntegrityJob = (jobId: string) =>
 export const searchHashIds = (q: string) =>
   api.get<{ hash_ids: string[]; total: number }>('/search/hash_ids', { params: { q } })
 
+// ---------- Legal documents ----------
+
+// `current_version` mirrors LEGAL_VERSION in webapp/backend/database.py. The
+// SPA compares it against the signed-in user's `legal_version_accepted` (via
+// /api/me's derived `legal_acceptance_current`) to decide whether to fire the
+// re-acceptance modal — but the comparison itself happens server-side.
+export interface LegalMeta {
+  contact_email: string
+  current_version: string
+}
+
+export interface CurrentUser {
+  email: string
+  avatar_url: string | null
+  real_name: string | null
+  search_per_page: number | null
+  is_admin: boolean
+  clearance: number
+  legal_version_accepted: string | null
+  legal_acceptance_current: boolean
+}
+
+export const getLegalMeta = () =>
+  api.get<LegalMeta>('/legal/meta')
+
+export const acceptLegal = () =>
+  api.post<CurrentUser>('/legal/accept')
+
 // ---------- Library stats (footer) ----------
 
 export interface LibraryStats {

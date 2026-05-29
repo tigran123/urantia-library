@@ -48,6 +48,7 @@ const ACTION_OPTIONS: { value: string, key: string }[] = [
   { value: 'comment.moderate',     key: 'admin.audit.action.comment_moderate' },
   { value: 'annotation.moderate',  key: 'admin.audit.action.annotation_moderate' },
   { value: 'usage.kinds_update',   key: 'admin.audit.action.usage_kinds_update' },
+  { value: 'legal.accept',         key: 'admin.audit.action.legal_accept' },
 ]
 
 const actionFilter = ref('')
@@ -69,6 +70,7 @@ const ACTION_CHIP_CLASSES: Record<string, string> = {
   'comment.moderate':       'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
   'annotation.moderate':    'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
   'usage.kinds_update':     'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
+  'legal.accept':           'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
 }
 const chipClass = (action: string) =>
   ACTION_CHIP_CLASSES[action] || 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
@@ -89,6 +91,7 @@ const ACTION_SEGMENT_CLASSES: Record<string, string> = {
   'comment.moderate':       'bg-teal-500 dark:bg-teal-400',
   'annotation.moderate':    'bg-cyan-500 dark:bg-cyan-400',
   'usage.kinds_update':     'bg-slate-500 dark:bg-slate-400',
+  'legal.accept':           'bg-sky-500 dark:bg-sky-400',
 }
 const segmentClass = (action: string) =>
   ACTION_SEGMENT_CLASSES[action] || 'bg-gray-400 dark:bg-gray-500'
@@ -388,6 +391,14 @@ const summaryParts = (e: AuditLogEntry): SummaryParts | null => {
       }
       break
     }
+    case 'legal.accept': {
+      const version = get('version')
+      if (version) return {
+        keypath: 'admin.audit.summary.legal_accept',
+        params: { version },
+      }
+      break
+    }
     case 'usage.kinds_update': {
       // details.new is a JSON-encoded array of the now-enabled kind keys.
       let kinds: string[] = []
@@ -567,6 +578,7 @@ onMounted(() => {
                       <template #count>{{ parts.params.count }}</template>
                       <template #n>{{ parts.params.n }}</template>
                       <template #kinds>{{ parts.params.kinds }}</template>
+                      <template #version>{{ parts.params.version }}</template>
                     </i18n-t>
                     <span v-else>{{ e.summary }}</span>
                   </p>
