@@ -99,6 +99,41 @@ CREATE TABLE directory_favorites (
 CREATE INDEX idx_directory_favorites_user ON directory_favorites(user_id);
 
 -- ==============================================================================
+-- 4b. Playlists (supersede the single favourites list; books + directories as
+--     first-class members). One kind='bookshelf' playlist per user is the
+--     non-deletable default. share_token is stable, minted on first share.
+-- ==============================================================================
+CREATE TABLE playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id INTEGER NOT NULL REFERENCES users(id),
+    name VARCHAR NOT NULL,
+    description TEXT,
+    visibility VARCHAR NOT NULL DEFAULT 'private',   -- 'private' | 'public'
+    kind VARCHAR NOT NULL DEFAULT 'normal',          -- 'normal' | 'bookshelf'
+    share_token VARCHAR UNIQUE,
+    created_at TEXT NOT NULL,                         -- ISO-8601 UTC
+    updated_at TEXT NOT NULL                          -- ISO-8601 UTC
+);
+
+CREATE INDEX idx_playlists_owner ON playlists(owner_id);
+-- One Bookshelf per user (race-safety on _get_or_create_bookshelf).
+CREATE UNIQUE INDEX ix_playlists_one_bookshelf ON playlists(owner_id) WHERE kind = 'bookshelf';
+
+CREATE TABLE playlist_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    item_type VARCHAR NOT NULL,                      -- 'book' | 'directory'
+    book_hash_id VARCHAR REFERENCES books(id) ON DELETE CASCADE,
+    dir_path VARCHAR,
+    position INTEGER NOT NULL DEFAULT 0,
+    added_at TEXT NOT NULL                            -- ISO-8601 UTC
+);
+
+CREATE UNIQUE INDEX ix_playlist_items_book ON playlist_items(playlist_id, book_hash_id) WHERE item_type = 'book';
+CREATE UNIQUE INDEX ix_playlist_items_dir  ON playlist_items(playlist_id, dir_path)     WHERE item_type = 'directory';
+CREATE INDEX ix_playlist_items_pos ON playlist_items(playlist_id, position);
+
+-- ==============================================================================
 -- 5. Ratings and Comments
 -- ==============================================================================
 -- One 1-5 star rating per user per book. Not moderated: a rating counts toward
@@ -321,4 +356,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '5');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '8');

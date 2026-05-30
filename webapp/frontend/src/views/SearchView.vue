@@ -2,7 +2,8 @@
 import { ref, onMounted, onUnmounted, watch, computed, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, searchHashIds, type IntegrityMode } from '../api'
+import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, searchHashIds, getContainedKeys, type IntegrityMode } from '../api'
+import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 
 const { t, locale } = useI18n({ useScope: 'global' })
 const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_by_name, it?.recommended_at)
@@ -13,7 +14,10 @@ import QualityMark from '../components/QualityMark.vue'
 import { recommendedTooltip, bulkResultAlert } from '../lib/recommended'
 import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultiple } from '../composables/useGridItemSize'
 import { formatBytes, fileTypeLabel } from '../lib/itemFormat'
+import { useEditClearance } from '../composables/useEditClearance'
+import { getFullUrl } from '../lib/assets'
 
+const { editClearance } = useEditClearance()
 const route = useRoute()
 const router = useRouter()
 const matches = ref<any[]>([])
@@ -23,7 +27,7 @@ const error = ref('')
 const favoriteIds = ref<Set<string>>(new Set())
 
 const DEFAULT_PER_PAGE = 50
-const currentUser = inject<Ref<{ search_per_page?: number | null, is_admin?: boolean } | null>>(
+const currentUser = inject<Ref<{ email?: string, search_per_page?: number | null, is_admin?: boolean } | null>>(
   'currentUser',
   ref(null)
 )
@@ -151,24 +155,10 @@ const startSelectionRecommend = async () => {
   }
 }
 
-const editBookClearance = async (match: any, event: Event) => {
+const editBookClearance = (match: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
-  if (!match.hash_id) return
-  const current = match.clearance ?? 0
-  const raw = window.prompt(t('admin.clearance_prompt', { title: match.title || match.name }), String(current))
-  if (raw === null) return
-  const next = Number(raw)
-  if (!Number.isFinite(next) || !Number.isInteger(next) || next < 0 || next > 100) {
-    alert(t('admin.integrity.clearance_invalid_range'))
-    return
-  }
-  try {
-    await api.put(`/admin/books/${encodeURIComponent(match.hash_id)}/clearance`, { clearance: next })
-    match.clearance = next
-  } catch (err: any) {
-    alert(err.response?.data?.detail || err.message)
-  }
+  editClearance(match)
 }
 const targetPerPage = computed(() => currentUser.value?.search_per_page ?? DEFAULT_PER_PAGE)
 const total = ref(0)
@@ -292,13 +282,19 @@ const removeFilter = (fullMatch: string) => {
   router.push({ name: 'search', query: { q: newQ } })
 }
 
-const loadFavorites = async () => {
+// `favoriteIds` now tracks which books sit in >=1 of the user's playlists —
+// that drives the filled/blue bookmark state. Clicking the bookmark opens the
+// add-to-playlist popover rather than toggling a single favourite.
+const loadContainedKeys = async () => {
+  if (!currentUser.value) {
+    favoriteIds.value = new Set()
+    return
+  }
   try {
-    const res = await api.get('/favorites')
-    const ids = res.data.items.map((f: any) => f.hash_id)
-    favoriteIds.value = new Set(ids)
+    const res = await getContainedKeys()
+    favoriteIds.value = new Set(res.data.book_hash_ids)
   } catch (err) {
-    console.error('Failed to load favorites', err)
+    console.error('Failed to load playlist membership', err)
   }
 }
 
@@ -311,26 +307,22 @@ const requireAuth = (): boolean => {
   return true
 }
 
-const toggleFavorite = async (item: any, event: Event) => {
+// --- add-to-playlist popover ---
+const popoverTarget = ref<{ book_hash_id?: string; dir_path?: string; title?: string } | null>(null)
+const popoverPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
+
+const toggleFavorite = (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
   if (!item.hash_id) return
   if (!requireAuth()) return
-  const id = item.hash_id
-  try {
-    const newIds = new Set(favoriteIds.value)
-    if (favoriteIds.value.has(id)) {
-      await api.delete(`/favorites/${encodeURIComponent(id)}`)
-      newIds.delete(id)
-    } else {
-      await api.post('/favorites', { hash_id: id })
-      newIds.add(id)
-    }
-    favoriteIds.value = newIds
-  } catch (err) {
-    console.error('Failed to toggle favorite', err)
-  }
+  const el = event.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  popoverPos.value = { top: rect.bottom + 4, left: rect.left }
+  popoverTarget.value = { book_hash_id: item.hash_id, title: item.title || item.name }
 }
+
+const onMembershipChanged = () => { loadContainedKeys() }
 
 const doSearch = async (q: string, page: number) => {
   if (!q) {
@@ -365,7 +357,7 @@ const doSearch = async (q: string, page: number) => {
 }
 
 onMounted(() => {
-  loadFavorites()
+  loadContainedKeys()
   window.addEventListener('resize', onResize)
   window.addEventListener('keydown', onSelectModeKeydown)
   doSearch(route.query.q as string, currentPage.value)
@@ -401,10 +393,23 @@ watch([effectivePerPage, gridCols], () => {
   }
 })
 
-const getFullUrl = (url: string) => {
-  if (!url) return ''
-  return api.defaults.baseURL?.replace('/api', '') + url
-}
+// Re-sync when the signed-in identity changes. currentUser populates
+// asynchronously in App.vue, so on a cold load / deep-link the bookmark fill
+// state would otherwise stay empty until the user re-searches; and a logout
+// while results are on screen would leave the previous user's filled bookmarks
+// (and higher-clearance matches) visible. loadContainedKeys fixes the fill
+// state; re-running the search refreshes the clearance-filtered results.
+// Mirrors BrowseView's identity watcher. (Watch by email, not the ref — the
+// /api/me heartbeat swaps the object every few minutes without a real change.)
+watch(() => currentUser.value?.email ?? null, () => {
+  if (currentUser.value) {
+    loadContainedKeys()
+  } else {
+    favoriteIds.value = new Set()
+  }
+  if (searched.value) doSearch(route.query.q as string, currentPage.value)
+})
+
 
 const downloadItem = (item: any, event: Event) => {
   event.preventDefault()
@@ -724,7 +729,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 </div>
 
                 <!-- Bookmark Button -->
-                <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(match.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(match.hash_id) }" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+                <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(match.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(match.hash_id) }" :title="$t('playlists.add_to')">
                   <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" class="h-5 w-5" />
                   <BookmarkIcon v-else class="h-5 w-5" />
                 </button>
@@ -776,7 +781,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             >
               <QualityMark :class="[gridCls.icon, 'text-green-600 dark:text-green-400']" />
             </span>
-            <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(match.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="favoriteIds.has(match.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+            <button v-if="match.hash_id" @click.prevent="toggleFavorite(match, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(match.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="$t('playlists.add_to')">
               <BookmarkIconSolid v-if="favoriteIds.has(match.hash_id)" :class="gridCls.icon" />
               <BookmarkIcon v-else :class="gridCls.icon" />
             </button>
@@ -896,5 +901,13 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         {{ t('admin.integrity.exit_select_mode') }}
       </button>
     </div>
+
+    <AddToPlaylistPopover
+      v-if="popoverTarget"
+      :position="popoverPos"
+      :target="popoverTarget"
+      @close="popoverTarget = null"
+      @changed="onMembershipChanged"
+    />
   </div>
 </template>

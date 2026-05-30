@@ -13,7 +13,7 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{_BOOKS_DIR}/.data/db/lib.db"
 # from the DB and refuses to start when the two don't match — so a git pull
 # without a corresponding `python migrate.py` on prod fails loudly instead of
 # silently serving 500s from missing columns.
-EXPECTED_SCHEMA_VERSION = 5
+EXPECTED_SCHEMA_VERSION = 8
 
 # Bump this whenever you make a *material* change to one of the Privacy Policy
 # or Terms of Service .md files in webapp/frontend/src/legal/. Any
@@ -23,7 +23,7 @@ EXPECTED_SCHEMA_VERSION = 5
 # appears at the top of the four legal .md files, in ISO YYYY-MM-DD form.
 # Don't bump for typo fixes — only for changes a user would have wanted to
 # know about before agreeing (see feedback_bump_legal_doc_date.md).
-LEGAL_VERSION = "2026-05-29"
+LEGAL_VERSION = "2026-05-30"
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}

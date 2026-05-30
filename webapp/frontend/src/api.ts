@@ -550,4 +550,124 @@ export const getMyNotificationPrefs = () =>
 export const setMyNotificationPrefs = (p: NotificationPrefs) =>
   api.put('/users/me/notification-prefs', p)
 
+// ---------- Playlists ----------
+
+export type PlaylistVisibility = 'private' | 'public'
+
+// A playlist member, in the same shape Browse/Search emit so the card and row
+// components are shared. Books carry `hash_id` + book fields; directories carry
+// `dir_path` + `exists`. `path` is the navigation target (/item/:path for a
+// book, /browse/:path for a directory).
+export interface PlaylistItem {
+  id: number
+  item_type: 'book' | 'directory'
+  is_dir?: boolean
+  position: number
+  // book
+  hash_id?: string
+  title?: string | null
+  author?: string | null
+  description?: string | null
+  cover_url?: string | null
+  clearance?: number
+  avg_rating?: number | null
+  rating_count?: number
+  is_recommended?: boolean
+  recommended_at?: string | null
+  recommended_by_name?: string | null
+  name?: string | null
+  path?: string | null
+  percent?: number | null
+  missing?: boolean
+  // directory
+  dir_path?: string
+  exists?: boolean
+}
+
+export interface CollageItem {
+  item_type: 'book' | 'directory'
+  cover_url: string | null
+}
+
+export interface PlaylistSummary {
+  id: number
+  name: string
+  description: string | null
+  visibility: PlaylistVisibility
+  kind: 'normal' | 'bookshelf'
+  is_bookshelf: boolean
+  share_token: string | null
+  item_count: number
+  created_at: string
+  updated_at: string
+  collage: CollageItem[]
+}
+
+export interface PlaylistDetail {
+  playlist: PlaylistSummary
+  items: PlaylistItem[]
+}
+
+export interface SharedPlaylist {
+  playlist: {
+    id: number
+    name: string
+    description: string | null
+    visibility: PlaylistVisibility
+    kind: string
+    updated_at: string
+    created_at: string
+    item_count: number
+    owner_name: string | null
+    is_owner: boolean
+    collage: CollageItem[]
+  }
+  items: PlaylistItem[]
+}
+
+export const listPlaylists = () =>
+  api.get<{ items: PlaylistSummary[] }>('/playlists')
+
+export const createPlaylist = (p: { name: string; description?: string | null; visibility?: PlaylistVisibility }) =>
+  api.post<PlaylistSummary>('/playlists', p)
+
+export const getPlaylist = (id: number) =>
+  api.get<PlaylistDetail>(`/playlists/${id}`)
+
+export const updatePlaylist = (id: number, p: { name?: string; description?: string | null; visibility?: PlaylistVisibility }) =>
+  api.patch<PlaylistSummary>(`/playlists/${id}`, p)
+
+export const deletePlaylist = (id: number) =>
+  api.delete(`/playlists/${id}`)
+
+export const addPlaylistItem = (id: number, body: { book_hash_id?: string; dir_path?: string }) =>
+  api.post<{ id: number; item_type: string; book_hash_id: string | null; dir_path: string | null }>(`/playlists/${id}/items`, body)
+
+export const removePlaylistItem = (id: number, itemId: number) =>
+  api.delete(`/playlists/${id}/items/${itemId}`)
+
+export const removePlaylistItemByTarget = (id: number, params: { book_hash_id?: string; dir_path?: string }) =>
+  api.delete(`/playlists/${id}/items`, { params })
+
+export const reorderPlaylist = (id: number, itemIds: number[]) =>
+  api.put(`/playlists/${id}/order`, { item_ids: itemIds })
+
+export const sharePlaylist = (id: number) =>
+  api.post<{ token: string; visibility: PlaylistVisibility }>(`/playlists/${id}/share`)
+
+export const unsharePlaylist = (id: number) =>
+  api.delete<{ visibility: PlaylistVisibility }>(`/playlists/${id}/share`)
+
+export const getSharedPlaylist = (token: string) =>
+  api.get<SharedPlaylist>(`/shared/${encodeURIComponent(token)}`)
+
+export const copySharedPlaylist = (token: string) =>
+  api.post<{ id: number; item_count: number }>(`/shared/${encodeURIComponent(token)}/copy`)
+
+export const getPlaylistMembership = (params: { book_hash_id?: string; dir_path?: string }) =>
+  api.get<{ playlist_ids: number[] }>('/playlists/membership', { params })
+
+export const getContainedKeys = () =>
+  api.get<{ book_hash_ids: string[]; dir_paths: string[] }>('/playlists/contained-keys')
+
 export default api

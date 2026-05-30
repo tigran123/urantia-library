@@ -6,8 +6,10 @@ import api, {
   getMyRating, setMyRating,
   getComments, postComment, editComment, deleteComment,
   recommendBook, unrecommendBook,
+  getContainedKeys,
   type IntegrityCheckResult, type IntegrityMode, type CommentNode,
 } from '../api'
+import { getFullUrl } from '../lib/assets'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, FlagIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
@@ -21,6 +23,7 @@ import Fb2Viewer from '../components/Fb2Viewer.vue'
 import MdViewer from '../components/MdViewer.vue'
 import HtmlViewer from '../components/HtmlViewer.vue'
 import BookMetadataEditor from '../components/BookMetadataEditor.vue'
+import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 // pdfjs-dist is ~1MB; keep it out of the main bundle by lazy-loading.
 const PdfViewer = defineAsyncComponent(() => import('../components/PdfViewer.vue'))
 
@@ -29,7 +32,7 @@ const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_
 const recByValue = (it: any) => recommendedByValue(t, locale.value, it?.recommended_by_name, it?.recommended_at)
 const route = useRoute()
 const router = useRouter()
-const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
+const currentUser = inject<Ref<{ email?: string, is_admin?: boolean } | null>>('currentUser', ref(null))
 const item = ref<any>(null)
 const loading = ref(true)
 const error = ref('')
@@ -136,18 +139,34 @@ const onEditorSaved = (updated: any) => {
 }
 
 const onEditorDeleted = () => {
-  // The book this page shows is gone; navigate to its parent directory.
+  // The book this page shows is gone. If we got here from a playlist (see the
+  // ?from= tag PlaylistDetailView attaches), bounce back to that playlist;
+  // otherwise drop into the parent directory.
+  const from = typeof route.query.from === 'string' ? route.query.from : ''
+  if (from.startsWith('playlist:')) {
+    const pid = from.slice('playlist:'.length)
+    if (pid && /^\d+$/.test(pid)) {
+      router.replace(`/playlists/${pid}`)
+      return
+    }
+  }
   const parent = currentPath.value.split('/').slice(0, -1).join('/')
   router.replace(`/browse/${parent}`)
 }
 
-const loadFavorites = async () => {
+// `favoriteIds` tracks which books sit in >=1 of the user's playlists — drives
+// the filled/blue bookmark. The bookmark opens the add-to-playlist popover
+// (same as Browse/Search), replacing the dead single-favourite store.
+const loadContainedKeys = async () => {
+  if (!currentUser.value) {
+    favoriteIds.value = new Set()
+    return
+  }
   try {
-    const res = await api.get('/favorites')
-    const ids = res.data.items.map((f: any) => f.hash_id)
-    favoriteIds.value = new Set(ids)
+    const res = await getContainedKeys()
+    favoriteIds.value = new Set(res.data.book_hash_ids)
   } catch (err) {
-    console.error('Failed to load favorites', err)
+    console.error('Failed to load playlist membership', err)
   }
 }
 
@@ -191,24 +210,20 @@ const toggleRecommend = async () => {
   }
 }
 
-const toggleFavorite = async () => {
+// --- add-to-playlist popover ---
+const popoverTarget = ref<{ book_hash_id?: string; dir_path?: string; title?: string } | null>(null)
+const popoverPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
+
+const openPlaylistPopover = (event: Event) => {
   if (!item.value || !item.value.hash_id) return
   if (!requireAuth()) return
-  const id = item.value.hash_id
-  try {
-    const newIds = new Set(favoriteIds.value)
-    if (favoriteIds.value.has(id)) {
-      await api.delete(`/favorites/${encodeURIComponent(id)}`)
-      newIds.delete(id)
-    } else {
-      await api.post('/favorites', { hash_id: id })
-      newIds.add(id)
-    }
-    favoriteIds.value = newIds
-  } catch (err) {
-    console.error('Failed to toggle favorite', err)
-  }
+  const el = event.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  popoverPos.value = { top: rect.bottom + 4, left: rect.left }
+  popoverTarget.value = { book_hash_id: item.value.hash_id, title: item.value.title || item.value.name }
 }
+
+const onMembershipChanged = () => { loadContainedKeys() }
 
 const loadItem = async (path: string) => {
   loading.value = true
@@ -241,7 +256,7 @@ const loadItem = async (path: string) => {
 
 onMounted(() => {
   originalTitle.value = document.title
-  loadFavorites()
+  loadContainedKeys()
   loadItem(route.params.path as string)
 })
 
@@ -253,10 +268,16 @@ watch(() => route.params.path, (newPath) => {
   loadItem(newPath as string)
 })
 
-const getFullUrl = (url: string) => {
-  if (!url) return ''
-  return api.defaults.baseURL?.replace('/api', '') + url
-}
+// Re-sync the bookmark fill state when the signed-in identity changes.
+// currentUser populates asynchronously in App.vue, so a cold load / deep-link
+// to /item/:path while logged in would leave the bookmark hollow until the
+// user opens the popover; a logout would leave a stale filled bookmark.
+// Watch by email (not the ref) so the /api/me heartbeat's object swap is a
+// no-op. Mirrors BrowseView/SearchView.
+watch(() => currentUser.value?.email ?? null, () => {
+  if (currentUser.value) loadContainedKeys()
+  else favoriteIds.value = new Set()
+})
 
 const getDownloadUrl = () => {
   if (!item.value) return ''
@@ -560,7 +581,7 @@ const submitReply = async () => {
             >
               <QualityMark class="h-7 w-7" />
             </button>
-            <button @click.prevent="toggleFavorite()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="favoriteIds.has(item.hash_id) ? t('app.remove_favorite') : t('app.add_favorite')">
+            <button @click.prevent="openPlaylistPopover($event)" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }" :title="t('playlists.add_to')">
               <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-7 w-7" />
               <BookmarkIcon v-else class="h-7 w-7" />
             </button>
@@ -924,5 +945,13 @@ const submitReply = async () => {
         </div>
       </div>
     </div>
+
+    <AddToPlaylistPopover
+      v-if="popoverTarget"
+      :position="popoverPos"
+      :target="popoverTarget"
+      @close="popoverTarget = null"
+      @changed="onMembershipChanged"
+    />
   </div>
 </template>

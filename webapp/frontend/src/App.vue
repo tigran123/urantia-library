@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon, ChatBubbleLeftRightIcon, InboxIcon, ClockIcon } from '@heroicons/vue/24/outline'
+import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import api, { getLibraryStats, type LibraryStats } from './api'
 import { userInitials } from './userDisplay'
 import { useI18n } from 'vue-i18n'
@@ -50,6 +51,10 @@ const isSettingsModalOpen = ref(false)
 const isAuthRoute = computed(() => {
   return route.name === 'login' || route.name === 'register'
 })
+
+// Public share view (/#/p/:token) renders recipient chrome: wordmark + "Sign in
+// to save", no app nav/search. Driven by the route's meta.publicChrome flag.
+const isPublicChrome = computed(() => route.meta?.publicChrome === true)
 
 const fetchCurrentUser = async () => {
   if (isAuthRoute.value) return
@@ -133,7 +138,14 @@ const STATS_POLL_MS = 120_000
 // showing a signed-in UI until the next API call happens to fail with 401 —
 // which on a static viewer page could be never.
 let meHeartbeatTimer: number | null = null
-const ME_HEARTBEAT_MS = 30_000
+// Sits just under the backend ONLINE_WINDOW (5 min / 300s): one heartbeat per
+// window keeps idle tabs counted in "online users" / "Last seen" without the
+// old per-30s log noise. The 30s gap below the window is deliberate margin —
+// "online" is a look-back (last_seen within the last 300s), so the effective
+// server-side refresh period (this interval + setInterval jitter + network
+// latency) must stay under 300s, or an idle tab flickers offline in the sliver
+// before each beat. Matching 300s exactly would leave zero margin.
+const ME_HEARTBEAT_MS = 270_000
 
 const heartbeatCurrentUser = async () => {
   // Guests get 401 on /me as their normal answer; nothing to watch for.
@@ -176,8 +188,11 @@ provide('refreshStats', fetchStats)
 
 // Auth state changes (login, logout, session expiry) flip which fields the
 // /api/library-stats endpoint returns — refetch so the footer updates without
-// a manual page reload.
-watch(currentUser, () => { fetchStats() })
+// a manual page reload. Watch by *identity* (email), not the ref: the /me
+// heartbeat below replaces currentUser.value with a fresh object every
+// ME_HEARTBEAT_MS, and watching the ref would refetch stats on every heartbeat
+// for nothing.
+watch(() => currentUser.value?.email ?? null, () => { fetchStats() })
 
 const startStatsPolling = () => {
   if (statsTimer !== null) return
@@ -319,7 +334,7 @@ const handleLogout = async () => {
     </div>
 
     <!-- Header -->
-    <header class="bg-white dark:bg-gray-800 shadow-sm dark:shadow-gray-900/50 sticky top-0 z-30 border-b border-transparent dark:border-gray-700" v-if="!isAuthRoute">
+    <header class="bg-white dark:bg-gray-800 shadow-sm dark:shadow-gray-900/50 sticky top-0 z-30 border-b border-transparent dark:border-gray-700" v-if="!isAuthRoute && !isPublicChrome">
       <div class="w-full px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16 items-center">
           <div class="flex items-center">
@@ -355,9 +370,15 @@ const handleLogout = async () => {
           </div>
 
           <div class="flex items-center gap-2 sm:gap-4">
-            <router-link v-if="currentUser" to="/bookshelf" class="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none ml-2 mr-2">
-              <BookmarkIcon class="h-5 w-5" />
-              <span>{{ t('app.bookshelf') }}</span>
+            <router-link
+              v-if="currentUser"
+              to="/playlists"
+              class="flex items-center gap-1 text-sm focus:outline-none ml-2 mr-2"
+              :class="$route.path.startsWith('/playlists') ? 'text-blue-600 dark:text-blue-400' : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'"
+            >
+              <BookmarkIconSolid v-if="$route.path.startsWith('/playlists')" class="h-5 w-5" />
+              <BookmarkIcon v-else class="h-5 w-5" />
+              <span>{{ t('playlists.title') }}</span>
             </router-link>
 
             <!-- Theme Switcher -->
@@ -474,12 +495,40 @@ const handleLogout = async () => {
       </div>
     </header>
 
+    <!-- Recipient header for public shared playlists: wordmark + Sign in to save -->
+    <header v-else-if="isPublicChrome" class="bg-white dark:bg-gray-800 shadow-sm dark:shadow-gray-900/50 sticky top-0 z-30 border-b border-transparent dark:border-gray-700">
+      <div class="w-full px-4 sm:px-6 lg:px-8">
+        <div class="flex justify-between h-16 items-center">
+          <router-link to="/" class="flex items-center gap-2 text-gray-900 dark:text-white" :title="t('app.title')">
+            <BookOpenIcon class="h-8 w-8 text-blue-600 dark:text-blue-400" />
+            <span class="font-semibold text-lg">{{ t('app.title') }}</span>
+          </router-link>
+          <div class="flex items-center gap-2 sm:gap-4">
+            <ThemeSwitcher />
+            <LanguageSwitcher />
+            <router-link
+              v-if="!currentUser"
+              :to="{ name: 'login', query: { next: $route.fullPath } }"
+              class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+            >
+              <ArrowRightOnRectangleIcon class="h-5 w-5" />
+              <span>{{ t('playlists.sign_in_to_save') }}</span>
+            </router-link>
+            <router-link v-else to="/playlists" class="flex items-center" :title="t('playlists.title')">
+              <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-8 w-8 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
+              <span v-else class="h-8 w-8 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-xs font-semibold text-gray-600 dark:text-gray-200">{{ userInitials(currentUser) }}</span>
+            </router-link>
+          </div>
+        </div>
+      </div>
+    </header>
+
     <!-- Main Content -->
     <main class="flex-1 w-full px-4 sm:px-6 lg:px-8 py-8">
       <router-view />
     </main>
 
-    <footer v-if="!isAuthRoute" class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-6 text-center text-sm text-gray-500 dark:text-gray-400 mt-auto">
+    <footer v-if="!isAuthRoute && !isPublicChrome" class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-6 text-center text-sm text-gray-500 dark:text-gray-400 mt-auto">
       <template v-if="stats">
         <span>{{ t('app.stats.books', { n: nFmt(stats.total_books) }, stats.total_books) }}</span>
         <template v-if="stats.total_audio > 0">

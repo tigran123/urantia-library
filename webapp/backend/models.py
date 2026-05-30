@@ -62,6 +62,56 @@ class ReadingProgress(Base):
     # bookshelf can render a progress bar.
     percent = Column(Float, nullable=True)
 
+class Playlist(Base):
+    """User-owned, named collection of books and/or directories. One
+    `kind='bookshelf'` playlist per user is auto-created and not deletable; it
+    supersedes the old single favourites list (the favorites + directory_favorites
+    rows are migrated into it). `visibility='public'` exposes the list at
+    /api/shared/{share_token}; the token is stable — minted once and kept across
+    private<->public round-trips (going private just 404s the shared endpoint)."""
+    __tablename__ = "playlists"
+    __table_args__ = (
+        Index("idx_playlists_owner", "owner_id"),
+        # One Bookshelf per user — race-safety for _get_or_create_bookshelf.
+        Index("ix_playlists_one_bookshelf", "owner_id",
+              unique=True, sqlite_where=text("kind = 'bookshelf'")),
+    )
+
+    id          = Column(Integer, primary_key=True, index=True)
+    owner_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name        = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    visibility  = Column(String, nullable=False, default="private")   # 'private' | 'public'
+    kind        = Column(String, nullable=False, default="normal")    # 'normal' | 'bookshelf'
+    share_token = Column(String, unique=True, nullable=True)
+    created_at  = Column(String, nullable=False)                      # ISO-8601 UTC
+    updated_at  = Column(String, nullable=False)                      # ISO-8601 UTC
+
+
+class PlaylistItem(Base):
+    """A single entry in a playlist — either a book (`item_type='book'`,
+    `book_hash_id` set) or a directory (`item_type='directory'`, `dir_path` set).
+    Directories are first-class members, ordered alongside books by `position`
+    (owner-defined). Two partial-unique indexes prevent the same book/directory
+    being added twice to one playlist; the non-discriminating column is NULL."""
+    __tablename__ = "playlist_items"
+    __table_args__ = (
+        Index("ix_playlist_items_book", "playlist_id", "book_hash_id",
+              unique=True, sqlite_where=text("item_type = 'book'")),
+        Index("ix_playlist_items_dir", "playlist_id", "dir_path",
+              unique=True, sqlite_where=text("item_type = 'directory'")),
+        Index("ix_playlist_items_pos", "playlist_id", "position"),
+    )
+
+    id           = Column(Integer, primary_key=True, index=True)
+    playlist_id  = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_type    = Column(String, nullable=False)                    # 'book' | 'directory'
+    book_hash_id = Column(String, ForeignKey("books.id", ondelete="CASCADE"), nullable=True)
+    dir_path     = Column(String, nullable=True)
+    position     = Column(Integer, nullable=False, default=0)
+    added_at     = Column(String, nullable=False)                    # ISO-8601 UTC
+
+
 class Book(Base):
     __tablename__ = "books"
 

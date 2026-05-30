@@ -205,6 +205,29 @@ class DirectoryFavoriteResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class PlaylistCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    visibility: str = "private"   # 'private' | 'public'
+
+
+class PlaylistUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    visibility: Optional[str] = None
+
+
+class PlaylistItemAdd(BaseModel):
+    """Add a book (book_hash_id) or a directory (dir_path) — exactly one."""
+    book_hash_id: Optional[str] = None
+    dir_path: Optional[str] = None
+
+
+class PlaylistOrderUpdate(BaseModel):
+    """Ordered list of playlist_item ids; must match the playlist's full set."""
+    item_ids: List[int]
+
+
 class ReadingProgressCreate(BaseModel):
     hash_id: str
     location: str

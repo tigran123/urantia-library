@@ -1,7 +1,9 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import BrowseView from '../views/BrowseView.vue'
 import SearchView from '../views/SearchView.vue'
-import BookshelfView from '../views/BookshelfView.vue'
+import PlaylistsView from '../views/PlaylistsView.vue'
+import PlaylistDetailView from '../views/PlaylistDetailView.vue'
+import PublicPlaylistView from '../views/PublicPlaylistView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import SetPasswordView from '../views/SetPasswordView.vue'
@@ -46,9 +48,30 @@ const router = createRouter({
       component: SearchView
     },
     {
+      path: '/playlists',
+      name: 'playlists',
+      component: PlaylistsView
+    },
+    {
+      path: '/playlists/:id',
+      name: 'playlist-detail',
+      component: PlaylistDetailView,
+      props: true
+    },
+    {
+      // Public share link — works for anonymous viewers; renders recipient
+      // chrome (wordmark + "Sign in to save", no app nav) via route meta.
+      path: '/p/:token',
+      name: 'playlist-share',
+      component: PublicPlaylistView,
+      props: true,
+      meta: { publicChrome: true }
+    },
+    {
+      // Old My Bookshelf link/bookmarks now land on the playlists index, where
+      // the default Bookshelf lives.
       path: '/bookshelf',
-      name: 'bookshelf',
-      component: BookshelfView
+      redirect: '/playlists'
     },
     {
       path: '/login',

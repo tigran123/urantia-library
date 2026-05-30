@@ -38,6 +38,18 @@ const CODE_EXTS = new Set([
   'rs', 'go', 'java', 'css', 'scss', 'json', 'xml', 'yaml', 'yml', 'sql', 'ini',
 ])
 
+// Presentation date as "D MMM YYYY" in both locales (e.g. "26 May 2026" /
+// "26 мая 2026"). The Russian " г." year suffix is stripped. Stored ISO
+// timestamps are unchanged — this only formats for display.
+export function formatShortDate(locale: string, iso?: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  return new Intl.DateTimeFormat(locale === 'ru' ? 'ru-RU' : 'en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  }).format(d).replace(/\s*г\.?$/u, '')
+}
+
 export function fileTypeLabel(name: string): string | null {
   if (!name) return null
   const n = name.toLowerCase()

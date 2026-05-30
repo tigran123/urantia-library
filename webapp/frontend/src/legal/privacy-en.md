@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: 29 May 2026_
+_Last updated: 30 May 2026_
 
 This Privacy Policy explains what information this library collects, why, and what your rights are. It applies to everyone who visits or uses this library, including unregistered visitors.
 
@@ -17,6 +17,7 @@ When you visit any page in this library, the following is automatically recorded
 - **IP address** — the network address your device uses to reach us.
 - **Browser identifier** (User-Agent) — the kind of browser and operating system you use.
 - **The pages you visit** — directories you browse, books you open, searches you make.
+- **Actions you take in the library** — for example, organizing books into playlists (creating or deleting a playlist, adding or removing items, or changing whether it is private or shared), and similar interactions with library features.
 - **Login and registration events** — the time you sign in, whether successfully or not.
 - **Administrative actions** (only if you have administrator privileges) — for example, recommending a book or removing it from the Recommended list.
 

@@ -2,9 +2,13 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, unrecommendBooksBulk, type IntegrityMode } from '../api'
+import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, unrecommendBooksBulk, getContainedKeys, type IntegrityMode } from '../api'
+import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
+import { useEditClearance } from '../composables/useEditClearance'
+import { getFullUrl } from '../lib/assets'
 
 const { t, locale } = useI18n({ useScope: 'global' })
+const { editClearance } = useEditClearance()
 const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_by_name, it?.recommended_at)
 const currentUser = inject<Ref<{ is_admin?: boolean, email?: string } | null>>('currentUser', ref(null))
 const router = useRouter()
@@ -148,24 +152,10 @@ const startSelectionUnrecommend = async () => {
   }
 }
 
-const editBookClearance = async (item: any, event: Event) => {
+const editBookClearance = (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
-  if (!item.hash_id) return
-  const current = item.clearance ?? 0
-  const raw = window.prompt(t('admin.clearance_prompt', { title: item.title || item.name }), String(current))
-  if (raw === null) return
-  const next = Number(raw)
-  if (!Number.isFinite(next) || !Number.isInteger(next) || next < 0 || next > 100) {
-    alert(t('admin.integrity.clearance_invalid_range'))
-    return
-  }
-  try {
-    await api.put(`/admin/books/${encodeURIComponent(item.hash_id)}/clearance`, { clearance: next })
-    item.clearance = next
-  } catch (err: any) {
-    alert(err.response?.data?.detail || err.message)
-  }
+  editClearance(item)
 }
 import { FolderIcon, DocumentIcon, HomeIcon, ChevronRightIcon, Squares2X2Icon, ListBulletIcon, BookmarkIcon, ArrowDownTrayIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon, TrashIcon, LockClosedIcon, CursorArrowRaysIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
@@ -202,67 +192,51 @@ const requireAuth = (): boolean => {
   return true
 }
 
-const loadFavorites = async () => {
+// `favoriteIds` / `dirFavorites` now track which books/directories sit in >=1
+// of the user's playlists — that drives the filled/blue bookmark state. The
+// bookmark click opens the add-to-playlist popover instead of toggling a single
+// favourite.
+const loadContainedKeys = async () => {
+  if (!currentUser.value) {
+    favoriteIds.value = new Set()
+    dirFavorites.value = new Set()
+    return
+  }
   try {
-    const res = await api.get('/favorites')
-    const ids = res.data.items.map((f: any) => f.hash_id)
-    favoriteIds.value = new Set(ids)
+    const res = await getContainedKeys()
+    favoriteIds.value = new Set(res.data.book_hash_ids)
+    dirFavorites.value = new Set(res.data.dir_paths)
   } catch (err) {
-    console.error('Failed to load favorites', err)
+    console.error('Failed to load playlist membership', err)
   }
 }
 
-const loadDirFavorites = async () => {
-  try {
-    const res = await api.get('/dir-favorites')
-    dirFavorites.value = new Set((res.data.items || []).map((f: any) => f.path))
-  } catch (err) {
-    console.error('Failed to load directory favorites', err)
-  }
-}
+// --- add-to-playlist popover ---
+const popoverTarget = ref<{ book_hash_id?: string; dir_path?: string; title?: string } | null>(null)
+const popoverPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
 
-const toggleFavorite = async (item: any, event: Event) => {
+const openPlaylistPopover = (target: { book_hash_id?: string; dir_path?: string; title?: string }, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
+  if (!requireAuth()) return
+  const el = event.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  popoverPos.value = { top: rect.bottom + 4, left: rect.left }
+  popoverTarget.value = target
+}
+
+const toggleFavorite = (item: any, event: Event) => {
   if (!item.hash_id) return
-  if (!requireAuth()) return
-
-  try {
-    const newIds = new Set(favoriteIds.value)
-    if (favoriteIds.value.has(item.hash_id)) {
-      await api.delete(`/favorites/${encodeURIComponent(item.hash_id)}`)
-      newIds.delete(item.hash_id)
-    } else {
-      await api.post('/favorites', { hash_id: item.hash_id })
-      newIds.add(item.hash_id)
-    }
-    favoriteIds.value = newIds
-  } catch (err) {
-    console.error('Failed to toggle favorite', err)
-  }
+  openPlaylistPopover({ book_hash_id: item.hash_id, title: item.title || item.name }, event)
 }
 
-const toggleDirFavorite = async (path: string, event?: Event) => {
-  if (event) {
-    event.preventDefault()
-    event.stopPropagation()
-  }
-  if (!path) return
-  if (!requireAuth()) return
-  try {
-    const newSet = new Set(dirFavorites.value)
-    if (dirFavorites.value.has(path)) {
-      await api.delete('/dir-favorites', { params: { path } })
-      newSet.delete(path)
-    } else {
-      await api.post('/dir-favorites', { path })
-      newSet.add(path)
-    }
-    dirFavorites.value = newSet
-  } catch (err) {
-    console.error('Failed to toggle directory favorite', err)
-  }
+const toggleDirFavorite = (path: string, event?: Event) => {
+  if (!path || !event) return
+  const name = path.split('/').filter(Boolean).pop() || path
+  openPlaylistPopover({ dir_path: path, title: name }, event)
 }
+
+const onMembershipChanged = () => { loadContainedKeys() }
 
 const deleteDirectory = async (path: string, name: string, event?: Event) => {
   if (event) {
@@ -305,8 +279,7 @@ const loadPath = async (path: string) => {
 }
 
 onMounted(() => {
-  loadFavorites()
-  loadDirFavorites()
+  loadContainedKeys()
   loadPath(route.params.path as string)
   window.addEventListener('keydown', onSelectModeKeydown)
 })
@@ -328,8 +301,7 @@ watch(() => route.params.path, (newPath) => {
 // a 403 from clearance-gated subdirectories.
 watch(() => currentUser.value?.email ?? null, () => {
   if (currentUser.value) {
-    loadFavorites()
-    loadDirFavorites()
+    loadContainedKeys()
     loadPath(currentPath.value)
   } else {
     favoriteIds.value = new Set()
@@ -349,10 +321,6 @@ const getBreadcrumbs = () => {
   })
 }
 
-const getFullUrl = (url: string) => {
-  if (!url) return ''
-  return api.defaults.baseURL?.replace('/api', '') + url
-}
 
 
 const downloadItem = (item: any, event: Event) => {
@@ -411,12 +379,12 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         <!-- Bookmark the current directory -->
         <button
           v-if="currentPath"
-          @click="toggleDirFavorite(currentPath)"
+          @click="toggleDirFavorite(currentPath, $event)"
           class="p-1.5 rounded-md transition-colors border"
           :class="dirFavorites.has(currentPath)
             ? 'text-blue-500 border-blue-200 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50'
             : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-blue-500 hover:bg-gray-100 dark:hover:bg-gray-700'"
-          :title="dirFavorites.has(currentPath) ? $t('app.remove_favorite') : $t('app.add_favorite')"
+          :title="$t('playlists.add_to')"
         >
           <BookmarkIconSolid v-if="dirFavorites.has(currentPath)" class="h-5 w-5" />
           <BookmarkIcon v-else class="h-5 w-5" />
@@ -493,7 +461,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             >
               <QualityMark :class="[gridCls.icon, 'text-green-600 dark:text-green-400']" />
             </span>
-            <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(item.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+            <button v-if="item.hash_id" @click.prevent="toggleFavorite(item, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, favoriteIds.has(item.hash_id) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="$t('playlists.add_to')">
               <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" :class="gridCls.icon" />
               <BookmarkIcon v-else :class="gridCls.icon" />
             </button>
@@ -511,7 +479,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             >
               <TrashIcon :class="gridCls.icon" />
             </button>
-            <button v-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, dirFavorites.has(item.path) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')">
+            <button v-if="item.is_dir" @click.prevent="toggleDirFavorite(item.path, $event)" :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, dirFavorites.has(item.path) ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']" :title="$t('playlists.add_to')">
               <BookmarkIconSolid v-if="dirFavorites.has(item.path)" :class="gridCls.icon" />
               <BookmarkIcon v-else :class="gridCls.icon" />
             </button>
@@ -643,7 +611,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 @click.prevent="toggleFavorite(item, $event)"
                 class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 :class="{ 'text-blue-500': favoriteIds.has(item.hash_id), 'text-gray-400 hover:text-blue-500': !favoriteIds.has(item.hash_id) }"
-                :title="favoriteIds.has(item.hash_id) ? $t('app.remove_favorite') : $t('app.add_favorite')"
+                :title="$t('playlists.add_to')"
               >
                 <BookmarkIconSolid v-if="favoriteIds.has(item.hash_id)" class="h-5 w-5" />
                 <BookmarkIcon v-else class="h-5 w-5" />
@@ -653,7 +621,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 @click.prevent="toggleDirFavorite(item.path, $event)"
                 class="absolute right-0 top-0 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 :class="{ 'text-blue-500': dirFavorites.has(item.path), 'text-gray-400 hover:text-blue-500': !dirFavorites.has(item.path) }"
-                :title="dirFavorites.has(item.path) ? $t('app.remove_favorite') : $t('app.add_favorite')"
+                :title="$t('playlists.add_to')"
               >
                 <BookmarkIconSolid v-if="dirFavorites.has(item.path)" class="h-5 w-5" />
                 <BookmarkIcon v-else class="h-5 w-5" />
@@ -750,5 +718,13 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         {{ t('admin.integrity.exit_select_mode') }}
       </button>
     </div>
+
+    <AddToPlaylistPopover
+      v-if="popoverTarget"
+      :position="popoverPos"
+      :target="popoverTarget"
+      @close="popoverTarget = null"
+      @changed="onMembershipChanged"
+    />
   </div>
 </template>
