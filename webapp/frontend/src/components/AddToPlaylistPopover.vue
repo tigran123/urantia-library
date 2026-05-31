@@ -17,7 +17,14 @@ const props = defineProps<{
   position: { top: number; left: number }
   target: { book_hash_id?: string; dir_path?: string; title?: string }
 }>()
-const emit = defineEmits<{ (e: 'close'): void; (e: 'changed'): void }>()
+// `changed` carries which playlist toggled and its new state so a caller can
+// react to a *specific* list (e.g. the playlist detail view drops the row when
+// the current list is unticked). Callers that only refresh a filled-bookmark
+// Set ignore the payload.
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'changed', payload?: { playlistId: number; checked: boolean }): void
+}>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -80,7 +87,7 @@ const toggle = async (p: PlaylistSummary) => {
       checked.value.add(p.id)
     }
     checked.value = new Set(checked.value)
-    emit('changed')
+    emit('changed', { playlistId: p.id, checked: !wasChecked })
   } catch (e) {
     console.error('toggle playlist membership failed', e)
   } finally {

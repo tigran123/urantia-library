@@ -16,13 +16,15 @@ import PlaylistBookCard from '../components/PlaylistBookCard.vue'
 import PlaylistBookRow from '../components/PlaylistBookRow.vue'
 import PlaylistEditDialog from '../components/PlaylistEditDialog.vue'
 import ShareDialog from '../components/ShareDialog.vue'
+import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 import { gridItemSize, GRID_CLASSES } from '../composables/useGridItemSize'
 import { formatShortDate } from '../lib/itemFormat'
 import {
-  getPlaylist, removePlaylistItem, reorderPlaylist,
+  getPlaylist, reorderPlaylist,
   type PlaylistSummary, type PlaylistItem, type PlaylistVisibility,
 } from '../api'
 import { useEditClearance } from '../composables/useEditClearance'
+import { playlistItemTarget } from '../composables/usePlaylistItem'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
@@ -75,16 +77,45 @@ const load = async () => {
 onMounted(load)
 watch(pid, load)
 
-const onRemove = async (itemId: number) => {
-  const prev = items.value
-  items.value = items.value.filter((it) => it.id !== itemId)
+// --- add-to-playlist popover (replaces the old per-item remove button) ---
+// The popover commits each tick/untick immediately server-side. We keep the
+// row in place while it's open and reconcile on close: if *this* playlist was
+// unticked (and not re-ticked), the item left it, so drop the row. Deferring to
+// close keeps the popover's anchor stable and makes untick→re-tick a no-op.
+type PopoverTarget = { book_hash_id?: string; dir_path?: string; title?: string }
+const popoverTarget = ref<PopoverTarget | null>(null)
+const popoverPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
+const popoverItemId = ref<number | null>(null)
+// Set to the open item's id once it's unticked from this playlist; cleared if
+// re-ticked. Drives the "leaving" dim and the on-close removal.
+const pendingRemovalId = ref<number | null>(null)
+
+const openPlaylistPopover = (item: PlaylistItem, event: Event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  popoverPos.value = { top: rect.bottom + 4, left: rect.left }
+  popoverItemId.value = item.id
+  pendingRemovalId.value = null
+  popoverTarget.value = playlistItemTarget(item)
+}
+
+const onMembershipChanged = (payload?: { playlistId: number; checked: boolean }) => {
+  // Only this playlist's membership affects this view. checked=false → the open
+  // item just left this playlist, so mark it to drop when the popover closes.
+  if (!payload || payload.playlistId !== pid.value) return
+  pendingRemovalId.value = payload.checked ? null : popoverItemId.value
+}
+
+const onPopoverClose = () => {
+  const removeId = pendingRemovalId.value
+  popoverTarget.value = null
+  popoverItemId.value = null
+  pendingRemovalId.value = null
+  if (removeId == null) return
+  // The popover already deleted it server-side — just reconcile the view.
+  items.value = items.value.filter((it) => it.id !== removeId)
   if (playlist.value) playlist.value.item_count = items.value.length
-  try {
-    await removePlaylistItem(pid.value, itemId)
-  } catch (e) {
-    console.error('remove failed', e)
-    items.value = prev // re-sync on error
-  }
 }
 
 // --- drag reorder (owner only) ---
@@ -251,9 +282,9 @@ const onShareUpdated = (payload: { visibility: PlaylistVisibility; share_token: 
           @dragover.prevent
           @drop.prevent="onDrop"
           @dragend="onDragEnd"
-          :class="dragIndex === i ? 'opacity-40' : ''"
+          :class="[(dragIndex === i || item.id === pendingRemovalId) ? 'opacity-40' : '', item.id === pendingRemovalId ? 'pointer-events-none' : '', 'transition-opacity']"
         >
-          <PlaylistBookCard :item="item" mode="owner" :draggable="canReorder" :from="`playlist:${pid}`" @remove="onRemove" @edit-clearance="onEditClearance" />
+          <PlaylistBookCard :item="item" mode="owner" :draggable="canReorder" :from="`playlist:${pid}`" @open-menu="(ev) => openPlaylistPopover(item, ev)" @edit-clearance="onEditClearance" />
         </div>
       </div>
 
@@ -270,9 +301,9 @@ const onShareUpdated = (payload: { visibility: PlaylistVisibility; share_token: 
             @drop.prevent="onDrop"
             @dragend="onDragEnd"
             class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-            :class="dragIndex === i ? 'opacity-40' : ''"
+            :class="[(dragIndex === i || item.id === pendingRemovalId) ? 'opacity-40' : '', item.id === pendingRemovalId ? 'pointer-events-none' : '']"
           >
-            <PlaylistBookRow :item="item" mode="owner" :draggable="canReorder" :from="`playlist:${pid}`" @remove="onRemove" @edit-clearance="onEditClearance" />
+            <PlaylistBookRow :item="item" mode="owner" :draggable="canReorder" :from="`playlist:${pid}`" @open-menu="(ev) => openPlaylistPopover(item, ev)" @edit-clearance="onEditClearance" />
           </li>
         </ul>
       </div>
@@ -280,5 +311,6 @@ const onShareUpdated = (payload: { visibility: PlaylistVisibility; share_token: 
 
     <PlaylistEditDialog v-if="showEdit && playlist" :playlist="playlist" @close="showEdit = false" @saved="onEdited" @deleted="onDeleted" />
     <ShareDialog v-if="showShare && playlist" :playlist="playlist" :items="items" @close="showShare = false" @updated="onShareUpdated" />
+    <AddToPlaylistPopover v-if="popoverTarget" :position="popoverPos" :target="popoverTarget" @close="onPopoverClose" @changed="onMembershipChanged" />
   </div>
 </template>

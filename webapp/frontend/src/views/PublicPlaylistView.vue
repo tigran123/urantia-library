@@ -11,9 +11,11 @@ import CoverCollage from '../components/CoverCollage.vue'
 import VisibilityBadge from '../components/VisibilityBadge.vue'
 import PlaylistBookCard from '../components/PlaylistBookCard.vue'
 import PlaylistBookRow from '../components/PlaylistBookRow.vue'
+import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 import { gridItemSize, GRID_CLASSES } from '../composables/useGridItemSize'
 import { formatShortDate } from '../lib/itemFormat'
-import { getSharedPlaylist, copySharedPlaylist, type SharedPlaylist } from '../api'
+import { playlistItemTarget } from '../composables/usePlaylistItem'
+import { getSharedPlaylist, copySharedPlaylist, getContainedKeys, type SharedPlaylist, type PlaylistItem } from '../api'
 
 const props = defineProps<{ token: string }>()
 const router = useRouter()
@@ -44,7 +46,41 @@ const load = async () => {
   }
 }
 
-onMounted(load)
+// --- add-to-playlist (signed-in viewers add a shared item to THEIR own
+// playlists, exactly like Browse). There's no "remove from this playlist" here
+// — it isn't the viewer's playlist — so nothing ever disappears. The bookmark's
+// blue state reflects the viewer's own membership (contained-keys).
+const favoriteIds = ref<Set<string>>(new Set())
+const dirFavorites = ref<Set<string>>(new Set())
+const loadContainedKeys = async () => {
+  if (!currentUser.value) { favoriteIds.value = new Set(); dirFavorites.value = new Set(); return }
+  try {
+    const res = await getContainedKeys()
+    favoriteIds.value = new Set(res.data.book_hash_ids)
+    dirFavorites.value = new Set(res.data.dir_paths)
+  } catch (e) {
+    console.error('Failed to load playlist membership', e)
+  }
+}
+const isContained = (item: PlaylistItem) =>
+  item.item_type === 'directory'
+    ? !!(item.dir_path && dirFavorites.value.has(item.dir_path))
+    : !!(item.hash_id && favoriteIds.value.has(item.hash_id))
+
+type PopoverTarget = { book_hash_id?: string; dir_path?: string; title?: string }
+const popoverTarget = ref<PopoverTarget | null>(null)
+const popoverPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
+const openPlaylistPopover = (item: PlaylistItem, event: Event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!currentUser.value) return // bookmark is hidden for guests anyway
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  popoverPos.value = { top: rect.bottom + 4, left: rect.left }
+  popoverTarget.value = playlistItemTarget(item)
+}
+const onMembershipChanged = () => { loadContainedKeys() }
+
+onMounted(() => { load(); loadContainedKeys() })
 watch(() => props.token, load)
 
 const saveCopy = async () => {
@@ -142,17 +178,19 @@ const saveCopy = async () => {
 
       <!-- Grid -->
       <div v-else-if="viewMode === 'grid'" :class="['grid', GRID_CLASSES[gridItemSize]]">
-        <PlaylistBookCard v-for="item in items" :key="item.id" :item="item" mode="public" />
+        <PlaylistBookCard v-for="item in items" :key="item.id" :item="item" mode="public" :contained="isContained(item)" @open-menu="(ev) => openPlaylistPopover(item, ev)" />
       </div>
 
       <!-- List -->
       <div v-else class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
         <ul class="divide-y divide-gray-100 dark:divide-gray-700">
           <li v-for="item in items" :key="item.id" class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-            <PlaylistBookRow :item="item" mode="public" />
+            <PlaylistBookRow :item="item" mode="public" :contained="isContained(item)" @open-menu="(ev) => openPlaylistPopover(item, ev)" />
           </li>
         </ul>
       </div>
     </template>
+
+    <AddToPlaylistPopover v-if="popoverTarget" :position="popoverPos" :target="popoverTarget" @close="popoverTarget = null" @changed="onMembershipChanged" />
   </div>
 </template>

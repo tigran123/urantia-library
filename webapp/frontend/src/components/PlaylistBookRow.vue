@@ -1,10 +1,12 @@
 <script setup lang="ts">
 // List row for one playlist item (book OR directory), mirroring the Browse list
-// row. Owner mode shows a left drag handle + a right remove (trash) button and
-// the clearance pill in the meta line; public mode is read-only (download only).
+// row. The bookmark button opens the parent's add-to-playlist popover (untick
+// the current list to remove, tick another to move); owner mode also shows a
+// left drag handle and the clearance pill in the meta line.
 import {
-  ArrowDownTrayIcon, TrashIcon, FolderIcon, DocumentIcon, Bars3Icon,
+  ArrowDownTrayIcon, BookmarkIcon, FolderIcon, DocumentIcon, Bars3Icon,
 } from '@heroicons/vue/24/outline'
+import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from './StarRating.vue'
 import QualityMark from './QualityMark.vue'
 import { getFullUrl } from '../lib/assets'
@@ -15,17 +17,19 @@ const props = withDefaults(defineProps<{
   item: PlaylistItem
   mode: 'owner' | 'public'
   draggable?: boolean
+  // Solid (blue) bookmark when the item is in ≥1 of the viewer's playlists.
+  contained?: boolean
   // See PlaylistBookCard for the rationale — opaque ?from=… tag on links.
   from?: string | null
-}>(), { draggable: false, from: null })
+}>(), { draggable: false, contained: true, from: null })
 
 const emit = defineEmits<{
-  (e: 'remove', id: number): void
+  (e: 'open-menu', event: MouseEvent): void
   (e: 'edit-clearance', item: PlaylistItem): void
 }>()
 
 // Shared with PlaylistBookCard — see usePlaylistItem.
-const { t, isAdmin, isDir, isOwner, to, typeLabel, displayTitle, recTip, download } = usePlaylistItem(props)
+const { t, isAdmin, isDir, isOwner, canBookmark, to, typeLabel, displayTitle, recTip, download } = usePlaylistItem(props)
 </script>
 
 <template>
@@ -91,12 +95,14 @@ const { t, isAdmin, isDir, isOwner, to, typeLabel, displayTitle, recTip, downloa
         <ArrowDownTrayIcon class="h-5 w-5" />
       </button>
       <button
-        v-if="isOwner"
-        @click.prevent.stop="emit('remove', item.id)"
-        class="p-1.5 rounded-full hover:bg-red-50 dark:hover:bg-red-950/40 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-        :title="t('playlists.remove')"
+        v-if="canBookmark && (item.hash_id || item.dir_path)"
+        @click.prevent.stop="emit('open-menu', $event)"
+        class="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+        :class="contained ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500'"
+        :title="t('playlists.add_to')"
       >
-        <TrashIcon class="h-5 w-5" />
+        <BookmarkIconSolid v-if="contained" class="h-5 w-5" />
+        <BookmarkIcon v-else class="h-5 w-5" />
       </button>
     </div>
   </div>

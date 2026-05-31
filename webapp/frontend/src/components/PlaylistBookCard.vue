@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // Grid card for one playlist item (book OR directory), mirroring the Browse
-// grid card. Owner mode adds the clearance pill, a remove (x) button, and a
-// hover drag grip; public mode is read-only (download only). The parent owns
-// the HTML5 drag wiring — this card only renders the grip affordance.
+// grid card. The bookmark button opens the parent's add-to-playlist popover
+// (tick/untick playlists to move or remove the item); owner mode also adds the
+// clearance pill and a hover drag grip. The parent owns the HTML5 drag wiring
+// and the popover — this card only renders the affordances and emits open-menu.
 import {
-  ArrowDownTrayIcon, XMarkIcon, FolderIcon, DocumentIcon, Bars3Icon,
+  ArrowDownTrayIcon, BookmarkIcon, FolderIcon, DocumentIcon, Bars3Icon,
 } from '@heroicons/vue/24/outline'
+import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from './StarRating.vue'
 import QualityMark from './QualityMark.vue'
 import { gridCls } from '../composables/useGridItemSize'
@@ -17,20 +19,23 @@ const props = withDefaults(defineProps<{
   item: PlaylistItem
   mode: 'owner' | 'public'
   draggable?: boolean
+  // Solid (blue) bookmark when the item is in ≥1 of the viewer's playlists.
+  // Owner detail view leaves the default (always in *this* playlist).
+  contained?: boolean
   // Opaque source tag (e.g. "playlist:42") carried as ?from=… on book/dir
   // links so destination views can navigate back here on context-relevant
   // actions (currently: deleting a book returns to the playlist, not parent).
   from?: string | null
-}>(), { draggable: false, from: null })
+}>(), { draggable: false, contained: true, from: null })
 
 const emit = defineEmits<{
-  (e: 'remove', id: number): void
+  (e: 'open-menu', event: MouseEvent): void
   (e: 'edit-clearance', item: PlaylistItem): void
 }>()
 
 // Nav target, type badge, title, recommendation tooltip, admin gate and
 // blob-download are shared with PlaylistBookRow — see usePlaylistItem.
-const { t, isAdmin, isDir, isOwner, to, typeLabel, displayTitle, recTip, download } = usePlaylistItem(props)
+const { t, isAdmin, isDir, isOwner, canBookmark, to, typeLabel, displayTitle, recTip, download } = usePlaylistItem(props)
 </script>
 
 <template>
@@ -54,14 +59,16 @@ const { t, isAdmin, isDir, isOwner, to, typeLabel, displayTitle, recTip, downloa
       :title="t('admin.edit_clearance_tooltip')"
     >🔒 {{ item.clearance ?? 0 }}</button>
 
-    <!-- remove (owner only) -->
+    <!-- add to playlist (opens the parent's popover; untick the current list
+         there to remove, tick another to move) -->
     <button
-      v-if="isOwner"
-      @click.prevent.stop="emit('remove', item.id)"
-      :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-red-50 dark:hover:bg-red-950/40 text-gray-400 hover:text-red-500 dark:hover:text-red-400 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn]"
-      :title="t('playlists.remove')"
+      v-if="canBookmark && (item.hash_id || item.dir_path)"
+      @click.prevent.stop="emit('open-menu', $event)"
+      :class="['absolute top-2 right-2 z-10 rounded-full bg-white/80 dark:bg-gray-800/80 hover:bg-white dark:hover:bg-gray-700 shadow-sm backdrop-blur-sm transition-colors border border-gray-100 dark:border-gray-600', gridCls.iconBtn, contained ? 'text-blue-500' : 'text-gray-400 hover:text-blue-500']"
+      :title="t('playlists.add_to')"
     >
-      <XMarkIcon :class="gridCls.icon" />
+      <BookmarkIconSolid v-if="contained" :class="gridCls.icon" />
+      <BookmarkIcon v-else :class="gridCls.icon" />
     </button>
 
     <!-- drag grip (owner + draggable, hover only) -->

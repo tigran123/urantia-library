@@ -5,6 +5,17 @@ import { recommendedTooltip } from '../lib/recommended'
 import { getFullUrl } from '../lib/assets'
 import type { PlaylistItem } from '../api'
 
+// Build the AddToPlaylistPopover `target` from a playlist item. Books carry
+// their hash in `item.hash_id` but the popover wants the key `book_hash_id`;
+// directories use `dir_path`. Shared by both playlist views so the mapping
+// lives in one place.
+export function playlistItemTarget(item: PlaylistItem): { book_hash_id?: string; dir_path?: string; title?: string } {
+  const title = item.title || item.name || item.dir_path || ''
+  return item.item_type === 'directory'
+    ? { dir_path: item.dir_path, title }
+    : { book_hash_id: item.hash_id, title }
+}
+
 // Shared logic for the two playlist item renderers (PlaylistBookCard grid +
 // PlaylistBookRow list): both derive the same nav target, type badge, title,
 // recommendation tooltip and blob-download from the item, and both gate the
@@ -21,6 +32,9 @@ export function usePlaylistItem(props: {
   // the 🔒N pill on isAdmin, matching Browse/Search.
   const currentUser = inject<Ref<{ is_admin?: boolean } | null>>('currentUser', ref(null))
   const isAdmin = computed(() => !!currentUser.value?.is_admin)
+  // The bookmark / add-to-playlist control needs a signed-in user (owners
+  // always are; anonymous viewers of a shared link don't get it).
+  const canBookmark = computed(() => !!currentUser.value)
 
   const isDir = computed(() => props.item.item_type === 'directory')
   const isOwner = computed(() => props.mode === 'owner')
@@ -46,5 +60,5 @@ export function usePlaylistItem(props: {
     document.body.removeChild(a)
   }
 
-  return { t, locale, isAdmin, isDir, isOwner, to, typeLabel, displayTitle, recTip, download }
+  return { t, locale, isAdmin, isDir, isOwner, canBookmark, to, typeLabel, displayTitle, recTip, download }
 }
