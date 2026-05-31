@@ -639,8 +639,9 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
            <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">-grammar</code> {{ $t('search.tip_exclude') }}</li>
            <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">author:harnum</code> {{ $t('search.tip_field') }}</li>
            <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">path:Law/</code> {{ $t('search.tip_path') }}</li>
-           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">ext:djvu</code> {{ $t('search.tip_ext_or') }} <code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">ext:pdf</code> {{ $t('search.tip_ext') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">ext:djvu ext:pdf</code> {{ $t('search.tip_ext') }}</li>
            <li>{{ $t('search.tip_combine') }} <code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">path:History/ ext:epub rome</code></li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">Ctrl+X</code> {{ $t('search.tip_clear') }}</li>
         </ul>
       </div>
     </div>

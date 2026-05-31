@@ -117,6 +117,12 @@ const onGlobalShortcut = (e: KeyboardEvent) => {
   const hasSelection = (window.getSelection()?.toString() || '').length > 0
   if (inEditable && hasSelection) return
   e.preventDefault()
+  clearSearch()
+}
+
+// Clear the search box and put the cursor back in it — shared by the Ctrl/Cmd+X
+// shortcut and the clear (×) button in the search bar.
+const clearSearch = () => {
   searchQuery.value = ''
   nextTick(() => {
     // Focus whichever search box is currently visible (offsetParent is null
@@ -353,10 +359,13 @@ const handleLogout = async () => {
                 v-model="searchQuery"
                 type="search"
                 @keydown.enter="onSearchEnter"
-                class="block w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                class="block w-full pl-10 pr-16 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 :placeholder="t('app.search_placeholder')"
               />
-              <div class="absolute inset-y-0 right-0 pr-3 flex items-center">
+              <div class="absolute inset-y-0 right-0 pr-3 flex items-center gap-1">
+                <button v-if="searchQuery" type="button" @click="clearSearch" class="p-0.5 rounded-full text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-600 focus:outline-none" :title="t('app.search_clear')" :aria-label="t('app.search_clear')">
+                  <XMarkIcon class="h-5 w-5" />
+                </button>
                 <button type="button" @click="showSearchTips = true" class="text-gray-400 hover:text-blue-500 focus:outline-none" title="Search Tips">
                   <QuestionMarkCircleIcon class="h-5 w-5" />
                 </button>
@@ -478,10 +487,13 @@ const handleLogout = async () => {
             v-model="searchQuery"
             type="search"
             @keydown.enter="onSearchEnter"
-            class="block w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+            class="block w-full pl-10 pr-16 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
             :placeholder="t('app.search_placeholder')"
           />
-          <div class="absolute inset-y-0 right-0 pr-3 flex items-center">
+          <div class="absolute inset-y-0 right-0 pr-3 flex items-center gap-1.5">
+            <button v-if="searchQuery" type="button" @click="clearSearch" class="p-1 rounded-full text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-600 focus:outline-none" :title="t('app.search_clear')" :aria-label="t('app.search_clear')">
+              <XMarkIcon class="h-5 w-5" />
+            </button>
             <button type="button" @click="showSearchTips = true" class="text-gray-400 hover:text-blue-500 focus:outline-none" title="Search Tips">
               <QuestionMarkCircleIcon class="h-5 w-5" />
             </button>
@@ -580,8 +592,9 @@ const handleLogout = async () => {
            <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">-grammar</code> {{ t('search.tip_exclude') }}</li>
            <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">author:harnum</code> {{ t('search.tip_field') }}</li>
            <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:Law/</code> {{ t('search.tip_path') }}</li>
-           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:djvu</code> {{ t('search.tip_ext_or') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:pdf</code> {{ t('search.tip_ext') }}</li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">ext:djvu ext:pdf</code> {{ t('search.tip_ext') }}</li>
            <li>{{ t('search.tip_combine') }} <code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">path:History/ ext:epub rome</code></li>
+           <li><code class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-gray-100 font-mono">Ctrl+X</code> {{ t('search.tip_clear') }}</li>
         </ul>
 
         <div class="mt-6 flex justify-end">
@@ -611,3 +624,12 @@ const handleLogout = async () => {
     />
   </div>
 </template>
+
+<style scoped>
+/* Hide the browser's native (tiny, low-contrast) search clear button — we
+   render our own clearer × that's visible on desktop and mobile alike. */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+</style>
