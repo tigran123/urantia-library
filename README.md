@@ -6,13 +6,13 @@ other reference material. Everything is read directly in your browser; nothing
 needs to be installed.
 
 The library is organised by topic. Use the navigation in the top bar to browse
-the directory tree, search by title or author, or jump to your bookshelf of
-favourites and books in progress.
+the directory tree, search by title or author, or jump to your bookshelf and
+playlists.
 
 **No account needed to read.** The catalog is open to guests — anyone can
 browse the directory tree, open books, and search without signing in. Signing
-in is what enables the per-reader features below: bookshelf, reading progress,
-highlights, ratings, comments, and feedback threads.
+in is what enables the per-reader features below: bookshelf and playlists,
+reading progress, highlights, ratings, comments, and feedback threads.
 
 ## Reading
 
@@ -44,15 +44,27 @@ highlights, ratings, comments, and feedback threads.
 - **Configurable page size.** Choose how many results you want per page from
   your account settings.
 
-## Your bookshelf
+## Your bookshelf and playlists
 
-- **Favourite books.** Click on the 'bookmark' icon on any book to add it to your
-  bookshelf for one-click access.
-- **Favourite directories.** Bookmark entire topic directories the same way —
-  useful for collections you return to often.
-- **Reading-progress strip.** Books with saved progress appear on your
-  bookshelf with a progress bar so you can pick up the next session at a
+- **Bookmark anything.** Click the bookmark icon on any book — or any topic
+  directory — to open the **Add to playlist** menu. Tick the playlists the item
+  should belong to, or create a new one on the spot. The icon turns blue once
+  the item is in at least one of your playlists.
+- **Your Bookshelf.** Every reader starts with a **Bookshelf** — the default
+  playlist that is always there and cannot be deleted. It is the natural home
+  for the books and directories you want one click away.
+- **Build your own playlists.** Create named collections — "Summer reading", a
+  research list, a course syllabus — and fill them with both books and whole
+  directories. Each playlist shows a cover collage so you can recognise it at a
   glance.
+- **Arrange them your way.** Drag items within a playlist to reorder them.
+- **Share by link.** Make any playlist public to get a shareable link — anyone
+  with the link can view it, no account needed. Switch it back to private
+  whenever you like; share it again later and the same link comes back to life.
+  Signed-in visitors can **save a copy** of a shared playlist to their own.
+- **Reading-progress strip.** Books with saved progress show a progress bar
+  wherever they appear — on your Bookshelf and in every playlist — so you can
+  pick up the next session at a glance.
 
 ## Annotations, ratings, and comments
 
@@ -127,8 +139,8 @@ web interface — there is no separate admin tool.
   - Edit existing book metadata (title, author, publisher, description, tags,
     series, languages, identifiers) and replace or re-extract the cover image
     from the book itself.
-  - Move books and entire directories between topic folders. Renames and
-    moves preserve every reader's progress, favourites, ratings, comments,
+  - Move books and entire directories between topic directories. Renames and
+    moves preserve every reader's progress, playlists, ratings, comments,
     and annotations — those follow the *content*, not the path.
   - Delete books when appropriate.
 - **Integrity.**
@@ -158,7 +170,7 @@ web interface — there is no separate admin tool.
 
 ## Privacy and persistence
 
-Your account, your reading progress, your favourites, your highlights, your
+Your account, your reading progress, your playlists, your highlights, your
 notes, and your feedback threads all live on the server tied to your account —
 not to a specific browser. Sign in from a different machine and everything is
 exactly where you left it.

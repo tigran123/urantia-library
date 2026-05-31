@@ -6,7 +6,7 @@ This file provides guidance to any AI agent when working with code in this repos
 
 `/Books` is the root of a personal book library. The actual code project lives at `/Books/urantia-library` (a separate git repo); everything else under `/Books` (`Grammars/`, `Law/`, etc.) is library content browsed by that app.
 
-- `/Books/urantia-library/webapp/backend` — FastAPI service. `main.py` is the single ~5700-line entry point; the rest of the module is a thin shell (`database.py`, `models.py`, `schemas.py`, `security.py`, `email_utils.py`).
+- `/Books/urantia-library/webapp/backend` — FastAPI service. `main.py` is the single ~8400-line entry point; the rest of the module is a thin shell (`database.py`, `models.py`, `schemas.py`, `security.py`, `email_utils.py`).
 - `/Books/urantia-library/webapp/frontend` — Vue 3 + Vite + TailwindCSS SPA, served as static assets in production. Multi-format reader: PDF (pdfjs-dist), EPUB (epubjs), DJVU, FB2, Markdown (highlight.js), HTML, plain images.
 - `/Books/urantia-library/webapp/generate-thumbnails.py` — one-shot tooling that generates thumbnails for image directories; not run by the webapp.
 - `/Books/urantia-library/webapp/backend/reimport_orphans.py` — recovery tool used after restoring `lib.db` from a backup; see "Restoring from a backup" below.
@@ -20,7 +20,7 @@ This is the non-obvious thing to understand before touching the backend.
 2. SQLite (`/Books/.data/db/lib.db`) holds the CAS metadata plus all per-user state. Tables fall into three groups:
    - **CAS core** — `books` (metadata keyed by BLAKE2b hash, `id`), `book_locations` (`symlink_path` → `hash_id`, many-to-one).
    - **Auth + presence** — `users`, `registration_requests`. Active JWT sessions live only in memory (see Auth below).
-   - **Per-user state** — `favorites`, `directory_favorites`, `reading_progress`, `book_ratings`, `book_comments`, `annotations`. All reference books by `hash_id`, so they survive file moves. `directory_favorites` is keyed by path (directories aren't content-addressed).
+   - **Per-user state** — `playlists`, `playlist_items` (which supersede the dormant legacy `favorites` and `directory_favorites` tables), `reading_progress`, `book_ratings`, `book_comments`, `annotations`. `playlist_items` references books by `hash_id` (so they survive file moves) and directories by path.
    - **Feedback / contact-admin** — `feedback_threads`, `feedback_recipients` (empty = broadcast; non-empty = directed), `feedback_messages` (kind ∈ `message|admin|internal|status`), `feedback_attachments`, `user_notification_prefs`, `admin_feedback_settings` (singleton row id=1, seeded on startup).
    - **Misc** — `app_meta` (small KV store; currently used as the throttle clock for moderation/feedback digests).
 3. Asset directories under `.data/`:
@@ -108,7 +108,7 @@ python reimport_orphans.py --apply                         # park them in /Books
 sudo systemctl restart urantia-library.service
 ```
 
-`reimport_orphans.py` uses the same metadata/cover helpers as the upload flow (`_extract_upload_metadata`, `_extract_cover_to` in `main.py`). It can only recover what's derivable from the file bytes themselves — hand-edited titles/authors, the original `book_locations.symlink_path`, and per-user state (favorites, annotations, ratings, reading_progress, comments) for the orphan books are gone with the replaced DB. The admin moves each orphan to its proper topic via the existing `POST /api/admin/books/move` UI.
+`reimport_orphans.py` uses the same metadata/cover helpers as the upload flow (`_extract_upload_metadata`, `_extract_cover_to` in `main.py`). It can only recover what's derivable from the file bytes themselves — hand-edited titles/authors, the original `book_locations.symlink_path`, and per-user state (playlists, annotations, ratings, reading_progress, comments) for the orphan books are gone with the replaced DB. The admin moves each orphan to its proper topic via the existing `POST /api/admin/books/move` UI.
 
 ### Deploying to prod
 
@@ -138,5 +138,6 @@ If the unit fails to restart, the log shows the expected vs actual `schema_versi
 - The integrity verification subsystem (`/api/admin/integrity/*`) keeps job state in the in-process `INTEGRITY_JOBS` dict; only one job runs at a time (subsequent `POST` returns 409 with the running job's id). A backend restart loses in-flight jobs, same trade-off as the session map.
 - Annotations have a per-format `anchor` JSON shape (`pdf` / `epub` / `html`) — see `AnnotationAnchor` in `frontend/src/api.ts` and the per-format anchor helpers under `frontend/src/lib/anchors/`. Private annotations live with `status='approved'` (the field only gates *public* visibility); public ones revert to `pending` on every edit so they re-enter moderation.
 - Comments and ratings: one top-level comment per (user, book) — enforced by a partial unique index `ix_book_comments_one_toplevel`. Replies are unrestricted but one level deep. Ratings are unmoderated; comments and public annotations go through admin approval.
+- Playlists: every user has one non-deletable `kind='bookshelf'` playlist (partial unique index `ix_playlists_one_bookshelf`; auto-created lazily by `_get_or_create_bookshelf`, race-safe via IntegrityError-and-requery). `playlist_items` hold either a book (`book_hash_id`) or a directory (`dir_path`), one-per-target via the partial unique indexes `ix_playlist_items_book`/`ix_playlist_items_dir`. The legacy `favorites`/`directory_favorites` tables are dormant — don't write to them. Playlists are a **second clearance-filtered surface**: `_serialize_items` / `_dir_item_visible` / `_collage_items` reapply the same gating as `/api/browse` (gated books and empty directories are silently dropped for non-owners), and the public `GET /api/shared/{token}` view (guest-reachable via `get_optional_user`) must keep filtering per viewer — never bypass it. Share tokens are stable across private↔public toggles (going private just 404s the shared endpoint; the token is kept so re-sharing reactivates the same link).
 - Frontend uses `createWebHashHistory` (hash routing) because the SPA is mounted under `/library/` in prod and the backend doesn't do SPA fallback. Hash routing is what insulates the router from the nginx/uvicorn prefix dance — keep it.
 - Pyright/pyrefly are intentionally disabled (`pyrightconfig.json`, `.vscode/settings.json`) — don't add type-checking to CI without asking.
