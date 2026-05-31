@@ -245,35 +245,46 @@ const toggleSortDir = () => {
   })
 }
 
+// Mirror the backend tokenizer (main.py `_SEARCH_TOKEN_RE`) so the chips and
+// the "results for" term reflect exactly what the server parsed. A token is a
+// structural filter ONLY when it captured an unquoted `field:` prefix — so a
+// quoted whole token like "ext:Strangest" is a free-text phrase, never an ext
+// chip. Multiple ext: values become multiple chips (OR'd server-side); path /
+// needs_review keep the last (last-wins, like the backend).
 const parsedSearch = computed(() => {
   const q = (route.query.q as string) || ''
-  let text = q
-  const filters: {key: string, value: string, fullMatch: string}[] = []
-
-  const pathMatch = text.match(/path:([^\s]+)/)
-  if (pathMatch) {
-    filters.push({ key: 'Path', value: pathMatch[1].replace(/['"]/g, ''), fullMatch: pathMatch[0] })
-    text = text.replace(pathMatch[0], '')
-  }
-
-  const extMatch = text.match(/ext:([^\s]+)/)
-  if (extMatch) {
-    filters.push({ key: 'Extension', value: extMatch[1].replace(/['"]/g, ''), fullMatch: extMatch[0] })
-    text = text.replace(extMatch[0], '')
-  }
-
-  if (currentUser.value?.is_admin) {
-    const nrMatch = text.match(/needs_review:(\S+)/)
-    if (nrMatch) {
-      filters.push({ key: 'Needs review', value: nrMatch[1].replace(/['"]/g, ''), fullMatch: nrMatch[0] })
-      text = text.replace(nrMatch[0], '')
+  const isAdmin = !!currentUser.value?.is_admin
+  const exts: {value: string, fullMatch: string}[] = []
+  let pathF: {value: string, fullMatch: string} | null = null
+  let nrF: {value: string, fullMatch: string} | null = null
+  const residual: string[] = []
+  const re = /(-)?(?:([A-Za-z_]+):)?(?:"([^"]*)"|'([^']*)'|([^\s"']+))/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(q)) !== null) {
+    if (m[0] === '') { re.lastIndex++; continue }
+    const neg = m[1] === '-'
+    const field = (m[2] || '').toLowerCase()
+    const value = m[3] ?? m[4] ?? m[5] ?? ''
+    const structural = field === 'path' || field === 'ext' || (isAdmin && field === 'needs_review')
+    if (structural && value) {
+      if (field === 'ext') {
+        if (!exts.some(e => e.value.toLowerCase() === value.toLowerCase())) exts.push({ value, fullMatch: m[0] })
+      } else if (field === 'path') {
+        pathF = { value, fullMatch: m[0] }
+      } else {
+        nrF = { value, fullMatch: m[0] }
+      }
+    } else {
+      residual.push((neg ? '-' : '') + (field ? field + ':' : '') + value)
     }
   }
 
-  return {
-    text: text.trim(),
-    filters
-  }
+  const filters: {key: string, value: string, fullMatch: string}[] = []
+  if (pathF) filters.push({ key: 'Path', value: pathF.value, fullMatch: pathF.fullMatch })
+  for (const e of exts) filters.push({ key: 'Extension', value: e.value, fullMatch: e.fullMatch })
+  if (nrF) filters.push({ key: 'Needs review', value: nrF.value, fullMatch: nrF.fullMatch })
+
+  return { text: residual.join(' ').trim(), filters }
 })
 
 const removeFilter = (fullMatch: string) => {
@@ -597,7 +608,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           <span v-else class="italic">&nbsp;{{ $t('search.all_items') }}</span>
         </p>
         <div v-if="parsedSearch.filters.length > 0" class="flex flex-wrap gap-2 mt-2 sm:mt-0 sm:ml-2">
-          <span v-for="filter in parsedSearch.filters" :key="filter.key" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-200 dark:border-blue-800">
+          <span v-for="filter in parsedSearch.filters" :key="filter.fullMatch" class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-200 dark:border-blue-800">
             <span class="font-bold">{{ filter.key }}:</span> {{ filter.value }}
             <button @click="removeFilter(filter.fullMatch)" class="ml-1 text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-200 focus:outline-none">
               <XMarkIcon class="h-3 w-3" />

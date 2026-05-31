@@ -1283,7 +1283,7 @@ def parse_search_query(q: str):
     Returns ``(terms, filters)`` where ``filters`` holds the structural
     path/ext/needs_review filters and ``terms`` is a list of dicts:
     ``{text, field, negate, is_phrase}`` (text is lowercased)."""
-    filters = {"path": None, "ext": None, "needs_review": None, "clearance": None}
+    filters = {"path": None, "ext": [], "needs_review": None, "clearance": None}
     terms = []
 
     for m in _SEARCH_TOKEN_RE.finditer(q or ""):
@@ -1303,7 +1303,11 @@ def parse_search_query(q: str):
             if field == "path":
                 filters["path"] = val
             elif field == "ext":
-                filters["ext"] = val if val.startswith(".") else "." + val
+                # Multiple ext: tokens accumulate and are OR'd at query time
+                # (ext:mp4 ext:mp3 → match either), deduped.
+                e = val if val.startswith(".") else "." + val
+                if e not in filters["ext"]:
+                    filters["ext"].append(e)
             elif field == "needs_review":
                 if val in ("1", "true", "yes"):
                     filters["needs_review"] = True
@@ -1459,12 +1463,13 @@ def _build_search_query(q: str, current_user: models.User | None, db: Session):
         )
 
     if filters["ext"]:
-        # parse_search_query normalizes ext to start with a dot; `*`/`?` are
-        # wildcards, so `ext:*` matches every file with an extension.
-        pat = _wildcard_escape(filters["ext"])
-        query = query.filter(
-            func.lower(models.BookLocation.symlink_path).like(f"%{pat}", escape="\\")
-        )
+        # parse_search_query normalizes each ext to start with a dot; `*`/`?`
+        # are wildcards, so `ext:*` matches every file with an extension.
+        # Multiple ext: values are OR'd (ext:mp4 ext:mp3 → either).
+        query = query.filter(or_(*[
+            func.lower(models.BookLocation.symlink_path).like(f"%{_wildcard_escape(e)}", escape="\\")
+            for e in filters["ext"]
+        ]))
 
     if filters["needs_review"] is not None and _is_admin(current_user):
         query = query.filter(models.Book.needs_review == filters["needs_review"])
