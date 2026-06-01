@@ -46,7 +46,7 @@ watch(() => currentUser.value?.email ?? null, (email) => {
 </script>
 
 <template>
-  <div class="max-w-7xl mx-auto space-y-6">
+  <div class="space-y-6">
     <!-- Header card -->
     <div class="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 flex items-center justify-between gap-4">
       <div>

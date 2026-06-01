@@ -48,7 +48,7 @@ const empty = computed(() => !loading.value && items.value.length === 0)
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <div class="px-4 sm:px-6 lg:px-8 py-8">
     <FeedbackSubNav active="mine" />
 
     <div class="flex flex-wrap items-center gap-1.5 mb-4">

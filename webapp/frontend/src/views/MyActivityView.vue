@@ -107,7 +107,7 @@ const hasEvents = computed(() => events.value.length > 0)
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto px-4 py-8 text-gray-800 dark:text-gray-200">
+  <div class="px-4 py-8 text-gray-800 dark:text-gray-200">
     <h1 class="text-2xl font-bold mb-2">{{ t('myActivity.title') }}</h1>
     <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">{{ t('myActivity.subtitle') }}</p>
 

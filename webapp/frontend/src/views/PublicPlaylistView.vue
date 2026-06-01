@@ -101,7 +101,7 @@ const saveCopy = async () => {
 </script>
 
 <template>
-  <div class="max-w-7xl mx-auto space-y-6">
+  <div class="space-y-6">
     <div v-if="loading" class="flex justify-center items-center py-20">
       <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
     </div>

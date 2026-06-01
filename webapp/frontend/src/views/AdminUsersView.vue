@@ -147,7 +147,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="space-y-6 max-w-5xl mx-auto">
+  <div class="space-y-6">
     <AdminNav />
 
     <section class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-6">

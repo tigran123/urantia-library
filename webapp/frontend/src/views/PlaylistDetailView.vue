@@ -6,7 +6,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  ArrowLeftIcon, PlusIcon, ShareIcon, PencilSquareIcon, GlobeAltIcon,
+  PlusIcon, ShareIcon, PencilSquareIcon, GlobeAltIcon,
   Squares2X2Icon, ListBulletIcon, BookmarkIcon,
 } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
@@ -184,7 +184,7 @@ const onShareUpdated = (payload: { visibility: PlaylistVisibility; share_token: 
 </script>
 
 <template>
-  <div class="max-w-7xl mx-auto space-y-6">
+  <div class="space-y-6">
     <div v-if="loading" class="flex justify-center items-center py-20">
       <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
     </div>
@@ -198,9 +198,6 @@ const onShareUpdated = (payload: { visibility: PlaylistVisibility; share_token: 
       <!-- Header card -->
       <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
         <div class="p-6">
-          <router-link to="/playlists" class="inline-flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 mb-4">
-            <ArrowLeftIcon class="h-4 w-4" /> {{ t('playlists.back') }}
-          </router-link>
           <div class="flex gap-5">
             <div class="w-28 h-28 flex-shrink-0 rounded-lg overflow-hidden border border-gray-100 dark:border-gray-700">
               <CoverCollage :items="playlist.collage" />
