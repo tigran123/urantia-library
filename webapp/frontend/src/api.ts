@@ -87,7 +87,7 @@ export const setBulkBookClearance = (payload: { hash_ids: string[]; clearance: n
 
 export interface RecommendationResponse {
   hash_id: string
-  recommended_by: number
+  recommended_by: number | null
   recommended_by_name: string | null
   recommended_at: string
   symlink_path: string | null

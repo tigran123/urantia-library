@@ -43,6 +43,23 @@ def app_ctx(monkeypatch):
     )
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
+    # The in-memory test_engine doesn't inherit database.py's connect listeners,
+    # so without this it would have neither FK enforcement nor the Unicode lower()
+    # UDF. Register both before create_all — with StaticPool the single shared
+    # connection is opened then, so the listener must already be attached.
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(test_engine, "connect")
+    def _test_conn_setup(dbapi_conn, _rec):
+        dbapi_conn.create_function(
+            "lower", 1,
+            lambda s: s.lower() if s is not None else None,
+            deterministic=True,
+        )
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys = ON")
+        cur.close()
+
     # Hot-swap database.engine BEFORE main imports / before models touch it.
     import database
     monkeypatch.setattr(database, "engine", test_engine, raising=False)

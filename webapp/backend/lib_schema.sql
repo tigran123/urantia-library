@@ -73,7 +73,7 @@ CREATE INDEX idx_book_locations_hash ON book_locations(hash_id);
 -- ==============================================================================
 CREATE TABLE favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, hash_id)
@@ -81,7 +81,7 @@ CREATE TABLE favorites (
 
 CREATE TABLE reading_progress (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     location VARCHAR NOT NULL,
     percent REAL,                       -- 0.0..1.0; NULL when not computable
@@ -90,7 +90,7 @@ CREATE TABLE reading_progress (
 
 CREATE TABLE directory_favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     path VARCHAR NOT NULL,
     added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, path)
@@ -105,7 +105,7 @@ CREATE INDEX idx_directory_favorites_user ON directory_favorites(user_id);
 -- ==============================================================================
 CREATE TABLE playlists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL REFERENCES users(id),
+    owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR NOT NULL,
     description TEXT,
     visibility VARCHAR NOT NULL DEFAULT 'private',   -- 'private' | 'public'
@@ -140,7 +140,7 @@ CREATE INDEX ix_playlist_items_pos ON playlist_items(playlist_id, position);
 -- the book's average the moment it is submitted.
 CREATE TABLE book_ratings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     rating INTEGER NOT NULL,             -- 1..5
     created_at TEXT NOT NULL,            -- ISO-8601 UTC
@@ -154,7 +154,7 @@ CREATE INDEX idx_book_ratings_hash ON book_ratings(hash_id);
 -- parent_id is a reply (one level only -- replies cannot be replied to).
 CREATE TABLE book_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     hash_id VARCHAR NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     parent_id INTEGER REFERENCES book_comments(id) ON DELETE CASCADE,
     body TEXT NOT NULL,
@@ -175,7 +175,7 @@ CREATE INDEX idx_book_comments_parent ON book_comments(parent_id);
 -- overwrites recommended_by + recommended_at.
 CREATE TABLE book_recommendations (
     hash_id        VARCHAR PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
-    recommended_by INTEGER NOT NULL REFERENCES users(id),
+    recommended_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     recommended_at TEXT    NOT NULL                       -- ISO-8601 UTC
 );
 CREATE INDEX ix_book_recommendations_at ON book_recommendations(recommended_at DESC);
@@ -217,7 +217,7 @@ CREATE INDEX idx_annotations_user        ON annotations(user_id);
 CREATE TABLE feedback_threads (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     public_id         VARCHAR UNIQUE NOT NULL,            -- 'UL-2026-0421' user-visible id
-    user_id           INTEGER NOT NULL REFERENCES users(id),
+    user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     category          VARCHAR NOT NULL,                   -- 'general'|'bug'|'feature'|'book'|'acquire'|'other'
     book_subcategory  VARCHAR,                            -- when category='book': 'metadata'|'corrupt'|'copyright'|'inappropriate'|'duplicate'
     subject           VARCHAR NOT NULL,
@@ -225,7 +225,7 @@ CREATE TABLE feedback_threads (
     book_hash_id      VARCHAR REFERENCES books(id) ON DELETE SET NULL,
     book_page         INTEGER,                            -- captured at submit, for PDF/DJVU
     diag              TEXT,                               -- JSON: { browser, viewport, route, build, locale } — never edited
-    assigned_admin_id INTEGER REFERENCES users(id),
+    assigned_admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     digested_at       TEXT,                               -- ISO-8601 UTC; NULL until included in a digest
     archived_at       TEXT,                               -- ISO-8601 UTC; non-null = archived
     created_at        TEXT NOT NULL,
@@ -241,7 +241,7 @@ CREATE INDEX idx_feedback_threads_digested    ON feedback_threads(digested_at);
 -- Sender may appear here (first-class self-reminder).
 CREATE TABLE feedback_recipients (
     thread_id  INTEGER NOT NULL REFERENCES feedback_threads(id) ON DELETE CASCADE,
-    admin_id   INTEGER NOT NULL REFERENCES users(id),
+    admin_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     PRIMARY KEY (thread_id, admin_id)
 );
 CREATE INDEX idx_feedback_recipients_admin ON feedback_recipients(admin_id);
@@ -254,7 +254,7 @@ CREATE INDEX idx_feedback_recipients_admin ON feedback_recipients(admin_id);
 CREATE TABLE feedback_messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     thread_id   INTEGER NOT NULL REFERENCES feedback_threads(id) ON DELETE CASCADE,
-    author_id   INTEGER NOT NULL REFERENCES users(id),
+    author_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
     kind        VARCHAR NOT NULL,                          -- 'message' | 'admin' | 'internal' | 'status'
     body        TEXT NOT NULL,
     created_at  TEXT NOT NULL
@@ -304,7 +304,7 @@ CREATE TABLE admin_feedback_settings (
 CREATE TABLE admin_audit_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at    TEXT    NOT NULL,                       -- ISO-8601 UTC
-    actor_user_id INTEGER NOT NULL REFERENCES users(id),
+    actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update' | 'legal.accept'
     target_kind   VARCHAR,                                -- 'book' | 'user' | 'comment' | 'annotation' | NULL
     target_id     VARCHAR,                                -- book hash, user id, comment id, … (VARCHAR holds either int or hash as text)
@@ -356,4 +356,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '8');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '9');

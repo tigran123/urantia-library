@@ -13,7 +13,7 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{_BOOKS_DIR}/.data/db/lib.db"
 # from the DB and refuses to start when the two don't match — so a git pull
 # without a corresponding `python migrate.py` on prod fails loudly instead of
 # silently serving 500s from missing columns.
-EXPECTED_SCHEMA_VERSION = 8
+EXPECTED_SCHEMA_VERSION = 9
 
 # Bump this whenever you make a *material* change to one of the Privacy Policy
 # or Terms of Service .md files in webapp/frontend/src/legal/. Any
@@ -48,6 +48,7 @@ def _set_sqlite_pragmas(dbapi_conn, _connection_record):
     cursor.execute("PRAGMA journal_mode = WAL")
     cursor.execute("PRAGMA busy_timeout = 5000")
     cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.execute("PRAGMA foreign_keys = ON")
     cursor.close()
 
 

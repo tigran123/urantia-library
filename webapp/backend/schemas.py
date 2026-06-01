@@ -281,7 +281,7 @@ class RecommendationResponse(BaseModel):
     freshly-created symlink_path so the UI can patch `item.locations`
     locally without a full refetch."""
     hash_id: str
-    recommended_by: int
+    recommended_by: Optional[int] = None   # NULL once the recommending admin is deleted (FK SET NULL)
     recommended_by_name: Optional[str] = None
     recommended_at: str
     symlink_path: Optional[str] = None    # path of the Recommended/* symlink; None when already-recommended

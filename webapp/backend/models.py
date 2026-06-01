@@ -36,8 +36,8 @@ class Favorite(Base):
     __table_args__ = (UniqueConstraint("user_id", "hash_id"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    hash_id = Column(String, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
 
 class DirectoryFavorite(Base):
     """Bookmarked directories. Keyed by `path` (relative to BOOKS_DIR) rather
@@ -46,7 +46,7 @@ class DirectoryFavorite(Base):
     __table_args__ = (UniqueConstraint("user_id", "path"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     path = Column(String, nullable=False)
 
 class ReadingProgress(Base):
@@ -54,8 +54,8 @@ class ReadingProgress(Base):
     __table_args__ = (UniqueConstraint("user_id", "hash_id"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    hash_id = Column(String, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
     location = Column(String, nullable=False)
     # 0.0..1.0; NULL when the viewer can't compute a meaningful position
     # (e.g. raw-mode text/image viewers). Surfaced on /api/favorites so the
@@ -78,7 +78,7 @@ class Playlist(Base):
     )
 
     id          = Column(Integer, primary_key=True, index=True)
-    owner_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    owner_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name        = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     visibility  = Column(String, nullable=False, default="private")   # 'private' | 'public'
@@ -138,7 +138,7 @@ class Book(Base):
 class BookLocation(Base):
     __tablename__ = "book_locations"
 
-    hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
+    hash_id = Column(String, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
     symlink_path = Column(String, primary_key=True)
 
 
@@ -152,7 +152,7 @@ class BookRecommendation(Base):
     __tablename__ = "book_recommendations"
 
     hash_id        = Column(String, ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
-    recommended_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    recommended_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     # ISO-8601 UTC. `index=True` ensures `metadata.create_all` materialises
     # `ix_book_recommendations_at` on a fresh-install path that doesn't run
     # the migration (matches the same index in migrations/0003 + lib_schema.sql).
@@ -166,8 +166,8 @@ class BookRating(Base):
     __table_args__ = (UniqueConstraint("user_id", "hash_id"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    hash_id = Column(String, ForeignKey("books.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    hash_id = Column(String, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
     rating = Column(Integer, nullable=False)  # 1..5
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
@@ -188,9 +188,9 @@ class BookComment(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    hash_id = Column(String, ForeignKey("books.id"), nullable=False)
-    parent_id = Column(Integer, ForeignKey("book_comments.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    hash_id = Column(String, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    parent_id = Column(Integer, ForeignKey("book_comments.id", ondelete="CASCADE"), nullable=True)
     body = Column(Text, nullable=False)
     status = Column(String, nullable=False, default="pending")  # 'pending' | 'approved'
     created_at = Column(String, nullable=False)
@@ -235,15 +235,15 @@ class FeedbackThread(Base):
 
     id                = Column(Integer, primary_key=True, index=True)
     public_id         = Column(String, unique=True, index=True, nullable=False)
-    user_id           = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id           = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     category          = Column(String, nullable=False)
     book_subcategory  = Column(String, nullable=True)
     subject           = Column(String, nullable=False)
     status            = Column(String, nullable=False, default="new", index=True)
-    book_hash_id      = Column(String, ForeignKey("books.id"), nullable=True, index=True)
+    book_hash_id      = Column(String, ForeignKey("books.id", ondelete="SET NULL"), nullable=True, index=True)
     book_page         = Column(Integer, nullable=True)
     diag              = Column(Text, nullable=True)        # JSON string
-    assigned_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    assigned_admin_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     digested_at       = Column(String, nullable=True, index=True)
     archived_at       = Column(String, nullable=True)
     created_at        = Column(String, nullable=False)
@@ -255,7 +255,7 @@ class FeedbackRecipient(Base):
     __tablename__ = "feedback_recipients"
 
     thread_id = Column(Integer, ForeignKey("feedback_threads.id", ondelete="CASCADE"), primary_key=True)
-    admin_id  = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    admin_id  = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
 
 
 class FeedbackMessage(Base):
@@ -263,7 +263,7 @@ class FeedbackMessage(Base):
 
     id         = Column(Integer, primary_key=True, index=True)
     thread_id  = Column(Integer, ForeignKey("feedback_threads.id", ondelete="CASCADE"), nullable=False, index=True)
-    author_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
+    author_id  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     kind       = Column(String, nullable=False)            # 'message' | 'admin' | 'internal' | 'status'
     body       = Column(Text, nullable=False)
     created_at = Column(String, nullable=False)
@@ -317,7 +317,7 @@ class AdminAuditLog(Base):
 
     id            = Column(Integer, primary_key=True, index=True)
     created_at    = Column(String, nullable=False)
-    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    actor_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     action        = Column(String, nullable=False)
     target_kind   = Column(String, nullable=True)
     target_id     = Column(String, nullable=True)

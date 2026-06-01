@@ -2535,16 +2535,11 @@ async def admin_delete_book(
         except OSError as e:
             errors.append(f"cover: {e}")
 
-    # Foreign keys in SQLite aren't enforced unless PRAGMA foreign_keys=ON,
-    # which we don't set — explicitly clear referencing rows so we don't leave
-    # orphans in favorites / reading_progress / book_locations.
-    db.query(models.BookLocation).filter(models.BookLocation.hash_id == hash_id).delete()
-    db.query(models.Favorite).filter(models.Favorite.hash_id == hash_id).delete()
-    db.query(models.ReadingProgress).filter(models.ReadingProgress.hash_id == hash_id).delete()
-    db.query(models.BookRating).filter(models.BookRating.hash_id == hash_id).delete()
-    db.query(models.BookComment).filter(models.BookComment.hash_id == hash_id).delete()
-    db.query(models.BookRecommendation).filter(models.BookRecommendation.hash_id == hash_id).delete()
-    db.query(models.PlaylistItem).filter(models.PlaylistItem.book_hash_id == hash_id).delete()
+    # FK enforcement is ON (database.py), so deleting the book row cascades its
+    # child rows (book_locations, favorites, reading_progress, book_ratings,
+    # book_comments + replies, book_recommendations, playlist_items, annotations)
+    # and SET-NULLs feedback_threads.book_hash_id. On-disk artifacts were
+    # unlinked above — DB cascade can't touch the filesystem.
     db.delete(book)
     _audit(db, admin, "book.delete",
            target_kind="book", target_id=hash_id,
@@ -3246,24 +3241,22 @@ def admin_delete_dir(
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to remove directory: {e}")
 
-    # DB cleanup. SQLite foreign keys aren't enforced, so referencing rows are
-    # cleared explicitly (mirrors admin_delete_book).
+    # DB cleanup. A book that survives (keeps locations outside the subtree)
+    # loses only its in-subtree location rows. A book that loses its last
+    # location (orphan_hashes) is deleted outright — FK enforcement (database.py)
+    # then cascades ALL its locations plus its per-user rows (favorites,
+    # reading_progress, book_ratings, book_comments, playlist_items, annotations,
+    # …) and SET-NULLs feedback_threads.book_hash_id. Deleting an orphan book's
+    # locations explicitly too would race that cascade (a 0-row delete), so only
+    # the surviving books' locations are removed here.
+    orphan_set = set(orphan_hashes)
     for loc in locs:
-        db.delete(loc)
+        if loc.hash_id not in orphan_set:
+            db.delete(loc)
     for h in orphan_hashes:
         book = db.query(models.Book).filter(models.Book.id == h).first()
         if book:
             db.delete(book)
-    if orphan_hashes:
-        db.query(models.Favorite).filter(
-            models.Favorite.hash_id.in_(orphan_hashes)
-        ).delete(synchronize_session=False)
-        db.query(models.ReadingProgress).filter(
-            models.ReadingProgress.hash_id.in_(orphan_hashes)
-        ).delete(synchronize_session=False)
-        db.query(models.PlaylistItem).filter(
-            models.PlaylistItem.book_hash_id.in_(orphan_hashes)
-        ).delete(synchronize_session=False)
     # Directory bookmarks AND directory playlist items for the deleted directory
     # and any subdirectory (directories aren't content-addressed, so no FK).
     db.query(models.DirectoryFavorite).filter(
@@ -6200,7 +6193,7 @@ async def delete_playlist(playlist_id: int, request: Request, current_user: mode
     if pl.kind == "bookshelf":
         raise HTTPException(status_code=403, detail="Forbidden")
     pl_name = pl.name
-    db.query(models.PlaylistItem).filter(models.PlaylistItem.playlist_id == pl.id).delete()
+    # FK enforcement (database.py) cascades playlist_items on playlist delete.
     db.delete(pl)
     db.commit()
     _record_usage_event(request, "playlist_delete", user=current_user,
@@ -6759,9 +6752,8 @@ async def delete_comment(comment_id: int, current_user: models.User = Depends(ge
         return {"message": "Removed"}
     if row.user_id != current_user.id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
-    # No DB cascade is enforced — drop replies of a top-level comment by hand.
-    if row.parent_id is None:
-        db.query(models.BookComment).filter(models.BookComment.parent_id == row.id).delete()
+    # FK enforcement (database.py) cascades replies (book_comments.parent_id)
+    # when a top-level comment is deleted.
     db.delete(row)
     db.commit()
     return {"message": "Removed"}
@@ -6860,8 +6852,7 @@ async def admin_delete_comment(comment_id: int, admin: models.User = Depends(req
         author_id = row.user_id
         book_hash = row.hash_id
         author_email = db.query(models.User.email).filter(models.User.id == author_id).scalar()
-        if row.parent_id is None:
-            db.query(models.BookComment).filter(models.BookComment.parent_id == row.id).delete()
+        # FK enforcement cascades replies (book_comments.parent_id) on delete.
         db.delete(row)
         _audit(db, admin, "comment.moderate",
                target_kind="comment", target_id=comment_id,
@@ -7306,7 +7297,7 @@ async def admin_audit_stats(
     for actor_id, totals in by_actor.items():
         u = user_by_id.get(actor_id)
         if not u:
-            continue  # actor user was deleted; skip the row (FKs aren't enforced in this SQLite)
+            continue  # actor_user_id is NULL (user deleted; FK SET NULL) — skip
         leaders.append({
             "actor": _audit_actor_dict(u),
             "totals": totals,
@@ -8628,13 +8619,8 @@ async def admin_delete_feedback(
                 os.remove(full)
             except Exception:
                 pass
-    # Delete child rows explicitly: this SQLite connection runs with foreign-key
-    # enforcement OFF (see database.py), so the models' ondelete="CASCADE" does
-    # nothing — relying on it would orphan the messages/recipients/attachments.
-    tid = thread.id
-    db.query(models.FeedbackMessage).filter(models.FeedbackMessage.thread_id == tid).delete(synchronize_session=False)
-    db.query(models.FeedbackRecipient).filter(models.FeedbackRecipient.thread_id == tid).delete(synchronize_session=False)
-    db.query(models.FeedbackAttachment).filter(models.FeedbackAttachment.thread_id == tid).delete(synchronize_session=False)
+    # FK enforcement (database.py) cascades messages/recipients/attachments when
+    # the thread row is deleted; the attachment files on disk were removed above.
     db.delete(thread)
     db.commit()
     return {"message": "removed"}
