@@ -552,8 +552,6 @@ const handleLogout = async () => {
           <span>{{ t('app.stats.video', { n: nFmt(stats.total_video) }, stats.total_video) }}</span>
         </template>
         <span class="mx-2">·</span>
-        <span>{{ t('app.stats.directories', { n: nFmt(stats.total_directories) }, stats.total_directories) }}</span>
-        <span class="mx-2">·</span>
         <span>{{ t('app.stats.languages', { n: nFmt(stats.total_languages) }, stats.total_languages) }}</span>
         <template v-if="stats.total_users !== undefined">
           <span class="mx-2">·</span>

@@ -156,7 +156,6 @@ export interface LibraryStats {
   total_books: number
   total_audio: number
   total_video: number
-  total_directories: number
   total_languages: number
   books_added_7d: number
   // Only present for signed-in viewers.

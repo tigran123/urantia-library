@@ -999,23 +999,6 @@ async def library_stats(
 
     total_books = accessible_books.with_entities(func.count(func.distinct(models.Book.id))).scalar() or 0
 
-    top_dir_expr = case(
-        (models.BookLocation.symlink_path.like("%/%"),
-         func.substr(models.BookLocation.symlink_path, 1,
-                     func.instr(models.BookLocation.symlink_path, "/") - 1)),
-        else_=models.BookLocation.symlink_path,
-    )
-    top_dir_rows = (
-        db.query(top_dir_expr)
-        .join(models.Book, models.Book.id == models.BookLocation.hash_id)
-        .filter(models.Book.clearance <= clearance)
-        .distinct()
-        .all()
-    )
-    total_directories = sum(
-        1 for (d,) in top_dir_rows if d and d not in _TOPDIR_SKIPLIST
-    )
-
     language_rows = (
         accessible_books.with_entities(models.Book.languages).distinct().all()
     )
@@ -1061,7 +1044,6 @@ async def library_stats(
         "total_books": int(total_books),
         "total_audio": int(total_audio),
         "total_video": int(total_video),
-        "total_directories": int(total_directories),
         "total_languages": int(total_languages),
         "books_added_7d": int(books_added_7d),
     }

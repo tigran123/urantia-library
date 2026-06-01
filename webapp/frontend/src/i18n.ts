@@ -32,7 +32,6 @@ const messages = {
         books: '{n} book | {n} books',  // NBSP after {n}
         audio: '{n} audio | {n} audio',  // NBSP after {n}
         video: '{n} video | {n} video',  // NBSP after {n}
-        directories: '{n} directory | {n} directories',  // NBSP after {n}
         languages: '{n} language | {n} languages',  // NBSP after {n}
         users: '{n} user | {n} users',  // NBSP after {n}
         online: '{n} online',  // NBSP after {n}
@@ -966,7 +965,6 @@ const messages = {
         books: '{n} книга | {n} книги | {n} книг',  // NBSP after {n}
         audio: '{n} аудио | {n} аудио | {n} аудио',  // NBSP after {n}
         video: '{n} видео | {n} видео | {n} видео',  // NBSP after {n}
-        directories: '{n} директория | {n} директории | {n} директорий',  // NBSP after {n}
         languages: '{n} язык | {n} языка | {n} языков',  // NBSP after {n}
         users: '{n} пользователь | {n} пользователя | {n} пользователей',  // NBSP after {n}
         online: '{n} онлайн',  // NBSP after {n}
