@@ -550,7 +550,7 @@ const messages = {
           browse_link: 'browse',
           your_computer: 'your computer',
           accepted: 'Accepted:',
-          max_size: 'Max 850 MB · One file at a time'
+          max_size: 'Max 850 MB per file'
         },
         clearance_warning: {
           title_prefix: 'New books default to clearance',
@@ -639,6 +639,34 @@ const messages = {
           view: 'View in library',
           edit: 'Edit metadata',
           upload_another: 'Upload another'
+        },
+        batch: {
+          multi_hint: 'Select multiple files to upload a whole set at once — the rest are pre-filled from the first.',
+          files_count: '{count} files',
+          add_files: 'Add files',
+          apply_all: 'Apply first to all',
+          exclude_hint: 'Exclude this file from “Apply first to all”',
+          commit_all: 'Commit all ({count})',
+          commit_this: 'Commit this',
+          remove: 'Remove',
+          retry: 'Re-upload',
+          uploading: 'Uploading…',
+          no_title: 'no title',
+          nothing: 'Nothing to commit — add a title first.',
+          expired: 'This staged file expired — re-upload it.',
+          server_import_todo: 'Importing files already on the server is not available yet.',
+          skipped: 'Skipped: {files}',
+          cap: 'Limit of {max} files per batch reached.',
+          summary: 'Committed {done} · skipped {skipped} · failed {failed}.',
+          status: {
+            queued: 'Queued',
+            uploading: 'Uploading…',
+            staged: 'Ready',
+            committing: 'Committing…',
+            committed: 'Committed',
+            duplicate: 'Duplicate',
+            error: 'Error'
+          }
         }
       },
       comments: {
@@ -1455,7 +1483,7 @@ const messages = {
           browse_link: 'выберите',
           your_computer: 'на компьютере',
           accepted: 'Допустимо:',
-          max_size: 'Не более 850 МБ · По одному файлу'
+          max_size: 'Не более 850 МБ на файл'
         },
         clearance_warning: {
           title_prefix: 'Новые книги по умолчанию имеют допуск',
@@ -1544,6 +1572,34 @@ const messages = {
           view: 'Открыть в библиотеке',
           edit: 'Изменить метаданные',
           upload_another: 'Загрузить ещё'
+        },
+        batch: {
+          multi_hint: 'Выберите несколько файлов, чтобы загрузить весь набор сразу — остальные заполнятся по первому.',
+          files_count: 'Файлов: {count}',
+          add_files: 'Добавить файлы',
+          apply_all: 'Применить первый ко всем',
+          exclude_hint: 'Исключить этот файл из «Применить первый ко всем»',
+          commit_all: 'Зафиксировать все ({count})',
+          commit_this: 'Зафиксировать',
+          remove: 'Удалить',
+          retry: 'Загрузить заново',
+          uploading: 'Загрузка…',
+          no_title: 'без названия',
+          nothing: 'Нечего фиксировать — сначала укажите название.',
+          expired: 'Этот подготовленный файл устарел — загрузите его заново.',
+          server_import_todo: 'Импорт файлов, уже находящихся на сервере, пока недоступен.',
+          skipped: 'Пропущено: {files}',
+          cap: 'Достигнут предел в {max} файлов на пакет.',
+          summary: 'Зафиксировано {done} · пропущено {skipped} · ошибок {failed}.',
+          status: {
+            queued: 'В очереди',
+            uploading: 'Загрузка…',
+            staged: 'Готово',
+            committing: 'Фиксация…',
+            committed: 'Зафиксировано',
+            duplicate: 'Дубликат',
+            error: 'Ошибка'
+          }
         }
       },
       comments: {

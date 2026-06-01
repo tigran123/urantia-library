@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import time
 import zipfile
 
 import pytest
@@ -91,7 +92,7 @@ def parse_done(resp) -> dict:
 
 
 def commit(client, staging_id, *, filename=None, top_dir="Test", subpath="",
-           clearance=0, metadata=None):
+           clearance=0, metadata=None, batch_id=None):
     body = {
         "staging_id": staging_id,
         "metadata": metadata or {"title": "T"},
@@ -102,6 +103,8 @@ def commit(client, staging_id, *, filename=None, top_dir="Test", subpath="",
     }
     if filename is not None:
         body["filename"] = filename
+    if batch_id is not None:
+        body["batch_id"] = batch_id
     return client.post("/api/admin/books/commit", json=body)
 
 
@@ -129,6 +132,44 @@ def test_fb2_upload_and_commit(upload_ctx):
         assert db.query(models.Book).filter_by(id=detail["id"]).first() is not None
         assert db.query(models.BookLocation).filter_by(
             symlink_path="Test/book.fb2.zip").first() is not None
+    finally:
+        db.close()
+
+
+def test_batch_upload_folds_into_one_audit_row(upload_ctx):
+    helpers, client, _b, _d, _m = upload_ctx
+    fb2b = FB2_XML.replace(b"Test Book", b"Volume Two")   # distinct bytes → distinct hash
+    sid1 = parse_done(upload(client, "tom01.fb2", FB2_XML))["staging_id"]
+    sid2 = parse_done(upload(client, "tom02.fb2", fb2b))["staging_id"]
+    assert commit(client, sid1, top_dir="Set", metadata={"title": "Vol 1"}, batch_id="bX").status_code == 200
+    assert commit(client, sid2, top_dir="Set", metadata={"title": "Vol 2"}, batch_id="bX").status_code == 200
+
+    models = helpers["models"]
+    db = helpers["TestSession"]()
+    try:
+        rows = db.query(models.AdminAuditLog).filter_by(action="book.upload").all()
+        assert len(rows) == 1                       # folded into ONE row, not two
+        row = rows[0]
+        assert row.target_kind == "book_batch"
+        assert row.target_id == "bX"
+        details = json.loads(row.details_json)
+        assert details["count"] == 2
+        assert [b["title"] for b in details["books"]] == ["Vol 1", "Vol 2"]
+        assert details["dir"] == "Set"
+    finally:
+        db.close()
+
+
+def test_single_commit_keeps_per_book_audit(upload_ctx):
+    helpers, client, _b, _d, _m = upload_ctx
+    sid = parse_done(upload(client, "solo.fb2", FB2_XML))["staging_id"]
+    assert commit(client, sid, metadata={"title": "Solo"}).status_code == 200
+    models = helpers["models"]
+    db = helpers["TestSession"]()
+    try:
+        row = db.query(models.AdminAuditLog).filter_by(action="book.upload").one()
+        assert row.target_kind == "book"            # individual, not batched
+        assert json.loads(row.details_json)["title"] == "Solo"
     finally:
         db.close()
 
@@ -225,6 +266,51 @@ def test_cancel_staging(upload_ctx):
     assert res.status_code == 200
     assert res.json() == {"cancelled": sid}
     assert sid not in main._STAGING
+
+
+def test_touch_refreshes_only_requested_ids(upload_ctx):
+    # Keepalive must refresh only the ids the caller still has open — not every
+    # staging record the admin owns — so one tab can't keep abandoned uploads alive.
+    _h, client, _b, _d, main = upload_ctx
+    sid1 = parse_done(upload(client, "tom01.fb2", FB2_XML))["staging_id"]
+    sid2 = parse_done(upload(client, "notes.txt", b"plain text"))["staging_id"]
+    main._STAGING[sid1]["expires_at"] = 1.0
+    main._STAGING[sid2]["expires_at"] = 1.0
+
+    res = client.post("/api/admin/books/upload/touch", json={"staging_ids": [sid1]})
+    assert res.status_code == 200
+    assert res.json()["touched"] == 1
+    assert main._STAGING[sid1]["expires_at"] > time.time() + 1000   # requested → refreshed
+    assert main._STAGING[sid2]["expires_at"] == 1.0                  # not requested → left to expire
+
+
+def test_purge_sweeps_orphan_dirs(upload_ctx):
+    # A staging dir whose in-memory entry was lost (restart/crash) must still be
+    # reaped by the disk-reconciling sweep, while fresh and tracked dirs survive.
+    _h, _client, _b, _d, main = upload_ctx
+    staging = main.STAGING_DIR
+    old = time.time() - main._STAGING_TTL_S - 60
+
+    orphan = os.path.join(staging, "orphan_old")
+    os.makedirs(orphan, exist_ok=True)
+    open(os.path.join(orphan, "f"), "w").close()
+    os.utime(orphan, (old, old))
+
+    fresh = os.path.join(staging, "fresh_untracked")
+    os.makedirs(fresh, exist_ok=True)  # recent mtime → must be kept (in-flight guard)
+
+    tracked = os.path.join(staging, "tracked_old")
+    os.makedirs(tracked, exist_ok=True)
+    os.utime(tracked, (old, old))
+    main._STAGING["tracked_old"] = {"dir": tracked, "expires_at": time.time() + 9999, "owner_id": 0}
+
+    try:
+        main._purge_expired_staging()
+        assert not os.path.exists(orphan)   # old + untracked → swept
+        assert os.path.exists(fresh)        # recent → kept
+        assert os.path.exists(tracked)      # tracked + not expired → kept despite age
+    finally:
+        main._STAGING.pop("tracked_old", None)
 
 
 # ---- pure-helper unit tests -------------------------------------------------

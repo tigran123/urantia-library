@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, inject, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -9,17 +9,19 @@ import {
   ExclamationTriangleIcon,
   ArrowTopRightOnSquareIcon,
   XMarkIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
+  PlusIcon,
+  TrashIcon,
 } from '@heroicons/vue/24/outline'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
-import MetadataFields from '../components/MetadataFields.vue'
-import ClearanceControl from '../components/ClearanceControl.vue'
 import ClearancePill from '../components/ClearancePill.vue'
 import CoverPreview from '../components/CoverPreview.vue'
-import DirectoryTreePicker from '../components/upload/DirectoryTreePicker.vue'
-import StagingPreview from '../components/upload/StagingPreview.vue'
+import UploadItemEditor from '../components/upload/UploadItemEditor.vue'
+import {
+  DEFAULT_META, COPYABLE_META_KEYS, sourceName, makeItem,
+  type UploadItem, type UploadSource, type UploadStatus,
+} from '../components/upload/uploadTypes'
+import { detectVolume, sameSet, naturalCompare, incrementTitle } from '../lib/volume'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -27,91 +29,93 @@ type CurrentUser = { email: string, is_admin?: boolean } | null
 const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
 const router = useRouter()
 
-type Stage = 'idle' | 'uploading' | 'duplicate' | 'review' | 'committing' | 'done'
-type LogEntry = { time: string, level: 'info' | 'ok' | 'warn' | 'error', msg: string }
-
-type Metadata = {
-  title: string | null
-  author: string | null
-  publisher: string | null
-  published: string | null
-  description: string | null
-  tags: string | null
-  series: string | null
-  languages: string | null
-  identifiers: string | null
-}
-
-const DEFAULT_META: Metadata = {
-  title: '', author: '', publisher: '', published: '',
-  description: '', tags: '', series: '', languages: '', identifiers: '',
-}
-
-type ExistingBook = {
-  id: string
-  title: string | null
-  author: string | null
-  clearance: number
-  locations: string[]
-  cover_url?: string | null
-}
-
-type CommittedBook = ExistingBook & {
-  original_filename: string
-}
-
 const ACCEPTED = ['FB2', 'FB2.ZIP', 'EPUB', 'PDF', 'DJVU', 'MOBI', 'AZW', 'AZW3', 'PRC', 'DOCX', 'ODT', 'RTF', 'HTML', 'TXT', 'TXT.ZIP', 'MD.ZIP', 'MARKDOWN.ZIP', 'JPG', 'JPEG', 'MP3', 'WAV', 'OGG', 'FLAC', 'M4A', 'AAC', 'MP4', 'WebM', 'MKV', 'AVI', 'MOV']
 const ACCEPT_ATTR = '.fb2,.zip,.epub,.pdf,.djvu,.mobi,.azw,.azw3,.prc,.docx,.odt,.rtf,.html,.txt,.jpg,.jpeg,.mp3,.wav,.ogg,.flac,.m4a,.aac,.mp4,.webm,.mkv,.avi,.mov'
 const MAX_UPLOAD_BYTES = 850 * 1024 * 1024
+const MAX_BATCH = 40
 
-const stage = ref<Stage>('idle')
-const progress = ref(0)
-const currentMsg = ref('')
-const log = ref<LogEntry[]>([])
-const showLogModal = ref(false)
-const logExpanded = ref(true)
+const items = ref<UploadItem[]>([])
+const activeId = ref<string | null>(null)
 const dragOver = ref(false)
 const errorMsg = ref('')
+const batchSummary = ref<{ done: number, skipped: number, failed: number } | null>(null)
+const committingAll = ref(false)
 
-const file = ref<File | null>(null)
-const stagingId = ref<string | null>(null)
-const fileHash = ref<string | null>(null)
-const fileFormat = ref<string>('')
-const fileSize = ref<number>(0)
-const meta = ref<Metadata>({ ...DEFAULT_META })
-const selectedDir = ref<string>('')
-const extraSubpath = ref<string>('')
-const filename = ref<string>('')
-const stagingFilename = ref<string>('')
-const clearance = ref<number>(100)
-const needsReview = ref<boolean>(false)
-const coverOverride = ref<File | null>(null)
-const stagingCoverUrl = ref<string | null>(null)
-const existingBook = ref<ExistingBook | null>(null)
-const committedBook = ref<CommittedBook | null>(null)
-const previewOpen = ref<boolean>(true)
-
+const showLogModal = ref(false)
+const logModalId = ref<string | null>(null)
 const fileInputEl = ref<HTMLInputElement | null>(null)
-const logEl = ref<HTMLElement | null>(null)
-let abortController: AbortController | null = null
 
-const stepIndex = computed(() => {
-  switch (stage.value) {
-    case 'idle': return 0
-    case 'uploading':
-    case 'duplicate': return 1
-    case 'review': return 2
-    case 'committing': return 3
-    case 'done': return 4
+// non-reactive: in-flight upload aborters keyed by item.localId
+const aborters = new Map<string, AbortController>()
+let keepalive: number | undefined
+let batchSeq = 0   // monotonic suffix for audit batch ids (no crypto.randomUUID on plain http)
+
+onMounted(() => {
+  if (!currentUser?.value?.is_admin) { router.replace('/'); return }
+  // Keepalive: while the page holds staged (uncommitted) files, refresh their
+  // 1-hour server-side TTL so a long editing session never expires. Interval is
+  // well under the TTL; closing the tab stops it so abandoned uploads still
+  // expire and get swept.
+  keepalive = window.setInterval(() => {
+    // Only refresh the ids THIS page holds — not all of the admin's staging —
+    // so one open tab can't keep unrelated abandoned uploads alive elsewhere.
+    const ids = items.value
+      .filter((i) => i.stagingId && (i.status === 'staged' || i.status === 'committing'))
+      .map((i) => i.stagingId as string)
+    if (ids.length) api.post('/admin/books/upload/touch', { staging_ids: ids }).catch(() => {})
+  }, 5 * 60 * 1000)
+})
+
+// A staging dir is safe to cancel only when it exists and isn't committed or
+// mid-commit — never DELETE under an in-flight commit (the backend is still
+// reading rec["dir"]).
+const cancellable = (it: UploadItem) =>
+  !!it.stagingId && it.status !== 'committed' && it.status !== 'committing'
+
+onBeforeUnmount(() => {
+  if (keepalive !== undefined) clearInterval(keepalive)
+  for (const ac of aborters.values()) ac.abort()
+  // A batch commit keeps running after an SPA route change; deleting its staged
+  // items would 410 it. Leave everything — the TTL/sweep reaps any leftovers.
+  if (committingAll.value) return
+  for (const it of items.value) {
+    if (cancellable(it)) api.delete(`/admin/books/upload/${it.stagingId}`).catch(() => {})
   }
 })
 
-const titleMissing = computed(() => !(meta.value.title || '').trim())
+// ---- derived ---------------------------------------------------------------
 
-const destinationEmpty = computed(() => {
-  const a = (selectedDir.value || '').replace(/^\/+|\/+$/g, '')
-  const b = (extraSubpath.value || '').replace(/^\/+|\/+$/g, '')
-  return !a && !b
+const sortedItems = computed(() =>
+  [...items.value].sort((a, b) => naturalCompare(sourceName(a.source), sourceName(b.source))))
+
+const activeItem = computed<UploadItem | null>(() =>
+  items.value.find((i) => i.localId === activeId.value) || null)
+
+// First usable item (its metadata seeds prefill for the rest).
+const templateItem = computed<UploadItem | null>(() =>
+  sortedItems.value.find((i) => i.status === 'staged' || i.status === 'committing' || i.status === 'committed') || null)
+
+const committableCount = computed(() =>
+  items.value.filter((i) => i.status === 'staged' && (i.meta.title || '').trim()).length)
+
+const logModalItem = computed(() => items.value.find((i) => i.localId === logModalId.value) || null)
+
+const stepIndex = computed(() => {
+  if (!items.value.length) return 0
+  if (items.value.some((i) => i.status === 'queued' || i.status === 'uploading')) return 1
+  if (items.value.every((i) => i.status === 'committed')) return 4
+  if (items.value.some((i) => i.status === 'committing')) return 3
+  return 2
+})
+
+const stepStates = computed(() => {
+  const steps = [
+    { key: 'select', label: t('admin.upload.step.select.label'), desc: t('admin.upload.step.select.desc') },
+    { key: 'extract', label: t('admin.upload.step.extract.label'), desc: t('admin.upload.step.extract.desc') },
+    { key: 'review', label: t('admin.upload.step.review.label'), desc: t('admin.upload.step.review.desc') },
+    { key: 'commit', label: t('admin.upload.step.commit.label'), desc: t('admin.upload.step.commit.desc') },
+  ]
+  return steps.map((s, i) => ({ ...s, done: i < stepIndex.value, active: i === stepIndex.value && stepIndex.value < 4 }))
 })
 
 const fmtBytes = (n: number) => {
@@ -122,62 +126,30 @@ const fmtBytes = (n: number) => {
   return `${f.toFixed(1)} ${units[i]}`
 }
 
-onMounted(() => {
-  if (!currentUser?.value?.is_admin) {
-    router.replace('/')
-    return
-  }
-})
+const lastMsg = (item: UploadItem) =>
+  item.log.length ? item.log[item.log.length - 1].msg : t('admin.upload.batch.uploading')
 
-const originalExt = computed(() => {
-  const n = (stagingFilename.value || '').toLowerCase()
-  if (n.endsWith('.fb2.zip')) return '.fb2.zip'
-  const i = n.lastIndexOf('.')
-  return i >= 0 ? n.slice(i) : ''
-})
+const titleMissing = (item: UploadItem) => !(item.meta.title || '').trim()
 
-const filenameMismatch = computed(() => {
-  if (!filename.value || !originalExt.value) return false
-  return !filename.value.toLowerCase().endsWith(originalExt.value)
-})
-
-watch(log, () => {
-  nextTick(() => {
-    if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
-  })
-}, { deep: true })
-
-const resetToIdle = () => {
-  if (abortController) {
-    abortController.abort()
-    abortController = null
-  }
-  if (stagingId.value) {
-    api.delete(`/admin/books/upload/${stagingId.value}`).catch(() => {})
-  }
-  stage.value = 'idle'
-  progress.value = 0
-  currentMsg.value = ''
-  log.value = []
-  file.value = null
-  stagingId.value = null
-  fileHash.value = null
-  fileFormat.value = ''
-  fileSize.value = 0
-  meta.value = { ...DEFAULT_META }
-  selectedDir.value = ''
-  extraSubpath.value = ''
-  filename.value = ''
-  stagingFilename.value = ''
-  clearance.value = 100
-  needsReview.value = false
-  coverOverride.value = null
-  stagingCoverUrl.value = null
-  existingBook.value = null
-  committedBook.value = null
-  previewOpen.value = true
-  errorMsg.value = ''
+const destEmpty = (item: UploadItem) => {
+  const a = (item.selectedDir || '').replace(/^\/+|\/+$/g, '')
+  const b = (item.extraSubpath || '').replace(/^\/+|\/+$/g, '')
+  return !a && !b
 }
+
+const statusMeta = (s: UploadStatus): { key: string, dot: string } => {
+  switch (s) {
+    case 'queued': return { key: 'queued', dot: 'bg-gray-400' }
+    case 'uploading': return { key: 'uploading', dot: 'bg-blue-500 animate-pulse' }
+    case 'staged': return { key: 'staged', dot: 'bg-blue-500' }
+    case 'committing': return { key: 'committing', dot: 'bg-blue-500 animate-pulse' }
+    case 'committed': return { key: 'committed', dot: 'bg-emerald-500' }
+    case 'duplicate': return { key: 'duplicate', dot: 'bg-amber-500' }
+    case 'error': return { key: 'error', dot: 'bg-red-500' }
+  }
+}
+
+// ---- selection -------------------------------------------------------------
 
 const validateExt = (name: string): boolean => {
   const lower = name.toLowerCase()
@@ -185,33 +157,78 @@ const validateExt = (name: string): boolean => {
   return ACCEPT_ATTR.split(',').some((ext) => lower.endsWith(ext))
 }
 
-const startUpload = async (chosen: File) => {
-  if (!validateExt(chosen.name)) {
-    errorMsg.value = `Unsupported file type: ${chosen.name}`
-    return
-  }
-  if (chosen.size > MAX_UPLOAD_BYTES) {
-    errorMsg.value = 'File exceeds 850 MB'
-    return
-  }
+const filesToSources = (files: FileList | File[]): UploadSource[] =>
+  Array.from(files).map((f) => ({ kind: 'local' as const, file: f }))
+
+const addSources = (sources: UploadSource[]) => {
   errorMsg.value = ''
-  file.value = chosen
-  fileSize.value = chosen.size
-  stage.value = 'uploading'
-  progress.value = 0
-  log.value = []
-  currentMsg.value = 'Uploading…'
+  batchSummary.value = null
+  const skipped: string[] = []
+  let capped = 0
+  for (const src of sources) {
+    if (items.value.length >= MAX_BATCH) { capped++; continue }
+    const name = sourceName(src)
+    if (!validateExt(name)) { skipped.push(name); continue }
+    if (src.kind === 'local' && src.file.size > MAX_UPLOAD_BYTES) { skipped.push(`${name} (>850MB)`); continue }
+    items.value.push(makeItem(src))
+  }
+  const notices: string[] = []
+  if (skipped.length) notices.push(t('admin.upload.batch.skipped', { files: skipped.join(', ') }))
+  if (capped) notices.push(t('admin.upload.batch.cap', { max: MAX_BATCH }))
+  errorMsg.value = notices.join(' · ')
+  if (!activeId.value && sortedItems.value.length) activeId.value = sortedItems.value[0].localId
+  void processQueue()
+}
 
-  abortController = new AbortController()
+const onFileChosen = (e: Event) => {
+  const input = e.target as HTMLInputElement
+  if (input.files?.length) addSources(filesToSources(input.files))
+  input.value = ''
+}
+const onDrop = (e: DragEvent) => {
+  e.preventDefault()
+  dragOver.value = false
+  if (e.dataTransfer?.files?.length) addSources(filesToSources(e.dataTransfer.files))
+}
+const onDragOver = (e: DragEvent) => { e.preventDefault(); dragOver.value = true }
+const onDragLeave = () => { dragOver.value = false }
+const openPicker = () => fileInputEl.value?.click()
+
+// ---- staging (sequential) --------------------------------------------------
+
+let processing = false
+const processQueue = async () => {
+  if (processing) return
+  processing = true
+  try {
+    while (true) {
+      const next = sortedItems.value.find((i) => i.status === 'queued')
+      if (!next) break
+      await stageItem(next)
+    }
+  } finally {
+    processing = false
+  }
+}
+
+const stageItem = async (item: UploadItem) => {
+  if (item.source.kind !== 'local') {
+    // FUTURE: server-path import → POST /api/admin/books/stage-from-path.
+    item.status = 'error'
+    item.errorMsg = t('admin.upload.batch.server_import_todo')
+    return
+  }
+  item.status = 'uploading'
+  item.progress = 0
+  item.log = []
+  item.errorMsg = ''
+  const ac = new AbortController()
+  aborters.set(item.localId, ac)
   const form = new FormData()
-  form.append('file', chosen)
-
+  form.append('file', item.source.file)
   try {
     const resp = await fetch(`${api.defaults.baseURL ?? '/api'}/admin/books/upload`, {
-      method: 'POST',
-      body: form,
-      credentials: 'include',
-      signal: abortController.signal,
+      method: 'POST', body: form, credentials: 'include', signal: ac.signal,
     })
     if (!resp.ok || !resp.body) {
       const text = await resp.text().catch(() => '')
@@ -228,20 +245,20 @@ const startUpload = async (chosen: File) => {
       while ((idx = buf.indexOf('\n\n')) >= 0) {
         const raw = buf.slice(0, idx)
         buf = buf.slice(idx + 2)
-        handleSseEvent(raw)
+        handleSse(item, raw)
       }
     }
   } catch (err: any) {
     if (err?.name !== 'AbortError') {
-      errorMsg.value = err?.message || 'Upload failed'
-      stage.value = 'idle'
+      item.errorMsg = err?.message || 'Upload failed'
+      item.status = 'error'
     }
   } finally {
-    abortController = null
+    aborters.delete(item.localId)
   }
 }
 
-const handleSseEvent = (raw: string) => {
+const handleSse = (item: UploadItem, raw: string) => {
   let eventName = 'message'
   let dataStr = ''
   for (const line of raw.split('\n')) {
@@ -253,116 +270,190 @@ const handleSseEvent = (raw: string) => {
   try { payload = JSON.parse(dataStr) } catch { return }
 
   if (eventName === 'log') {
-    log.value.push(payload as LogEntry)
-    currentMsg.value = (payload as LogEntry).msg || currentMsg.value
-    progress.value = Math.min(95, progress.value + 6)
+    item.log.push(payload)
+    item.progress = Math.min(95, item.progress + 6)
   } else if (eventName === 'done') {
-    progress.value = 100
+    item.progress = 100
     if (payload.existing) {
-      existingBook.value = payload.existing
-      stage.value = 'duplicate'
+      item.existingBook = payload.existing
+      item.status = 'duplicate'
     } else if (payload.error) {
-      errorMsg.value = payload.error
-      stage.value = 'idle'
+      item.errorMsg = payload.error
+      item.status = 'error'
     } else {
-      stagingId.value = payload.staging_id
-      fileHash.value = payload.hash
-      fileFormat.value = payload.format
-      fileSize.value = payload.size
-      stagingFilename.value = payload.filename || file.value?.name || ''
-      filename.value = stagingFilename.value
-      stagingCoverUrl.value = payload.cover_url
-      meta.value = { ...DEFAULT_META, ...(payload.extracted_metadata || {}) }
-      stage.value = 'review'
+      item.stagingId = payload.staging_id
+      item.hash = payload.hash
+      item.format = payload.format
+      item.size = payload.size
+      item.stagingFilename = payload.filename || sourceName(item.source)
+      item.filename = item.stagingFilename
+      item.stagingCoverUrl = payload.cover_url
+      item.meta = { ...DEFAULT_META, ...(payload.extracted_metadata || {}) }
+      item.status = 'staged'
+      prefillItem(item)
     }
   }
 }
 
-const onFileChosen = (e: Event) => {
-  const input = e.target as HTMLInputElement
-  if (input.files && input.files.length) startUpload(input.files[0])
-  input.value = ''
+// ---- prefill ---------------------------------------------------------------
+
+const copyWorkflow = (from: UploadItem, to: UploadItem) => {
+  to.selectedDir = from.selectedDir
+  to.extraSubpath = from.extraSubpath
+  to.clearance = from.clearance
+  to.needsReview = from.needsReview
 }
 
-const onDrop = (e: DragEvent) => {
-  e.preventDefault()
-  dragOver.value = false
-  if (e.dataTransfer?.files?.length) startUpload(e.dataTransfer.files[0])
+// Volume-incremented title from the template when both filenames carry a number,
+// else the template title verbatim. `to` keeps its own title only when `force`
+// is off and no increment is possible.
+const applyTitle = (from: UploadItem, to: UploadItem, force: boolean) => {
+  const tmplTitle = (from.meta.title || '').trim()
+  if (!tmplTitle) return
+  const fv = detectVolume(sourceName(from.source))
+  const tv = detectVolume(sourceName(to.source))
+  if (fv && tv) to.meta.title = incrementTitle(from.meta.title as string, fv.num, tv.num)
+  else if (force) to.meta.title = from.meta.title
 }
 
-const onDragOver = (e: DragEvent) => { e.preventDefault(); dragOver.value = true }
-const onDragLeave = () => { dragOver.value = false }
-const openPicker = () => fileInputEl.value?.click()
+// Auto-prefill (silent, at stage time): only copy metadata to true set members.
+const copyMetaIfSet = (from: UploadItem, to: UploadItem) => {
+  if (!sameSet(sourceName(from.source), sourceName(to.source))) return
+  for (const k of COPYABLE_META_KEYS) to.meta[k] = from.meta[k]
+  applyTitle(from, to, false)
+}
 
-const commit = async () => {
-  if (!stagingId.value || titleMissing.value) return
-  if (destinationEmpty.value && !window.confirm(t('admin.upload.review.destination_empty.confirm'))) return
-  stage.value = 'committing'
-  errorMsg.value = ''
+// Manual "Apply first to all": force every filled field onto the target,
+// regardless of whether its filename fits the series.
+const forceCopyMeta = (from: UploadItem, to: UploadItem) => {
+  for (const k of COPYABLE_META_KEYS) to.meta[k] = from.meta[k]
+  applyTitle(from, to, true)
+}
+
+// Runs once when an item is freshly staged.
+const prefillItem = (item: UploadItem) => {
+  if (item.prefilled) return
+  const tmpl = templateItem.value
+  if (tmpl && tmpl.localId !== item.localId) {
+    copyWorkflow(tmpl, item)
+    copyMetaIfSet(tmpl, item)
+  }
+  item.prefilled = true
+}
+
+// Manual re-propagation from the first item after the admin edits it. Forces all
+// filled fields onto every editable item except those ticked "exclude".
+const applyTemplateToAll = () => {
+  const tmpl = templateItem.value
+  if (!tmpl) return
+  for (const it of items.value) {
+    if (it.localId === tmpl.localId) continue
+    if (it.status !== 'staged') continue
+    if (it.excludeFromApply) continue
+    copyWorkflow(tmpl, it)
+    forceCopyMeta(tmpl, it)
+  }
+}
+
+// ---- commit ----------------------------------------------------------------
+
+const commitItem = async (item: UploadItem, batchId?: string): Promise<boolean> => {
+  if (item.status !== 'staged') return false
+  if (titleMissing(item)) { item.errorMsg = t('admin.upload.review.title_required'); return false }
+  if (!item.stagingId) { item.errorMsg = t('admin.upload.batch.expired'); item.status = 'error'; return false }
+  item.status = 'committing'
+  item.errorMsg = ''
   try {
-    if (coverOverride.value) {
+    if (item.coverOverride) {
       const cform = new FormData()
-      cform.append('file', coverOverride.value)
-      await api.post(`/admin/books/upload/${stagingId.value}/cover`, cform, {
+      cform.append('file', item.coverOverride)
+      await api.post(`/admin/books/upload/${item.stagingId}/cover`, cform, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
     }
-    const combinedSubpath = [selectedDir.value, extraSubpath.value]
+    const combinedSubpath = [item.selectedDir, item.extraSubpath]
       .map((s) => (s || '').replace(/^\/+|\/+$/g, ''))
       .filter(Boolean)
       .join('/')
-    const payload = {
-      staging_id: stagingId.value,
-      metadata: meta.value,
+    const res = await api.post('/admin/books/commit', {
+      staging_id: item.stagingId,
+      metadata: item.meta,
       top_dir: '',
       subpath: combinedSubpath,
-      clearance: clearance.value,
-      needs_review: needsReview.value,
-      filename: filename.value,
-    }
-    const res = await api.post('/admin/books/commit', payload)
-    committedBook.value = res.data
-    stagingId.value = null
-    stage.value = 'done'
+      clearance: item.clearance,
+      needs_review: item.needsReview,
+      filename: item.filename,
+      ...(batchId ? { batch_id: batchId } : {}),
+    })
+    item.committedBook = res.data
+    item.stagingId = null
+    item.status = 'committed'
+    return true
   } catch (err: any) {
-    errorMsg.value = err.response?.data?.detail || err.message
-    stage.value = 'review'
+    item.errorMsg = err.response?.data?.detail || err.message
+    item.status = 'staged'
+    return false
   }
 }
 
-const onReextract = async () => {
-  // For upload staging there's no source file other than the in-flight one;
-  // just re-trigger the cover endpoint on the staging item by re-uploading
-  // is out of scope here, so this is a no-op for the upload flow.
+const onItemCommit = (item: UploadItem) => {
+  if (destEmpty(item) && !window.confirm(t('admin.upload.review.destination_empty.confirm'))) return
+  void commitItem(item)
 }
 
-const cancelUpload = () => {
-  if (abortController) abortController.abort()
-  resetToIdle()
+const commitAll = async () => {
+  if (committingAll.value) return
+  const targets = sortedItems.value.filter((i) => i.status === 'staged' && (i.meta.title || '').trim())
+  if (!targets.length) { errorMsg.value = t('admin.upload.batch.nothing'); return }
+  const invalid = items.value.filter((i) => i.status === 'staged' && !(i.meta.title || '').trim()).length
+  const dups = items.value.filter((i) => i.status === 'duplicate').length
+  if (targets.some(destEmpty) && !window.confirm(t('admin.upload.review.destination_empty.confirm'))) return
+  errorMsg.value = ''
+  committingAll.value = true
+  // ≥2 books → fold them into a single audit-log entry via a shared batch id.
+  const batchId = targets.length >= 2 ? `b${Date.now().toString(36)}-${(batchSeq++).toString(36)}` : undefined
+  let done = 0, failed = 0
+  for (const it of targets) {
+    const ok = await commitItem(it, batchId)
+    if (ok) done++; else failed++
+  }
+  committingAll.value = false
+  batchSummary.value = { done, skipped: invalid + dups, failed }
+  const next = sortedItems.value.find((i) => i.status !== 'committed')
+  if (next) activeId.value = next.localId
 }
 
-const stepStates = computed(() => {
-  const steps: { key: string, label: string, desc: string }[] = [
-    { key: 'select',  label: t('admin.upload.step.select.label'),  desc: t('admin.upload.step.select.desc') },
-    { key: 'extract', label: t('admin.upload.step.extract.label'), desc: t('admin.upload.step.extract.desc') },
-    { key: 'review',  label: t('admin.upload.step.review.label'),  desc: t('admin.upload.step.review.desc') },
-    { key: 'commit',  label: t('admin.upload.step.commit.label'),  desc: t('admin.upload.step.commit.desc') },
-  ]
-  return steps.map((s, i) => ({
-    ...s,
-    done: i < stepIndex.value,
-    active: i === stepIndex.value && stepIndex.value < 4,
-  }))
-})
+// ---- item lifecycle --------------------------------------------------------
 
-const reviewCoverMeta = computed(() => {
-  if (!stagingCoverUrl.value) return ''
-  return t('admin.upload.review.cover_meta', { w: '—', h: '—' })
-})
+const setActive = (item: UploadItem) => { activeId.value = item.localId }
+
+const removeItem = (item: UploadItem) => {
+  if (item.status === 'committing') return  // don't yank staging from under an in-flight commit
+  const ac = aborters.get(item.localId)
+  if (ac) { ac.abort(); aborters.delete(item.localId) }
+  if (cancellable(item)) {
+    api.delete(`/admin/books/upload/${item.stagingId}`).catch(() => {})
+  }
+  const idx = items.value.findIndex((i) => i.localId === item.localId)
+  if (idx >= 0) items.value.splice(idx, 1)
+  if (activeId.value === item.localId) activeId.value = sortedItems.value[0]?.localId ?? null
+  if (!items.value.length) { errorMsg.value = ''; batchSummary.value = null }
+}
+
+const restageItem = (item: UploadItem) => {
+  item.status = 'queued'
+  item.errorMsg = ''
+  item.progress = 0
+  item.prefilled = false
+  item.existingBook = null
+  void processQueue()
+}
+
+const viewLog = (item: UploadItem) => { logModalId.value = item.localId; showLogModal.value = true }
 </script>
 
 <template>
-  <div class="space-y-6 max-w-5xl mx-auto px-6 py-6">
+  <div class="space-y-6 mx-auto px-6 py-6" :class="items.length > 1 ? 'max-w-6xl' : 'max-w-5xl'">
     <AdminNav />
 
     <div>
@@ -401,8 +492,12 @@ const reviewCoverMeta = computed(() => {
       {{ errorMsg }}
     </div>
 
-    <!-- ===== DROP ZONE (idle) ===== -->
-    <div v-if="stage === 'idle'" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-8">
+    <div v-if="batchSummary" class="rounded border border-blue-200 dark:border-blue-900/60 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200 text-sm px-4 py-2">
+      {{ t('admin.upload.batch.summary', { done: batchSummary.done, skipped: batchSummary.skipped, failed: batchSummary.failed }) }}
+    </div>
+
+    <!-- ===== DROP ZONE (no items) ===== -->
+    <div v-if="items.length === 0" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-8">
       <div
         @click="openPicker"
         @drop="onDrop"
@@ -418,22 +513,12 @@ const reviewCoverMeta = computed(() => {
         </div>
         <h3 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.upload.drop.heading') }}</h3>
         <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">{{ t('admin.upload.drop.or') }}&nbsp;<span class="text-blue-600 dark:text-blue-400 underline">{{ t('admin.upload.drop.browse_link') }}</span>&nbsp;{{ t('admin.upload.drop.your_computer') }}</p>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.upload.batch.multi_hint') }}</div>
         <div class="mt-4 inline-flex flex-wrap items-center justify-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
           <span>{{ t('admin.upload.drop.accepted') }}</span>
-          <span
-            v-for="ext in ACCEPTED"
-            :key="ext"
-            class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-xs"
-          >{{ ext }}</span>
+          <span v-for="ext in ACCEPTED" :key="ext" class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-xs">{{ ext }}</span>
         </div>
         <div class="mt-4 text-xs text-gray-400 dark:text-gray-500">{{ t('admin.upload.drop.max_size') }}</div>
-        <input
-          ref="fileInputEl"
-          type="file"
-          :accept="ACCEPT_ATTR"
-          class="hidden"
-          @change="onFileChosen"
-        />
       </div>
 
       <div class="mt-6 flex items-start gap-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm">
@@ -449,340 +534,265 @@ const reviewCoverMeta = computed(() => {
       </div>
     </div>
 
-    <!-- ===== PROCESSING (uploading + duplicate) ===== -->
-    <div v-if="stage === 'uploading' || stage === 'duplicate'" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700">
-      <div class="p-6 flex items-center gap-4">
-        <div
-          class="w-12 h-12 rounded-lg flex items-center justify-center shrink-0"
-          :class="stage === 'duplicate'
-            ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
-            : 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'"
-        >
-          <ExclamationTriangleIcon v-if="stage === 'duplicate'" class="w-6 h-6" />
-          <ArrowPathIcon v-else class="w-6 h-6 animate-spin" />
+    <!-- ===== WORKSPACE (has items) ===== -->
+    <div v-else class="flex gap-4 items-start">
+      <!-- sidebar list (only when multiple) -->
+      <aside v-if="items.length > 1" class="w-64 shrink-0 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col">
+        <div class="px-3 py-2 border-b border-gray-100 dark:border-gray-700 text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+          {{ t('admin.upload.batch.files_count', { count: items.length }) }}
         </div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-baseline justify-between gap-3">
-            <div class="text-sm font-semibold text-gray-900 dark:text-white truncate">{{ file?.name || '—' }}</div>
-            <div class="font-mono text-xs text-gray-500 dark:text-gray-400 shrink-0">{{ fmtBytes(fileSize) }}</div>
-          </div>
-          <div class="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden mt-2">
-            <div
-              class="h-full transition-all duration-300"
-              :class="stage === 'duplicate' ? 'bg-red-500' : 'bg-blue-500'"
-              :style="{ width: progress + '%' }"
-            ></div>
-          </div>
-          <div class="mt-1 flex items-center justify-between text-xs">
-            <span class="text-gray-600 dark:text-gray-300 truncate">{{ currentMsg }}</span>
-            <span class="font-mono text-gray-400 dark:text-gray-500 shrink-0 ml-2">{{ progress }}%</span>
+        <div class="flex-1 overflow-y-auto max-h-[60vh] p-1">
+          <div
+            v-for="it in sortedItems"
+            :key="it.localId"
+            @click="setActive(it)"
+            role="button"
+            class="group w-full flex items-center gap-2 px-2 py-2 rounded text-left cursor-pointer"
+            :class="it.localId === activeId ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-700/40'"
+          >
+            <span class="w-2 h-2 rounded-full shrink-0" :class="statusMeta(it.status).dot"></span>
+            <span class="flex-1 min-w-0">
+              <span class="block text-sm text-gray-800 dark:text-gray-100 truncate font-mono">{{ sourceName(it.source) }}</span>
+              <span class="block text-[11px] text-gray-500 dark:text-gray-400">
+                {{ t('admin.upload.batch.status.' + statusMeta(it.status).key) }}
+                <span v-if="it.status === 'staged' && titleMissing(it)" class="text-red-500"> · {{ t('admin.upload.batch.no_title') }}</span>
+              </span>
+            </span>
+            <input
+              v-if="templateItem && it.localId !== templateItem.localId"
+              type="checkbox"
+              v-model="it.excludeFromApply"
+              @click.stop
+              class="shrink-0 rounded border-gray-300 dark:border-gray-600"
+              :title="t('admin.upload.batch.exclude_hint')"
+            />
+            <button
+              v-if="it.status !== 'committing'"
+              @click.stop="removeItem(it)"
+              class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 shrink-0"
+              :title="t('admin.upload.batch.remove')"
+            >
+              <XMarkIcon class="w-4 h-4" />
+            </button>
           </div>
         </div>
-        <button
-          v-if="stage !== 'duplicate'"
-          @click="cancelUpload"
-          class="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-red-300 hover:text-red-600 shrink-0"
-        >{{ t('admin.upload.review.cancel') }}</button>
-      </div>
+        <div class="p-2 border-t border-gray-100 dark:border-gray-700 space-y-2">
+          <button
+            @click="openPicker"
+            class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+          >
+            <PlusIcon class="w-4 h-4" /> {{ t('admin.upload.batch.add_files') }}
+          </button>
+          <button
+            @click="applyTemplateToAll"
+            :disabled="!templateItem"
+            class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          >{{ t('admin.upload.batch.apply_all') }}</button>
+          <button
+            @click="commitAll"
+            :disabled="committingAll || committableCount === 0"
+            class="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            <ArrowPathIcon v-if="committingAll" class="w-4 h-4 animate-spin" />
+            {{ t('admin.upload.batch.commit_all', { count: committableCount }) }}
+          </button>
+        </div>
+      </aside>
 
-      <div class="border-t border-gray-100 dark:border-gray-700">
-        <button
-          type="button"
-          @click="logExpanded = !logExpanded"
-          class="w-full flex items-center justify-between bg-gray-50 dark:bg-gray-900/40 px-4 py-2 text-xs font-medium text-gray-700 dark:text-gray-300"
-        >
-          <span class="inline-flex items-center gap-2">
-            <ChevronDownIcon v-if="logExpanded" class="w-4 h-4" />
-            <ChevronRightIcon v-else class="w-4 h-4" />
-            {{ t('admin.upload.log.heading') }}
-            <span class="text-gray-400">·</span>
-            <span>{{ log.length === 0 ? t('admin.upload.log.entries_zero') : log.length === 1 ? t('admin.upload.log.entries_one') : t('admin.upload.log.entries_other', { count: log.length }) }}</span>
-          </span>
-          <span class="text-[10px] uppercase tracking-wider text-blue-500">[{{ t('admin.upload.log.live') }}]</span>
-        </button>
-        <div
-          v-show="logExpanded"
-          ref="logEl"
-          class="bg-gray-900 dark:bg-black text-gray-200 font-mono text-xs p-3 max-h-56 overflow-y-auto"
-        >
-          <div v-for="(entry, i) in log" :key="i" class="log-line whitespace-pre-wrap break-all">
-            <span class="text-gray-500">{{ entry.time }}</span>
-            <span
-              class="ml-2 inline-block w-12"
-              :class="{
-                'text-blue-300': entry.level === 'info',
-                'text-emerald-400': entry.level === 'ok',
-                'text-amber-400': entry.level === 'warn',
-                'text-red-400': entry.level === 'error',
-              }"
-            >[{{ entry.level }}]</span>
-            <span class="ml-2 text-gray-200">{{ entry.msg }}</span>
-          </div>
+      <!-- main pane: the active item -->
+      <main class="flex-1 min-w-0">
+        <div v-if="items.length === 1" class="mb-3 flex justify-end">
+          <button
+            @click="openPicker"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+          >
+            <PlusIcon class="w-4 h-4" /> {{ t('admin.upload.batch.add_files') }}
+          </button>
         </div>
-      </div>
-    </div>
 
-    <!-- ===== DUPLICATE PANEL ===== -->
-    <div v-if="stage === 'duplicate' && existingBook" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-red-200 dark:border-red-900/60 overflow-hidden">
-      <div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 flex items-start gap-3">
-        <ExclamationTriangleIcon class="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-        <div>
-          <div class="font-semibold text-red-800 dark:text-red-200">{{ t('admin.upload.duplicate.heading') }}</div>
-          <div class="font-mono text-xs text-red-700 dark:text-red-300 break-all mt-0.5">{{ existingBook.id }}</div>
-        </div>
-      </div>
-      <div class="p-6">
-        <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">{{ t('admin.upload.duplicate.existing') }}</div>
-        <div class="flex gap-4">
-          <CoverPreview
-            :image-url="existingBook.cover_url"
-            size="small"
-            :readonly="true"
-          />
-          <div class="flex-1 min-w-0 space-y-2">
-            <div class="text-base font-semibold text-gray-900 dark:text-white">{{ existingBook.title || '(no title)' }}</div>
-            <div v-if="existingBook.author" class="italic text-sm text-gray-600 dark:text-gray-400">{{ existingBook.author }}</div>
-            <div class="text-xs">
-              <span class="text-gray-500 dark:text-gray-400 mr-1">{{ t('admin.upload.duplicate.path_label') }}</span>
-              <code v-for="loc in existingBook.locations" :key="loc" class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] mr-1 break-all">/{{ loc }}</code>
+        <template v-if="activeItem">
+          <!-- uploading / queued -->
+          <div
+            v-if="activeItem.status === 'uploading' || activeItem.status === 'queued'"
+            class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700"
+          >
+            <div class="p-6 flex items-center gap-4">
+              <div class="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+                <ArrowPathIcon class="w-6 h-6 animate-spin" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-baseline justify-between gap-3">
+                  <div class="text-sm font-semibold text-gray-900 dark:text-white truncate">{{ sourceName(activeItem.source) }}</div>
+                  <div class="font-mono text-xs text-gray-500 dark:text-gray-400 shrink-0">{{ fmtBytes(activeItem.size) }}</div>
+                </div>
+                <div class="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden mt-2">
+                  <div class="h-full bg-blue-500 transition-all duration-300" :style="{ width: activeItem.progress + '%' }"></div>
+                </div>
+                <div class="mt-1 flex items-center justify-between text-xs">
+                  <span class="text-gray-600 dark:text-gray-300 truncate">{{ lastMsg(activeItem) }}</span>
+                  <span class="font-mono text-gray-400 dark:text-gray-500 shrink-0 ml-2">{{ activeItem.progress }}%</span>
+                </div>
+              </div>
+              <button
+                @click="removeItem(activeItem)"
+                class="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-red-300 hover:text-red-600 shrink-0"
+              >{{ t('admin.upload.review.cancel') }}</button>
             </div>
-            <div class="text-xs flex items-center gap-2">
-              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.duplicate.clearance_label') }}</span>
-              <ClearancePill :value="existingBook.clearance" />
+          </div>
+
+          <!-- duplicate -->
+          <div
+            v-else-if="activeItem.status === 'duplicate' && activeItem.existingBook"
+            class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-amber-200 dark:border-amber-900/60 overflow-hidden"
+          >
+            <div class="bg-amber-50 dark:bg-amber-900/20 px-6 py-4 flex items-start gap-3">
+              <ExclamationTriangleIcon class="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <div class="font-semibold text-amber-800 dark:text-amber-200">{{ t('admin.upload.duplicate.heading') }}</div>
+                <div class="font-mono text-xs text-amber-700 dark:text-amber-300 break-all mt-0.5">{{ sourceName(activeItem.source) }} → {{ activeItem.existingBook.id }}</div>
+              </div>
             </div>
-            <div class="flex gap-2 mt-3">
-              <a
-                v-if="existingBook.locations[0]"
-                :href="`/library/#/item/${existingBook.locations[0]}`"
-                target="_blank"
-                rel="noopener"
+            <div class="p-6 flex gap-4">
+              <CoverPreview :image-url="activeItem.existingBook.cover_url" size="small" :readonly="true" />
+              <div class="flex-1 min-w-0 space-y-2">
+                <div class="text-base font-semibold text-gray-900 dark:text-white">{{ activeItem.existingBook.title || '(no title)' }}</div>
+                <div v-if="activeItem.existingBook.author" class="italic text-sm text-gray-600 dark:text-gray-400">{{ activeItem.existingBook.author }}</div>
+                <div class="text-xs">
+                  <span class="text-gray-500 dark:text-gray-400 mr-1">{{ t('admin.upload.duplicate.path_label') }}</span>
+                  <code v-for="loc in activeItem.existingBook.locations" :key="loc" class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[11px] mr-1 break-all">/{{ loc }}</code>
+                </div>
+                <div class="flex gap-2 mt-3">
+                  <a
+                    v-if="activeItem.existingBook.locations[0]"
+                    :href="`/library/#/item/${activeItem.existingBook.locations[0]}`"
+                    target="_blank" rel="noopener"
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+                  >
+                    <ArrowTopRightOnSquareIcon class="w-4 h-4" /> {{ t('admin.upload.duplicate.open') }}
+                  </a>
+                  <router-link
+                    :to="`/admin/books?hash=${activeItem.existingBook.id}`"
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >{{ t('admin.upload.duplicate.edit') }}</router-link>
+                  <button
+                    @click="removeItem(activeItem)"
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >{{ t('admin.upload.batch.remove') }}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- error (upload-level) -->
+          <div
+            v-else-if="activeItem.status === 'error'"
+            class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-red-200 dark:border-red-900/60 overflow-hidden"
+          >
+            <div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 flex items-start gap-3">
+              <ExclamationTriangleIcon class="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+              <div class="min-w-0">
+                <div class="font-semibold text-red-800 dark:text-red-200">{{ sourceName(activeItem.source) }}</div>
+                <div class="text-xs text-red-700 dark:text-red-300 mt-0.5 break-words">{{ activeItem.errorMsg }}</div>
+              </div>
+            </div>
+            <div class="px-6 py-4 flex gap-2">
+              <button
+                @click="restageItem(activeItem)"
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
               >
-                <ArrowTopRightOnSquareIcon class="w-4 h-4" />
-                {{ t('admin.upload.duplicate.open') }}
-              </a>
-              <router-link
-                :to="`/admin/books?hash=${existingBook.id}`"
+                <ArrowPathIcon class="w-4 h-4" /> {{ t('admin.upload.batch.retry') }}
+              </button>
+              <button
+                @click="removeItem(activeItem)"
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
-              >{{ t('admin.upload.duplicate.edit') }}</router-link>
+              >
+                <TrashIcon class="w-4 h-4" /> {{ t('admin.upload.batch.remove') }}
+              </button>
             </div>
           </div>
-        </div>
-      </div>
-      <div class="bg-gray-50 dark:bg-gray-900/40 px-6 py-4 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between text-xs">
-        <div class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.duplicate.override_hint') }}</div>
-        <div class="flex gap-2">
-          <button
-            @click="resetToIdle"
-            class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-          >{{ t('admin.upload.duplicate.cancel') }}</button>
-        </div>
-      </div>
-    </div>
 
-    <!-- ===== REVIEW PANEL ===== -->
-    <div v-if="stage === 'review' || stage === 'committing'" class="space-y-4">
-      <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-        <div class="px-6 py-3 bg-emerald-50 dark:bg-emerald-900/20 border-b border-emerald-200 dark:border-emerald-900/60 flex items-center gap-3">
-          <div class="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center">
-            <CheckIcon class="w-4 h-4" />
-          </div>
-          <div class="flex-1 min-w-0">
-            <div class="text-sm font-semibold text-emerald-800 dark:text-emerald-200">{{ t('admin.upload.review.extracted') }}</div>
-            <div class="font-mono text-xs text-emerald-700 dark:text-emerald-300 truncate">
-              {{ file?.name }} · {{ fileFormat.toUpperCase() }} · {{ fmtBytes(fileSize) }} · {{ fileHash?.slice(0, 16) }}…
-            </div>
-          </div>
-          <button
-            @click="showLogModal = true"
-            class="text-xs text-emerald-700 dark:text-emerald-300 underline hover:no-underline"
-          >{{ t('admin.upload.log.view') }}</button>
-        </div>
-
-        <div class="p-6 grid grid-cols-[200px_1fr] gap-6">
-          <div>
-            <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.cover') }}</div>
-            <CoverPreview
-              :image-url="stagingCoverUrl"
-              :file="coverOverride"
-              size="full"
-              :meta="reviewCoverMeta"
-              @update:file="(f) => coverOverride = f"
-              @re-extract="onReextract"
-            />
-          </div>
-          <div>
-            <MetadataFields v-model="meta" :show-title-error="titleMissing" />
-          </div>
-        </div>
-      </div>
-
-      <div v-if="stagingId" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-        <button
-          type="button"
-          @click="previewOpen = !previewOpen"
-          class="w-full flex items-center justify-between px-6 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/40"
-        >
-          <span class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.upload.review.preview') }}</span>
-          <span class="inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-            <span v-if="!previewOpen">{{ t('admin.upload.review.preview_open') }}</span>
-            <span v-else>{{ t('admin.upload.review.preview_close') }}</span>
-            <ChevronDownIcon v-if="previewOpen" class="w-4 h-4" />
-            <ChevronRightIcon v-else class="w-4 h-4" />
-          </span>
-        </button>
-        <div v-if="previewOpen" class="px-3 pb-3">
-          <StagingPreview :staging-id="stagingId" :filename="filename" />
-        </div>
-      </div>
-
-      <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-6 space-y-5">
-        <div>
-          <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.destination') }}</div>
-          <DirectoryTreePicker
-            v-model:selected-dir="selectedDir"
-            v-model:extra-subpath="extraSubpath"
-            :filename="filename"
-          />
+          <!-- committed -->
           <div
-            v-if="destinationEmpty"
-            class="mt-3 flex items-start gap-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm"
+            v-else-if="activeItem.status === 'committed' && activeItem.committedBook"
+            class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-emerald-200 dark:border-emerald-900/60 overflow-hidden"
           >
-            <ExclamationTriangleIcon class="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <div class="font-semibold text-amber-800 dark:text-amber-200">{{ t('admin.upload.review.destination_empty.title') }}</div>
-              <div class="text-xs text-amber-700 dark:text-amber-300 mt-0.5">{{ t('admin.upload.review.destination_empty.body') }}</div>
+            <div class="bg-gradient-to-b from-emerald-50 to-white dark:from-emerald-900/20 dark:to-gray-800 px-6 py-8 text-center">
+              <div class="mx-auto w-14 h-14 rounded-full bg-emerald-500 text-white flex items-center justify-center">
+                <CheckIcon class="w-8 h-8" />
+              </div>
+              <div class="mt-3 text-xl font-bold text-gray-900 dark:text-white">{{ t('admin.upload.success.heading') }}</div>
+              <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">{{ t('admin.upload.success.subtitle') }}</div>
+            </div>
+            <div class="p-6 flex gap-4">
+              <CoverPreview :image-url="activeItem.committedBook.cover_url" size="small" :readonly="true" />
+              <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs flex-1 min-w-0">
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.success.path') }}</dt>
+                <dd class="font-mono text-gray-800 dark:text-gray-200 break-all">/{{ activeItem.committedBook.locations[0] }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.success.hash') }}</dt>
+                <dd class="font-mono text-gray-800 dark:text-gray-200 break-all">{{ activeItem.committedBook.id }}</dd>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.success.clearance') }}</dt>
+                <dd><ClearancePill :value="activeItem.committedBook.clearance" /></dd>
+              </dl>
+            </div>
+            <div class="px-6 py-4 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
+              <a
+                v-if="activeItem.committedBook.locations[0]"
+                :href="`/library/#/item/${activeItem.committedBook.locations[0]}`"
+                target="_blank" rel="noopener"
+                class="inline-flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                <ArrowTopRightOnSquareIcon class="w-4 h-4" /> {{ t('admin.upload.success.view') }}
+              </a>
+              <div class="flex gap-2">
+                <router-link
+                  :to="`/admin/books?hash=${activeItem.committedBook.id}`"
+                  class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                >{{ t('admin.upload.success.edit') }}</router-link>
+                <button
+                  @click="openPicker"
+                  class="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+                >
+                  <ArrowUpTrayIcon class="w-4 h-4" /> {{ t('admin.upload.success.upload_another') }}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="border-t border-gray-100 dark:border-gray-700 pt-5">
-          <label class="block text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.filename') }}</label>
-          <input
-            v-model="filename"
-            type="text"
-            class="w-full px-3 py-2 border rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
-            :class="filenameMismatch
-              ? 'border-amber-400 dark:border-amber-700'
-              : 'border-gray-300 dark:border-gray-600'"
+
+          <!-- staged / committing → editor -->
+          <UploadItemEditor
+            v-else
+            :key="activeItem.localId"
+            :item="activeItem"
+            :single="items.length === 1"
+            @commit="onItemCommit(activeItem)"
+            @remove="removeItem(activeItem)"
+            @view-log="viewLog(activeItem)"
           />
-          <p
-            class="mt-1 text-xs"
-            :class="filenameMismatch
-              ? 'text-amber-600 dark:text-amber-400'
-              : 'text-gray-500 dark:text-gray-400'"
-          >
-            {{ t('admin.upload.review.filename_help', { ext: originalExt }) }}
-          </p>
-        </div>
-        <div class="border-t border-gray-100 dark:border-gray-700 pt-5">
-          <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.upload.review.access') }}</div>
-          <div class="grid grid-cols-2 gap-6">
-            <div>
-              <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{{ t('admin.upload.review.clearance') }}</label>
-              <ClearanceControl v-model="clearance" />
-            </div>
-            <div>
-              <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                <input v-model="needsReview" type="checkbox" class="rounded" />
-                <span v-html="t('admin.upload.review.needs_review', { flag: '<code class=\'font-mono text-xs\'>needs_review</code>' })"></span>
-              </label>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.upload.review.needs_review_help') }}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700 p-4 flex items-center justify-between">
-        <button
-          @click="resetToIdle"
-          :disabled="stage === 'committing'"
-          class="px-4 py-2 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-        >{{ t('admin.upload.review.cancel') }}</button>
-        <div class="flex items-center gap-3">
-          <div v-if="titleMissing" class="inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
-            <ExclamationTriangleIcon class="w-4 h-4" />
-            {{ t('admin.upload.review.title_required') }}
-          </div>
-          <button
-            @click="commit"
-            :disabled="titleMissing || stage === 'committing'"
-            class="inline-flex items-center gap-2 px-4 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
-          >
-            <ArrowPathIcon v-if="stage === 'committing'" class="w-4 h-4 animate-spin" />
-            <span>{{ stage === 'committing' ? t('admin.upload.review.committing') : t('admin.upload.review.commit') }}</span>
-          </button>
-        </div>
-      </div>
+        </template>
+      </main>
     </div>
 
-    <!-- ===== SUCCESS PANEL ===== -->
-    <div v-if="stage === 'done' && committedBook" class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-emerald-200 dark:border-emerald-900/60 overflow-hidden">
-      <div class="bg-gradient-to-b from-emerald-50 to-white dark:from-emerald-900/20 dark:to-gray-800 px-6 py-8 text-center">
-        <div class="mx-auto w-14 h-14 rounded-full bg-emerald-500 text-white flex items-center justify-center">
-          <CheckIcon class="w-8 h-8" />
-        </div>
-        <div class="mt-3 text-xl font-bold text-gray-900 dark:text-white">{{ t('admin.upload.success.heading') }}</div>
-        <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">{{ t('admin.upload.success.subtitle') }}</div>
-      </div>
-      <div class="p-6 flex gap-4">
-        <CoverPreview
-          :image-url="committedBook.cover_url"
-          size="small"
-          :readonly="true"
-        />
-        <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs flex-1 min-w-0">
-          <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.success.path') }}</dt>
-          <dd class="font-mono text-gray-800 dark:text-gray-200 break-all">/{{ committedBook.locations[0] }}</dd>
-          <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.success.hash') }}</dt>
-          <dd class="font-mono text-gray-800 dark:text-gray-200 break-all">{{ committedBook.id }}</dd>
-          <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.upload.success.clearance') }}</dt>
-          <dd>
-            <ClearancePill :value="committedBook.clearance" />
-          </dd>
-        </dl>
-      </div>
-      <div class="px-6 py-4 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
-        <a
-          v-if="committedBook.locations[0]"
-          :href="`/library/#/item/${committedBook.locations[0]}`"
-          target="_blank"
-          rel="noopener"
-          class="inline-flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline"
-        >
-          <ArrowTopRightOnSquareIcon class="w-4 h-4" />
-          {{ t('admin.upload.success.view') }}
-        </a>
-        <div class="flex gap-2">
-          <router-link
-            :to="`/admin/books?hash=${committedBook.id}`"
-            class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-          >{{ t('admin.upload.success.edit') }}</router-link>
-          <button
-            @click="resetToIdle"
-            class="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
-          >
-            <ArrowUpTrayIcon class="w-4 h-4" />
-            {{ t('admin.upload.success.upload_another') }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- hidden file input (multiple) -->
+    <input ref="fileInputEl" type="file" multiple :accept="ACCEPT_ATTR" class="hidden" @change="onFileChosen" />
 
     <!-- ===== LOG MODAL ===== -->
     <div
-      v-if="showLogModal"
+      v-if="showLogModal && logModalItem"
       class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-6"
       @click.self="showLogModal = false"
     >
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
         <div class="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-700">
-          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.upload.log.heading') }}</h3>
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white truncate">
+            {{ t('admin.upload.log.heading') }} — {{ sourceName(logModalItem.source) }}
+          </h3>
           <button @click="showLogModal = false" class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
             <XMarkIcon class="w-5 h-5" />
           </button>
         </div>
         <div class="flex-1 overflow-y-auto bg-gray-900 dark:bg-black text-gray-200 font-mono text-xs p-3">
-          <div v-for="(entry, i) in log" :key="i" class="log-line whitespace-pre-wrap break-all">
+          <div v-if="!logModalItem.log.length" class="text-gray-500">—</div>
+          <div v-for="(entry, i) in logModalItem.log" :key="i" class="whitespace-pre-wrap break-all">
             <span class="text-gray-500">{{ entry.time }}</span>
             <span
               class="ml-2 inline-block w-12"
@@ -808,10 +818,4 @@ const reviewCoverMeta = computed(() => {
   100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
 }
 .pulse-ring { animation: pulse-ring 1.6s infinite; }
-
-@keyframes log-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.log-line { animation: log-in 200ms ease-out both; }
 </style>

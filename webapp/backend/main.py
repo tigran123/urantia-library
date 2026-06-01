@@ -116,6 +116,12 @@ async def _lifespan(_app: FastAPI):
         # conditional UPDATE that claims the throttle key never committed on
         # an exception path, so the next restart will retry the claim.
         logging.exception("startup: legal blast trigger failed; will retry on next restart")
+    try:
+        # The restart we're recovering from is exactly what orphans staging dirs
+        # (in-memory _STAGING was just wiped), so reap stale ones proactively.
+        _purge_expired_staging()
+    except Exception:
+        logging.exception("startup: staging sweep failed; will retry on next upload/commit")
     yield
 
 app = FastAPI(lifespan=_lifespan)
@@ -554,6 +560,55 @@ def _audit(
         # should still serialise (as the JSON "{}") instead of silently becoming NULL.
         details_json=json.dumps(details, separators=(",", ":")) if details is not None else None,
     ))
+
+
+# batch_id -> (audit_row_id, last_touch_ts). In-memory, like _STAGING: a restart
+# mid-batch just starts a fresh audit row for the remaining volumes (rare, and
+# the batch's staging is gone too). Sequential per-batch commits (the client
+# loops) mean no concurrent append to a row.
+_AUDIT_BATCHES: dict[str, tuple[int, float]] = {}
+_AUDIT_BATCHES_LOCK = threading.Lock()
+_AUDIT_BATCH_TTL_S = 3600
+
+
+def _audit_batch_upload(db: Session, actor: models.User, batch_id: str, book: dict, base_dir: str) -> None:
+    """Fold one committed book into a single 'batch upload' audit row (one row per
+    multi-book Commit-all run), creating it on the first commit and appending on
+    the rest. Keeps the audit log compact for multi-volume sets while each book
+    still rides its own commit transaction — so the row reflects exactly what was
+    committed, even when a batch is only partially completed."""
+    now = datetime.now(timezone.utc).timestamp()
+    with _AUDIT_BATCHES_LOCK:
+        for b in [b for b, (_i, ts) in _AUDIT_BATCHES.items() if now - ts > _AUDIT_BATCH_TTL_S]:
+            _AUDIT_BATCHES.pop(b, None)
+        entry = _AUDIT_BATCHES.get(batch_id)
+    row = (db.query(models.AdminAuditLog)
+             .filter(models.AdminAuditLog.id == entry[0]).first()) if entry else None
+    if row is None:
+        details = {"count": 1, "dir": base_dir, "books": [book]}
+        row = models.AdminAuditLog(
+            created_at=_now_iso(),
+            actor_user_id=actor.id,
+            action="book.upload",
+            target_kind="book_batch",
+            target_id=batch_id,
+            summary=f"Uploaded 1 book to /{base_dir}" if base_dir else "Uploaded 1 book",
+            details_json=json.dumps(details, separators=(",", ":")),
+        )
+        db.add(row)
+        db.flush()  # assign row.id within this transaction
+    else:
+        try:
+            details = json.loads(row.details_json or "{}")
+        except json.JSONDecodeError:
+            details = {}
+        books = (details.get("books") or []) + [book]
+        d = details.get("dir") or base_dir
+        details = {"count": len(books), "dir": d, "books": books}
+        row.details_json = json.dumps(details, separators=(",", ":"))
+        row.summary = f"Uploaded {len(books)} books to /{d}" if d else f"Uploaded {len(books)} books"
+    with _AUDIT_BATCHES_LOCK:
+        _AUDIT_BATCHES[batch_id] = (row.id, now)
 
 
 def _record_usage_event(
@@ -2776,6 +2831,27 @@ def _purge_expired_staging() -> None:
             rec = _STAGING.pop(sid, None)
             if rec:
                 shutil.rmtree(rec.get("dir", ""), ignore_errors=True)
+        live_dirs = {rec.get("dir") for rec in _STAGING.values()}
+    # Disk reconciliation: the _STAGING map lives only in memory, so a restart or
+    # crash leaves staged-but-uncommitted directories on disk that the loop above
+    # can never reap (their entry is gone). Sweep any staging subdir that no live
+    # entry references and that is older than the TTL — this also collects leaked
+    # .cover-*/.reextract-* temp dirs. The age guard protects an in-flight upload,
+    # whose _STAGING entry isn't inserted until metadata extraction finishes.
+    try:
+        names = os.listdir(STAGING_DIR)
+    except FileNotFoundError:
+        return
+    for name in names:
+        path = os.path.join(STAGING_DIR, name)
+        if path in live_dirs or not os.path.isdir(path):
+            continue
+        try:
+            age = now - os.path.getmtime(path)
+        except OSError:
+            continue
+        if age > _STAGING_TTL_S:
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _detect_format(filename: str) -> str:
@@ -3748,6 +3824,28 @@ async def admin_cancel_staging(
     return {"cancelled": staging_id}
 
 
+@app.post("/api/admin/books/upload/touch")
+async def admin_touch_staging(
+    payload: schemas.TouchStagingRequest,
+    admin: models.User = Depends(require_admin),
+):
+    """Keepalive: push out the TTL on the specific staged uploads the caller still
+    has open, so a long multi-book review/edit session doesn't expire mid-way. We
+    refresh ONLY the requested ids (still scoped to the owner) — refreshing all of
+    the admin's records would let one open tab keep unrelated abandoned uploads
+    alive elsewhere, defeating the TTL. Closing the page stops the pings, so
+    abandoned uploads still expire within one TTL window."""
+    now = datetime.now(timezone.utc).timestamp()
+    wanted = set(payload.staging_ids)
+    touched = 0
+    with _STAGING_LOCK:
+        for sid, rec in _STAGING.items():
+            if sid in wanted and rec.get("owner_id") == admin.id:
+                rec["expires_at"] = now + _STAGING_TTL_S
+                touched += 1
+    return {"touched": touched}
+
+
 @app.post("/api/admin/books/commit", response_model=schemas.AdminBookDetail)
 async def admin_commit_book(
     payload: schemas.UploadCommitRequest,
@@ -3869,10 +3967,15 @@ async def admin_commit_book(
     )
     db.add(book)
     db.add(models.BookLocation(hash_id=file_hash, symlink_path=rel_path))
-    _audit(db, admin, "book.upload",
-           target_kind="book", target_id=file_hash,
-           summary=f'Uploaded "{title}" to /{rel_path}',
-           details={"title": title, "path": rel_path, "size": vault_size, "clearance": int(payload.clearance)})
+    if payload.batch_id:
+        _audit_batch_upload(db, admin, payload.batch_id,
+                            {"title": title, "path": rel_path, "hash": file_hash, "clearance": int(payload.clearance)},
+                            rel_dir)
+    else:
+        _audit(db, admin, "book.upload",
+               target_kind="book", target_id=file_hash,
+               summary=f'Uploaded "{title}" to /{rel_path}',
+               details={"title": title, "path": rel_path, "size": vault_size, "clearance": int(payload.clearance)})
     try:
         db.commit()
     except Exception as e:

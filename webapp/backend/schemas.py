@@ -118,6 +118,13 @@ class UploadCommitRequest(BaseModel):
     clearance: int = 100
     needs_review: bool = False
     filename: Optional[str] = None
+    # When several books are committed together (multi-volume "Commit all"), the
+    # client sends a shared id so the backend folds them into ONE audit row.
+    batch_id: Optional[str] = None
+
+
+class TouchStagingRequest(BaseModel):
+    staging_ids: List[str] = []
 
 
 class UploadDuplicateError(BaseModel):
