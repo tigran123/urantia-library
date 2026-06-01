@@ -201,3 +201,37 @@ def test_directed_thread_invisible_to_other_admins(app_ctx):
     assert "admin-b@x.com" in by_recipient, by_recipient.keys()
     # And the broadcast ADMIN_EMAIL is NOT included for a directed thread.
     assert "admin@example.com" not in by_recipient, by_recipient.keys()
+
+
+def test_delete_thread_removes_messages(app_ctx):
+    """Deleting a feedback thread must also delete its messages/recipients —
+    this SQLite connection runs with FK enforcement off, so the endpoint cleans
+    children explicitly rather than relying on ondelete=CASCADE (which would
+    leave orphaned feedback_messages and an empty 'My feedback' list)."""
+    helpers, _captured, TestSession = app_ctx
+    helpers["make_user"]("u@x.com")
+    helpers["make_user"]("admin@x.com", admin=True)
+    uc = helpers["client_for"]("u@x.com")
+    ac = helpers["client_for"]("admin@x.com")
+    models = helpers["models"]
+
+    r = uc.post("/api/feedback", json={"category": "general", "subject": "S", "body": "B"})
+    assert r.status_code == 200
+    tid = r.json()["id"]
+    assert ac.post(f"/api/feedback/{tid}/reply", json={"body": "reply"}).status_code == 200
+
+    db = TestSession()
+    try:
+        assert db.query(models.FeedbackMessage).filter_by(thread_id=tid).count() >= 2
+    finally:
+        db.close()
+
+    assert ac.delete(f"/api/admin/feedback/{tid}").status_code == 200
+
+    db = TestSession()
+    try:
+        assert db.query(models.FeedbackThread).filter_by(id=tid).first() is None
+        assert db.query(models.FeedbackMessage).filter_by(thread_id=tid).count() == 0
+        assert db.query(models.FeedbackRecipient).filter_by(thread_id=tid).count() == 0
+    finally:
+        db.close()

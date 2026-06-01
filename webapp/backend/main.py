@@ -8628,6 +8628,13 @@ async def admin_delete_feedback(
                 os.remove(full)
             except Exception:
                 pass
+    # Delete child rows explicitly: this SQLite connection runs with foreign-key
+    # enforcement OFF (see database.py), so the models' ondelete="CASCADE" does
+    # nothing — relying on it would orphan the messages/recipients/attachments.
+    tid = thread.id
+    db.query(models.FeedbackMessage).filter(models.FeedbackMessage.thread_id == tid).delete(synchronize_session=False)
+    db.query(models.FeedbackRecipient).filter(models.FeedbackRecipient.thread_id == tid).delete(synchronize_session=False)
+    db.query(models.FeedbackAttachment).filter(models.FeedbackAttachment.thread_id == tid).delete(synchronize_session=False)
     db.delete(thread)
     db.commit()
     return {"message": "removed"}
