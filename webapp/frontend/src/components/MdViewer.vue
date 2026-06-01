@@ -11,7 +11,7 @@ import { useAnnotations } from '../composables/useAnnotations'
 import { useHtmlAnnotationLayer } from '../composables/useHtmlAnnotationLayer'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
-import { viewerUrls, viewerParams, sourceHashId, sourceFilename, type ViewerSource } from './viewerSource'
+import { viewerUrls, viewerParams, sourceHashId, sourceFilename, sourceLoadKey, type ViewerSource } from './viewerSource'
 
 interface TocEntry {
   title: string
@@ -269,9 +269,9 @@ onMounted(() => {
   initMd()
 })
 
-watch(() => props.source, () => {
+watch(() => sourceLoadKey(props.source), () => {
   initMd()
-}, { deep: true })
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)

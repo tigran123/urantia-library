@@ -43,6 +43,13 @@ export const viewerParams = (s: ViewerSource, extra?: Record<string, any>): Reco
 export const sourceHashId = (s: ViewerSource): string | null =>
   s.kind === 'live' ? s.hashId : null
 
+// The identity of the bytes a viewer should fetch — a change here (and only
+// here) warrants a reload. In the upload UI the filename is editable and varies
+// independently: it's sniffed for UI variants (sourceFilename) but never changes
+// which bytes the staging endpoints serve, so it's deliberately excluded here.
+export const sourceLoadKey = (s: ViewerSource): string =>
+  s.kind === 'staging' ? `staging:${s.stagingId}` : `live:${s.path}`
+
 // Basename for extension sniffing inside viewers that pick UI variants by file
 // suffix (e.g. MdViewer hiding its TOC pane for .txt).
 export const sourceFilename = (s: ViewerSource): string =>

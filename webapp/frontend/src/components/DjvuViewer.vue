@@ -20,7 +20,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import DjvuTocNode, { type DjvuOutlineNode } from './DjvuTocNode.vue'
 import { useScrollPan } from '../composables/useScrollPan'
-import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
+import { viewerUrls, viewerParams, sourceHashId, sourceLoadKey, type ViewerSource } from './viewerSource'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -441,9 +441,9 @@ onMounted(() => {
   fetchMetadata()
 })
 
-watch(() => props.source, () => {
+watch(() => sourceLoadKey(props.source), () => {
   fetchMetadata()
-}, { deep: true })
+})
 
 // Re-fit on container resize (the viewer has a CSS resize handle). Skipped in
 // custom zoom: that scale is the user's explicit choice, not container-driven.

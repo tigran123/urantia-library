@@ -2784,8 +2784,116 @@ def _detect_format(filename: str) -> str:
         return "fb2.zip"
     if name.endswith(".txt.zip"):
         return "txt.zip"
+    if name.endswith(".md.zip"):
+        return "md.zip"
+    if name.endswith(".markdown.zip"):
+        return "markdown.zip"
     ext = name.rsplit(".", 1)[-1] if "." in name else ""
     return ext
+
+
+# Suffixes that must be treated as a single unit (a format wrapped in .zip),
+# not split on the last dot. Mirrors the unzip-on-read handling for those formats.
+_MULTI_SUFFIXES = (".fb2.zip", ".txt.zip", ".md.zip", ".markdown.zip",
+                   ".html.zip", ".htm.zip")
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+
+def _effective_suffix(name: str) -> str:
+    """Filename suffix treating .fb2.zip/.txt.zip/.html.zip/etc as one unit.
+    Returns the dotted suffix (e.g. '.pdf', '.fb2.zip') or '' when there's none."""
+    low = name.lower()
+    for suf in _MULTI_SUFFIXES:
+        if low.endswith(suf):
+            return suf
+    return os.path.splitext(low)[1]
+
+
+def _text_inner_ext(name: str) -> str:
+    """Effective text extension, ignoring a trailing .zip wrapper.
+    e.g. 'notes.txt.zip' -> '.txt', 'README.md' -> '.md'."""
+    low = name.lower()
+    if low.endswith(".zip"):
+        low = low[:-4]
+    return os.path.splitext(low)[1]
+
+
+def _staged_reads_as(file_path: str, suffix: str) -> bool | None:
+    """Does the staged file's *bytes* genuinely parse as `suffix`? Returns
+    True/False for formats we can probe, or None when there's no probe (the
+    caller then keeps the lexical "must keep extension" lock). Reuses the same
+    readers the viewers use, so preview and commit never disagree. The zip
+    variants require an actual zip (and plain variants require a non-zip) so the
+    committed symlink's extension always matches how the live readers unzip."""
+    suffix = suffix.lower()
+    try:
+        if suffix == ".pdf":
+            with open(file_path, "rb") as f:
+                return f.read(5) == b"%PDF-"
+        if suffix == ".djvu":
+            with open(file_path, "rb") as f:
+                return f.read(4) == b"AT&T"  # DjVu IFF magic 'AT&TFORM'
+        if suffix == ".epub":
+            if not zipfile.is_zipfile(file_path):
+                return False
+            with zipfile.ZipFile(file_path) as zf:
+                names = set(zf.namelist())
+                if "META-INF/container.xml" in names:
+                    return True
+                if "mimetype" in names:
+                    return zf.read("mimetype").strip() == b"application/epub+zip"
+            return False
+        if suffix == ".fb2":
+            if zipfile.is_zipfile(file_path):
+                return False
+            with open(file_path, "rb") as f:
+                return b"<FictionBook" in f.read(65536)
+        if suffix == ".fb2.zip":
+            if not zipfile.is_zipfile(file_path):
+                return False
+            with zipfile.ZipFile(file_path) as zf:
+                for name in zf.namelist():
+                    if name.lower().endswith(".fb2"):
+                        return b"<FictionBook" in zf.read(name)[:65536]
+            return False
+        if suffix in (".html", ".htm"):
+            if zipfile.is_zipfile(file_path):
+                return False
+            with open(file_path, "rb") as f:
+                low = f.read(65536).lower()
+            return b"<html" in low or b"<!doctype html" in low
+        if suffix in (".html.zip", ".htm.zip"):
+            if not zipfile.is_zipfile(file_path):
+                return False
+            with zipfile.ZipFile(file_path) as zf:
+                for name in zf.namelist():
+                    if name.lower().endswith((".html", ".htm")) and not name.endswith("/"):
+                        low = zf.read(name)[:65536].lower()
+                        return b"<html" in low or b"<!doctype html" in low
+            return False
+        if suffix == ".svg":
+            with open(file_path, "rb") as f:
+                return b"<svg" in f.read(65536).lower()
+        if suffix in _IMAGE_EXTS:
+            with Image.open(file_path) as im:
+                im.verify()
+            return True
+        if suffix in (".txt.zip", ".md.zip", ".markdown.zip"):
+            if not zipfile.is_zipfile(file_path):
+                return False
+            with zipfile.ZipFile(file_path) as zf:
+                for name in zf.namelist():
+                    if name.lower().endswith((".txt", ".md", ".markdown")) and not name.endswith("/"):
+                        return b"\x00" not in zf.read(name)[:8192]
+            return False
+        if suffix in (".txt", ".md", ".markdown") or suffix in CODE_EXTENSIONS:
+            if zipfile.is_zipfile(file_path):
+                return False  # a zip can't be served as a plain text file
+            with open(file_path, "rb") as f:
+                return b"\x00" not in f.read(8192)  # textual = no NUL bytes
+    except Exception:
+        return False
+    return None
 
 
 def _zip_fb2_inplace(src_path: str) -> str:
@@ -3508,15 +3616,18 @@ async def admin_staging_fb2_content(
     staging_id: str,
     _admin: models.User = Depends(require_admin),
 ):
+    # No stored-extension gate: the admin may be relabelling a mislabeled file,
+    # so we let the reader decide. A genuine FB2 parses; anything else 422s.
     file_path = _get_staging_file(staging_id)
-    lower = file_path.lower()
-    if not (lower.endswith(".fb2") or lower.endswith(".fb2.zip")):
-        raise HTTPException(status_code=400, detail="Not an FB2 file")
     try:
         xml_bytes = _read_fb2_bytes(file_path)
+        return _convert_fb2(xml_bytes)
+    except HTTPException:
+        raise
     except zipfile.BadZipFile:
         raise HTTPException(status_code=422, detail="Corrupt zip archive")
-    return _convert_fb2(xml_bytes)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Not a valid FB2 file")
 
 
 @app.get("/api/admin/books/upload/{staging_id}/md-content")
@@ -3526,12 +3637,11 @@ async def admin_staging_md_content(
 ):
     file_path = _get_staging_file(staging_id)
     text = _read_text_file(file_path)
-    lower = file_path.lower()
-    ext = os.path.splitext(lower)[1]
-    if lower.endswith(".txt"):
+    inner = _text_inner_ext(file_path)
+    if inner == ".txt":
         return _convert_txt(text)
-    elif ext in CODE_EXTENSIONS:
-        return _convert_code(text, ext[1:])
+    elif inner in CODE_EXTENSIONS:
+        return _convert_code(text, inner[1:])
     return _convert_md(text)
 
 
@@ -3540,16 +3650,17 @@ async def admin_staging_html_content(
     staging_id: str,
     _admin: models.User = Depends(require_admin),
 ):
+    # No stored-extension gate (see fb2-content): let the reader decide.
     file_path = _get_staging_file(staging_id)
-    lower = file_path.lower()
-    if not (lower.endswith(".html") or lower.endswith(".htm")
-            or lower.endswith(".html.zip") or lower.endswith(".htm.zip")):
-        raise HTTPException(status_code=400, detail="Not an HTML file")
     try:
         data = _read_html_bytes(file_path)
+        return _convert_html(data)
+    except HTTPException:
+        raise
     except zipfile.BadZipFile:
         raise HTTPException(status_code=422, detail="Corrupt zip archive")
-    return _convert_html(data)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Not a valid HTML file")
 
 
 @app.get("/api/admin/books/upload/{staging_id}/djvu-metadata")
@@ -3557,16 +3668,19 @@ async def admin_staging_djvu_metadata(
     staging_id: str,
     _admin: models.User = Depends(require_admin),
 ):
+    # No stored-extension gate (see fb2-content). The decoder is lenient (it
+    # happily reports 1 page for a non-DjVu file), so gate on the DjVu magic —
+    # the same probe the commit step uses — to keep preview and commit in sync.
     file_path = _get_staging_file(staging_id)
-    if not file_path.lower().endswith(".djvu"):
-        raise HTTPException(status_code=400, detail="Not a DjVu file")
+    if _staged_reads_as(file_path, ".djvu") is not True:
+        raise HTTPException(status_code=422, detail="Not a valid DjVu file")
     try:
         ctx = djvu.decode.Context()
         doc = ctx.new_document(djvu.decode.FileURI(file_path))
         doc.decoding_job.wait()
         return {"total_pages": len(doc.pages)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=422, detail="Not a valid DjVu file")
 
 
 @app.get("/api/admin/books/upload/{staging_id}/djvu-outline")
@@ -3574,13 +3688,14 @@ async def admin_staging_djvu_outline(
     staging_id: str,
     _admin: models.User = Depends(require_admin),
 ):
+    # No stored-extension gate (see fb2-content); gate on the DjVu magic.
     file_path = _get_staging_file(staging_id)
-    if not file_path.lower().endswith(".djvu"):
-        raise HTTPException(status_code=400, detail="Not a DjVu file")
+    if _staged_reads_as(file_path, ".djvu") is not True:
+        raise HTTPException(status_code=422, detail="Not a valid DjVu file")
     try:
         return {"toc": extract_djvu_outline(file_path)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=422, detail="Not a valid DjVu file")
 
 
 @app.get("/api/admin/books/upload/{staging_id}/djvu-page")
@@ -3589,9 +3704,10 @@ async def admin_staging_djvu_page(
     page: int,
     _admin: models.User = Depends(require_admin),
 ):
+    # No stored-extension gate (see fb2-content); gate on the DjVu magic.
     file_path = _get_staging_file(staging_id)
-    if not file_path.lower().endswith(".djvu"):
-        raise HTTPException(status_code=400, detail="Not a DjVu file")
+    if _staged_reads_as(file_path, ".djvu") is not True:
+        raise HTTPException(status_code=422, detail="Not a valid DjVu file")
     if page < 1:
         raise HTTPException(status_code=400, detail="Invalid page number")
     headers = {"Cache-Control": "no-store"}
@@ -3615,8 +3731,10 @@ async def admin_staging_djvu_page(
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         return Response(content=buf.getvalue(), media_type="image/jpeg", headers=headers)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=422, detail="Not a valid DjVu file")
 
 
 @app.delete("/api/admin/books/upload/{staging_id}")
@@ -3655,14 +3773,21 @@ async def admin_commit_book(
     staging_filename = rec["filename"]
     requested_name = (payload.filename or staging_filename).strip()
     filename = _safe_path_segment(requested_name)
-    # Force the rename to preserve the upload's effective extension so the
-    # viewer's extension switch keeps working and stored content matches the
-    # suffix. .fb2.zip is treated as a single suffix because we re-zip on upload.
-    expected_suffix = (".fb2.zip" if staging_filename.lower().endswith(".fb2.zip")
-                       else os.path.splitext(staging_filename)[1].lower())
-    if expected_suffix and not filename.lower().endswith(expected_suffix):
-        raise HTTPException(status_code=400, detail=f"Filename must keep extension {expected_suffix}")
     staging_book = os.path.join(rec["dir"], staging_filename)
+    # Allow changing the extension only when the staged bytes genuinely parse as
+    # the new format (verified by the same reader the viewer uses), so the stored
+    # content always matches its suffix and the live readers keep working. For
+    # formats we can't probe we fall back to the old lexical "must keep" lock.
+    original_suffix = _effective_suffix(staging_filename)
+    requested_suffix = _effective_suffix(filename)
+    if requested_suffix != original_suffix:
+        verdict = _staged_reads_as(staging_book, requested_suffix)
+        if verdict is None:
+            raise HTTPException(status_code=400,
+                detail=f"Filename must keep extension {original_suffix}")
+        if not verdict:
+            raise HTTPException(status_code=400,
+                detail=f"File does not appear to be a valid {requested_suffix.lstrip('.').upper()}")
     staging_cover = os.path.join(rec["dir"], "cover.jpg")
 
     # Destination paths — drop empty segments so "//" doesn't sneak in when
@@ -4381,7 +4506,8 @@ CODE_EXTENSIONS = {
 }
 
 def sanitize_text_path(path: str) -> str:
-    """Ensure path is within BOOKS_DIR, exists, and is a .md/.markdown/.txt or code file."""
+    """Ensure path is within BOOKS_DIR, exists, and is a .md/.markdown/.txt
+    (optionally .zip-wrapped) or code file."""
     if not path:
         raise HTTPException(status_code=400, detail="Invalid path")
     target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
@@ -4391,14 +4517,27 @@ def sanitize_text_path(path: str) -> str:
         raise HTTPException(status_code=404, detail="File not found")
     lower = target_path.lower()
     ext = os.path.splitext(lower)[1]
-    if not (lower.endswith(".md") or lower.endswith(".markdown") or lower.endswith(".txt") or ext in CODE_EXTENSIONS):
+    if not (lower.endswith((".md", ".markdown", ".txt", ".txt.zip", ".md.zip", ".markdown.zip"))
+            or ext in CODE_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Not a Markdown, text, or supported code file")
     return target_path
 
 
-def _read_text_file(file_path: str) -> str:
+def _read_text_bytes(file_path: str) -> bytes:
+    """Raw bytes of a text/markdown file, transparently unzipping a
+    .txt.zip/.md.zip/.markdown.zip wrapper (mirrors _read_fb2_bytes/_read_html_bytes)."""
+    if file_path.lower().endswith(".zip"):
+        with zipfile.ZipFile(file_path) as zf:
+            for name in zf.namelist():
+                if name.lower().endswith((".txt", ".md", ".markdown")) and not name.endswith("/"):
+                    return zf.read(name)
+        raise HTTPException(status_code=422, detail="No text entry inside zip")
     with open(file_path, "rb") as f:
-        raw = f.read()
+        return f.read()
+
+
+def _read_text_file(file_path: str) -> str:
+    raw = _read_text_bytes(file_path)
     for encoding in ("utf-8-sig", "utf-8", "latin-1"):
         try:
             return raw.decode(encoding)
@@ -4728,18 +4867,17 @@ async def md_content(
     file_path = sanitize_text_path(path)
     assert_can_read_path(file_path, current_user, db)
     text = _read_text_file(file_path)
-    lower = file_path.lower()
-    ext = os.path.splitext(lower)[1]
+    inner = _text_inner_ext(file_path)
     _record_usage_event(
         request, "book_open",
         user=current_user,
         hash_id=_resolve_vault_hash(file_path),
         path=path,
     )
-    if lower.endswith(".txt"):
+    if inner == ".txt":
         return _convert_txt(text)
-    elif ext in CODE_EXTENSIONS:
-        return _convert_code(text, ext[1:])
+    elif inner in CODE_EXTENSIONS:
+        return _convert_code(text, inner[1:])
     return _convert_md(text)
 
 
@@ -4760,11 +4898,10 @@ async def text_preview(
     limit = max(200, min(int(max_chars), 8000))
     snippet = text[:limit]
     html = ""
-    lower = file_path.lower()
-    ext = os.path.splitext(lower)[1]
-    if not lower.endswith(".txt"):
-        if ext in CODE_EXTENSIONS:
-            html = _render_code_snippet_html(snippet, ext[1:])
+    inner = _text_inner_ext(file_path)
+    if inner != ".txt":
+        if inner in CODE_EXTENSIONS:
+            html = _render_code_snippet_html(snippet, inner[1:])
         else:
             html = _MdRenderer(collect_toc=False).render(snippet)
     return {

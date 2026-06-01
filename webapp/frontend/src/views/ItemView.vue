@@ -314,8 +314,15 @@ const isFb2 = computed(() => {
   const n = (item.value?.name || '').toLowerCase()
   return n.endsWith('.fb2') || n.endsWith('.fb2.zip')
 })
-const isMd = computed(() => ['md', 'markdown'].includes(fileExtension.value))
-const isTxt = computed(() => fileExtension.value === 'txt')
+const isMd = computed(() => {
+  const n = (item.value?.name || '').toLowerCase()
+  return n.endsWith('.md') || n.endsWith('.markdown')
+      || n.endsWith('.md.zip') || n.endsWith('.markdown.zip')
+})
+const isTxt = computed(() => {
+  const n = (item.value?.name || '').toLowerCase()
+  return n.endsWith('.txt') || n.endsWith('.txt.zip')
+})
 const isCode = computed(() => ['py', 'c', 'cpp', 'h', 'hpp', 'js', 'ts', 'jsx', 'tsx', 'lua', 'sh', 'bash', 'rs', 'go', 'java', 'css', 'scss', 'json', 'xml', 'yaml', 'yml', 'sql', 'ini'].includes(fileExtension.value))
 const isHtml = computed(() => {
   const n = (item.value?.name || '').toLowerCase()

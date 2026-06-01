@@ -31,7 +31,7 @@ import { useScrollPan } from '../composables/useScrollPan'
 import { anchorFromSelection as pdfAnchorFromSelection, paintAnnotations as pdfPaintAnnotations } from '../lib/anchors/pdf'
 import { popoverPosition, type PopoverPosition } from '../lib/anchors/popoverPosition'
 import type { Annotation } from '../api'
-import { viewerUrls, sourceHashId, type ViewerSource } from './viewerSource'
+import { viewerUrls, sourceHashId, sourceLoadKey, type ViewerSource } from './viewerSource'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
@@ -772,10 +772,10 @@ onMounted(async () => {
   }
 })
 
-watch(() => props.source, async () => {
+watch(() => sourceLoadKey(props.source), async () => {
   destroy()
   await initPdf()
-}, { deep: true })
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)

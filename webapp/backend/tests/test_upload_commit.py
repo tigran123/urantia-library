@@ -1,0 +1,282 @@
+"""End-to-end coverage for the admin upload → preview → commit flow.
+
+The flow writes to the CAS vault, creates symlinks under BOOKS_DIR and parks
+staged files under STAGING_DIR. conftest only redirects the DB, so the
+`upload_ctx` fixture additionally repoints those four module globals (read at
+call time in main.py) at a throwaway tmp tree.
+
+Covers the new behaviour added alongside these tests:
+- content-aware extension validation (commit + relaxed staging preview gates), and
+- .txt.zip / .md.zip / .markdown.zip unzip-on-read.
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import zipfile
+
+import pytest
+
+
+# ---- sample fixtures (pure-python; no external binaries needed) -------------
+
+FB2_XML = (
+    b'<?xml version="1.0" encoding="utf-8"?>'
+    b'<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" '
+    b'xmlns:l="http://www.w3.org/1999/xlink">'
+    b'<description><title-info><book-title>Test Book</book-title></title-info></description>'
+    b'<body><section><p>Hello world</p></section></body>'
+    b'</FictionBook>'
+)
+HTML_DOC = b"<!doctype html><html><head><title>H</title></head><body><h1>Hi</h1></body></html>"
+PDF_STUB = b"%PDF-1.4\n%fake pdf for tests\n"
+DOCX_STUB = b"PK\x03\x04 not really a docx, just needs to upload"
+
+
+def _zip_bytes(inner_name: str, inner_bytes: bytes) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(inner_name, inner_bytes)
+    return buf.getvalue()
+
+
+# ---- harness ----------------------------------------------------------------
+
+@pytest.fixture
+def upload_ctx(app_ctx, tmp_path, monkeypatch):
+    """(helpers, client, books_dir, data_dir, main) with the library filesystem
+    redirected to tmp and an authenticated admin client ready."""
+    helpers, _captured, _TestSession = app_ctx
+    main = helpers["main"]
+
+    books = tmp_path / "books"
+    data = books / ".data"
+    staging = data / "staging"
+    covers = data / "covers"
+    for d in (books, data, staging, covers):
+        d.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(main, "BOOKS_DIR", str(books))
+    monkeypatch.setattr(main, "DATA_DIR", str(data))
+    monkeypatch.setattr(main, "STAGING_DIR", str(staging))
+    monkeypatch.setattr(main, "COVERS_DIR", str(covers))
+
+    helpers["make_user"]("admin@example.com", admin=True)
+    client = helpers["client_for"]("admin@example.com")
+    return helpers, client, books, data, main
+
+
+def upload(client, filename: str, raw: bytes):
+    return client.post(
+        "/api/admin/books/upload",
+        files={"file": (filename, raw, "application/octet-stream")},
+    )
+
+
+def parse_done(resp) -> dict:
+    """Pull the `done` SSE event payload out of the streamed upload response."""
+    assert resp.status_code == 200, resp.text
+    for block in resp.text.split("\n\n"):
+        if not block.strip():
+            continue
+        ev = data = None
+        for ln in block.split("\n"):
+            if ln.startswith("event:"):
+                ev = ln[len("event:"):].strip()
+            elif ln.startswith("data:"):
+                data = ln[len("data:"):].strip()
+        if ev == "done":
+            return json.loads(data)
+    raise AssertionError(f"no done event in stream: {resp.text!r}")
+
+
+def commit(client, staging_id, *, filename=None, top_dir="Test", subpath="",
+           clearance=0, metadata=None):
+    body = {
+        "staging_id": staging_id,
+        "metadata": metadata or {"title": "T"},
+        "top_dir": top_dir,
+        "subpath": subpath,
+        "clearance": clearance,
+        "needs_review": False,
+    }
+    if filename is not None:
+        body["filename"] = filename
+    return client.post("/api/admin/books/commit", json=body)
+
+
+# ---- end-to-end tests -------------------------------------------------------
+
+def test_fb2_upload_and_commit(upload_ctx):
+    helpers, client, books, data, main = upload_ctx
+    done = parse_done(upload(client, "book.fb2", FB2_XML))
+    assert "error" not in done, done
+    # .fb2 is re-zipped to .fb2.zip on upload.
+    assert done["format"] == "fb2.zip"
+    assert done["filename"] == "book.fb2.zip"
+
+    res = commit(client, done["staging_id"])
+    assert res.status_code == 200, res.text
+    detail = res.json()
+    assert detail["id"] == done["hash"]
+    assert os.path.exists(data / detail["id"])                 # vault file
+    link = books / "Test" / "book.fb2.zip"
+    assert os.path.islink(link) and os.path.exists(link)       # resolvable symlink
+
+    models = helpers["models"]
+    db = helpers["TestSession"]()
+    try:
+        assert db.query(models.Book).filter_by(id=detail["id"]).first() is not None
+        assert db.query(models.BookLocation).filter_by(
+            symlink_path="Test/book.fb2.zip").first() is not None
+    finally:
+        db.close()
+
+
+def test_fb2_preview(upload_ctx):
+    _h, client, _b, _d, _m = upload_ctx
+    done = parse_done(upload(client, "book.fb2", FB2_XML))
+    res = client.get(f"/api/admin/books/upload/{done['staging_id']}/fb2-content")
+    assert res.status_code == 200, res.text
+    assert res.json()["html"]
+
+
+def test_fb2_preview_rejects_non_fb2(upload_ctx):
+    # Relaxed gate: a non-FB2 staged file fails in the reader with a clean 422.
+    _h, client, _b, _d, _m = upload_ctx
+    done = parse_done(upload(client, "plain.txt", b"just some text, not fb2"))
+    res = client.get(f"/api/admin/books/upload/{done['staging_id']}/fb2-content")
+    assert res.status_code == 422, res.text
+
+
+def test_content_aware_commit_valid_relabel(upload_ctx):
+    # A plain .txt genuinely reads as markdown — relabel .txt -> .md is allowed.
+    _h, client, books, _d, _m = upload_ctx
+    done = parse_done(upload(client, "notes.txt", b"# Heading\n\nbody text"))
+    res = commit(client, done["staging_id"], filename="notes.md")
+    assert res.status_code == 200, res.text
+    assert os.path.exists(books / "Test" / "notes.md")
+
+
+def test_content_aware_commit_invalid_relabel(upload_ctx):
+    # A PDF is not a DjVu — relabel .pdf -> .djvu is rejected by the probe.
+    _h, client, _b, _d, _m = upload_ctx
+    done = parse_done(upload(client, "doc.pdf", PDF_STUB))
+    res = commit(client, done["staging_id"], filename="doc.djvu")
+    assert res.status_code == 400
+    assert "valid DJVU" in res.json()["detail"]
+
+
+def test_lexical_fallback_no_probe(upload_ctx):
+    # No content probe for .odt -> keep the lexical "must keep extension" lock.
+    _h, client, _b, _d, _m = upload_ctx
+    done = parse_done(upload(client, "file.docx", DOCX_STUB))
+    res = commit(client, done["staging_id"], filename="file.odt")
+    assert res.status_code == 400
+    assert "must keep extension" in res.json()["detail"]
+
+
+def test_djvu_preview_rejects_non_djvu(upload_ctx):
+    # Relaxed gate: feeding a non-DjVu file to the djvu endpoint -> clean 422.
+    _h, client, _b, _d, _m = upload_ctx
+    done = parse_done(upload(client, "doc.pdf", PDF_STUB))
+    res = client.get(f"/api/admin/books/upload/{done['staging_id']}/djvu-metadata")
+    assert res.status_code == 422, res.text
+
+
+def test_txt_zip_end_to_end(upload_ctx):
+    _h, client, _b, _d, _m = upload_ctx
+    raw = _zip_bytes("notes.txt", b"plain text inside a zip")
+    done = parse_done(upload(client, "notes.txt.zip", raw))
+    assert "error" not in done, done
+
+    # Staging preview unzips on the fly and renders as plain text (no TOC).
+    pre = client.get(f"/api/admin/books/upload/{done['staging_id']}/md-content")
+    assert pre.status_code == 200, pre.text
+    assert "plain text inside a zip" in pre.json()["raw"]
+    assert pre.json()["toc"] == []
+
+    assert commit(client, done["staging_id"]).status_code == 200
+    live = client.get("/api/md-content", params={"path": "Test/notes.txt.zip"})
+    assert live.status_code == 200, live.text
+    assert "plain text inside a zip" in live.json()["raw"]
+
+
+def test_md_zip_end_to_end(upload_ctx):
+    _h, client, _b, _d, _m = upload_ctx
+    raw = _zip_bytes("doc.md", b"# Title\n\nSome **markdown** body.")
+    done = parse_done(upload(client, "doc.md.zip", raw))
+    assert "error" not in done, done
+
+    assert commit(client, done["staging_id"]).status_code == 200
+    live = client.get("/api/md-content", params={"path": "Test/doc.md.zip"})
+    assert live.status_code == 200, live.text
+    body = live.json()
+    assert body["html"]            # rendered markdown
+    assert body["toc"]             # heading collected into the TOC
+
+
+def test_cancel_staging(upload_ctx):
+    _h, client, _b, _d, main = upload_ctx
+    done = parse_done(upload(client, "book.fb2", FB2_XML))
+    sid = done["staging_id"]
+    assert sid in main._STAGING
+    res = client.delete(f"/api/admin/books/upload/{sid}")
+    assert res.status_code == 200
+    assert res.json() == {"cancelled": sid}
+    assert sid not in main._STAGING
+
+
+# ---- pure-helper unit tests -------------------------------------------------
+
+def test_effective_suffix(app_ctx):
+    main = app_ctx[0]["main"]
+    assert main._effective_suffix("a.fb2.zip") == ".fb2.zip"
+    assert main._effective_suffix("a.txt.zip") == ".txt.zip"
+    assert main._effective_suffix("a.pdf") == ".pdf"
+    assert main._effective_suffix("noext") == ""
+
+
+def test_text_inner_ext(app_ctx):
+    main = app_ctx[0]["main"]
+    assert main._text_inner_ext("notes.txt.zip") == ".txt"
+    assert main._text_inner_ext("README.md") == ".md"
+    assert main._text_inner_ext("a.markdown.zip") == ".markdown"
+
+
+def test_read_text_bytes_unzips(app_ctx, tmp_path):
+    main = app_ctx[0]["main"]
+    p = tmp_path / "n.txt.zip"
+    p.write_bytes(_zip_bytes("n.txt", b"hello zip"))
+    assert main._read_text_bytes(str(p)) == b"hello zip"
+    plain = tmp_path / "n.txt"
+    plain.write_bytes(b"hello plain")
+    assert main._read_text_bytes(str(plain)) == b"hello plain"
+
+
+def test_staged_reads_as(app_ctx, tmp_path):
+    main = app_ctx[0]["main"]
+
+    fb2 = tmp_path / "a.fb2"; fb2.write_bytes(FB2_XML)
+    assert main._staged_reads_as(str(fb2), ".fb2") is True
+    assert main._staged_reads_as(str(fb2), ".fb2.zip") is False
+
+    fb2zip = tmp_path / "a.fb2.zip"; fb2zip.write_bytes(_zip_bytes("a.fb2", FB2_XML))
+    assert main._staged_reads_as(str(fb2zip), ".fb2.zip") is True
+    assert main._staged_reads_as(str(fb2zip), ".fb2") is False
+
+    pdf = tmp_path / "a.pdf"; pdf.write_bytes(PDF_STUB)
+    assert main._staged_reads_as(str(pdf), ".pdf") is True
+    assert main._staged_reads_as(str(pdf), ".djvu") is False
+
+    txt = tmp_path / "a.txt"; txt.write_bytes(b"plain")
+    assert main._staged_reads_as(str(txt), ".txt") is True
+    assert main._staged_reads_as(str(txt), ".md") is True
+    assert main._staged_reads_as(str(txt), ".txt.zip") is False  # not a zip
+
+    txtzip = tmp_path / "a.txt.zip"; txtzip.write_bytes(_zip_bytes("a.txt", b"plain"))
+    assert main._staged_reads_as(str(txtzip), ".txt.zip") is True
+
+    # No probe for .odt -> None (caller keeps the lexical lock).
+    docx = tmp_path / "a.docx"; docx.write_bytes(DOCX_STUB)
+    assert main._staged_reads_as(str(docx), ".odt") is None

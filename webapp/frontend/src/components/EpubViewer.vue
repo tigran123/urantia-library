@@ -20,7 +20,7 @@ import { useAnnotations } from '../composables/useAnnotations'
 import { anchorFromSelection as epubAnchorFromSelection, paintAnnotations as epubPaintAnnotations } from '../lib/anchors/epub'
 import { popoverPositionFromViewport, type PopoverPosition } from '../lib/anchors/popoverPosition'
 import type { Annotation } from '../api'
-import { viewerUrls, sourceHashId, type ViewerSource } from './viewerSource'
+import { viewerUrls, sourceHashId, sourceLoadKey, type ViewerSource } from './viewerSource'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -493,10 +493,10 @@ onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
 })
 
-watch(() => props.source, () => {
+watch(() => sourceLoadKey(props.source), () => {
   destroyBook()
   initEpub()
-}, { deep: true })
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)

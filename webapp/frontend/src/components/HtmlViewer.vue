@@ -9,7 +9,7 @@ import AnnotationsSidebar from './AnnotationsSidebar.vue'
 import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
 import { useAnnotations } from '../composables/useAnnotations'
 import { useHtmlAnnotationLayer } from '../composables/useHtmlAnnotationLayer'
-import { viewerUrls, viewerParams, sourceHashId, type ViewerSource } from './viewerSource'
+import { viewerUrls, viewerParams, sourceHashId, sourceLoadKey, type ViewerSource } from './viewerSource'
 
 interface TocEntry {
   title: string
@@ -251,9 +251,9 @@ onMounted(() => {
   initHtml()
 })
 
-watch(() => props.source, () => {
+watch(() => sourceLoadKey(props.source), () => {
   initHtml()
-}, { deep: true })
+})
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
