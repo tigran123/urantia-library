@@ -1,0 +1,7 @@
+.vscode/
+.claude/
+.antigravitycli/
+urantia-library/
+CLAUDE.md
+GEMINI.md
+exclude.txt
