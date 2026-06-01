@@ -3838,6 +3838,15 @@ def _safe_under_books(path: str) -> str:
     target = os.path.abspath(os.path.join(BOOKS_DIR, path))
     if target != base and not target.startswith(base + os.sep):
         raise HTTPException(status_code=403, detail="Forbidden")
+    # abspath() is purely lexical, so a symlinked *directory component* (e.g.
+    # Unsorted/link-out → /etc) would slip past the prefix check and let the
+    # importer read/copy files from outside the tree. realpath() resolves the
+    # symlinks; the library's own book symlinks still resolve within BOOKS_DIR
+    # (into .data), so legitimate paths are unaffected.
+    real_base = os.path.realpath(BOOKS_DIR)
+    real_target = os.path.realpath(target)
+    if real_target != real_base and not real_target.startswith(real_base + os.sep):
+        raise HTTPException(status_code=403, detail="Forbidden")
     rel = os.path.relpath(target, base)
     if rel != "." and rel.split(os.sep, 1)[0] in _TOPDIR_SKIPLIST:
         raise HTTPException(status_code=403, detail="Forbidden")

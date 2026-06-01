@@ -108,6 +108,12 @@ const startImport = async () => {
       alert(t('admin.upload.batch.import_none'))
       return
     }
+    // The server caps how many files one selection expands to. Tell the admin
+    // when it bit, so they know files were dropped (the Upload page also caps the
+    // batch separately and shows its own notice).
+    if (res.data?.truncated) {
+      alert(t('admin.upload.batch.import_truncated', { count: files.length }))
+    }
     pendingServerImports.value = files
     selectedImports.value = new Set()
     selectMode.value = false

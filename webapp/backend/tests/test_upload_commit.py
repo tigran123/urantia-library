@@ -374,6 +374,25 @@ def test_stage_from_path_traversal_blocked(upload_ctx):
     assert client.post("/api/admin/books/stage-from-path", json={"path": ".data/anything"}).status_code == 403
 
 
+def test_symlinked_dir_escape_blocked(upload_ctx):
+    # A symlinked directory component points a lexically-valid path outside the
+    # library tree; realpath() must catch it (abspath alone would not).
+    _h, client, books, _d, _m = upload_ctx
+    outside = os.path.join(os.path.dirname(str(books)), "outside")
+    _write(os.path.join(outside, "secret.fb2"), FB2_XML)
+    os.makedirs(os.path.join(str(books), "Unsorted"), exist_ok=True)
+    os.symlink(outside, os.path.join(str(books), "Unsorted", "escape"))
+
+    # A file reached through the symlinked dir is outside /Books → rejected.
+    assert client.post("/api/admin/books/stage-from-path",
+                       json={"path": "Unsorted/escape/secret.fb2"}).status_code == 403
+    # …and the importable lister neither expands the symlinked dir nor lists the file.
+    res = client.post("/api/admin/books/importable",
+                      json={"paths": ["Unsorted/escape", "Unsorted/escape/secret.fb2"]})
+    assert res.status_code == 200
+    assert res.json()["files"] == []
+
+
 # ---- pure-helper unit tests -------------------------------------------------
 
 def test_effective_suffix(app_ctx):
