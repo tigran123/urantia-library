@@ -6,6 +6,7 @@ import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, unrec
 import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 import { useEditClearance } from '../composables/useEditClearance'
 import { getFullUrl } from '../lib/assets'
+import { pendingServerImports } from '../lib/pendingImports'
 
 const { t, locale } = useI18n({ useScope: 'global' })
 const { editClearance } = useEditClearance()
@@ -14,14 +15,16 @@ const currentUser = inject<Ref<{ is_admin?: boolean, email?: string } | null>>('
 const router = useRouter()
 
 const selectMode = ref(false)
-const selected = ref<Set<string>>(new Set())
+const selected = ref<Set<string>>(new Set())          // committed books, keyed by hash_id
+const selectedImports = ref<Set<string>>(new Set())    // importable files/dirs, keyed by path
 const verifyStarting = ref(false)
 const clearanceSaving = ref(false)
 const recommendingBulk = ref(false)
+const importing = ref(false)
 
 const toggleSelectMode = () => {
   selectMode.value = !selectMode.value
-  if (!selectMode.value) selected.value = new Set()
+  if (!selectMode.value) { selected.value = new Set(); selectedImports.value = new Set() }
 }
 
 const onSelectModeKeydown = (e: KeyboardEvent) => {
@@ -51,15 +54,37 @@ const toggleSelect = (hashId: string, ev?: Event) => {
   selected.value = next
 }
 
-const onItemClickCapture = (hashId: string | undefined, ev: Event) => {
-  if (!selectMode.value || !hashId) return
-  ev.preventDefault()
-  ev.stopPropagation()
-  toggleSelect(hashId)
+// Un-imported files (plain files, no hash_id) and directories can be selected for
+// import. Committed books (hash_id) go to the existing hash-based selection.
+const ACCEPTED_IMPORT_EXTS = ['fb2', 'zip', 'epub', 'pdf', 'djvu', 'mobi', 'azw', 'azw3', 'prc',
+  'docx', 'odt', 'html', 'rtf', 'txt', 'jpg', 'jpeg', 'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac',
+  'mp4', 'webm', 'mkv', 'avi', 'mov']
+const hasAcceptedExt = (name: string) => {
+  const n = (name || '').toLowerCase()
+  return ACCEPTED_IMPORT_EXTS.some((e) => n.endsWith('.' + e))
+}
+const isImportable = (item: any) =>
+  item.is_dir ? !isRecommendedDir(item) : (!item.hash_id && hasAcceptedExt(item.name))
+
+const isImportSelected = (path: string) => selectedImports.value.has(path)
+const toggleImportSelect = (path: string) => {
+  const next = new Set(selectedImports.value)
+  if (next.has(path)) next.delete(path); else next.add(path)
+  selectedImports.value = next
+}
+
+const onItemClickCapture = (item: any, ev: Event) => {
+  if (!selectMode.value) return
+  if (item?.hash_id) {
+    ev.preventDefault(); ev.stopPropagation(); toggleSelect(item.hash_id)
+  } else if (isImportable(item)) {
+    ev.preventDefault(); ev.stopPropagation(); toggleImportSelect(item.path)
+  }
 }
 
 const clearSelection = () => {
   selected.value = new Set()
+  selectedImports.value = new Set()
 }
 
 const selectableHashIds = computed<string[]>(() =>
@@ -68,6 +93,30 @@ const selectableHashIds = computed<string[]>(() =>
 
 const selectAll = () => {
   selected.value = new Set(selectableHashIds.value)
+}
+
+// Expand the import selection (files + dirs) into concrete file paths server-side,
+// hand them to the Upload view, and navigate there.
+const startImport = async () => {
+  const paths = Array.from(selectedImports.value)
+  if (!paths.length) return
+  importing.value = true
+  try {
+    const res = await api.post('/admin/books/importable', { paths })
+    const files: string[] = res.data?.files || []
+    if (!files.length) {
+      alert(t('admin.upload.batch.import_none'))
+      return
+    }
+    pendingServerImports.value = files
+    selectedImports.value = new Set()
+    selectMode.value = false
+    router.push({ name: 'admin-upload' })
+  } catch (e: any) {
+    alert(e?.response?.data?.detail || e?.message || 'error')
+  } finally {
+    importing.value = false
+  }
 }
 
 const startSelectionVerify = async (mode: IntegrityMode) => {
@@ -444,14 +493,23 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         <template v-for="item in items" :key="item.name">
           <div
             class="relative group"
-            :class="selectMode && item.hash_id && isSelected(item.hash_id) ? 'ring-2 ring-emerald-500 rounded-xl' : ''"
-            @click.capture="onItemClickCapture(item.hash_id, $event)"
+            :class="selectMode && item.hash_id && isSelected(item.hash_id) ? 'ring-2 ring-emerald-500 rounded-xl'
+              : selectMode && isImportSelected(item.path) ? 'ring-2 ring-blue-500 rounded-xl' : ''"
+            @click.capture="onItemClickCapture(item, $event)"
           >
             <div
               v-if="selectMode && item.hash_id"
               class="absolute top-2 left-1/2 -translate-x-1/2 z-20 p-1 rounded-full bg-white/90 dark:bg-gray-900/90 border border-gray-200 dark:border-gray-700 shadow-sm pointer-events-none"
             >
               <CheckCircleIconSolid v-if="isSelected(item.hash_id)" class="h-6 w-6 text-emerald-500" />
+              <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+            </div>
+            <div
+              v-else-if="selectMode && isImportable(item)"
+              class="absolute top-2 left-1/2 -translate-x-1/2 z-20 p-1 rounded-full bg-white/90 dark:bg-gray-900/90 border border-gray-200 dark:border-gray-700 shadow-sm pointer-events-none"
+              :title="t('admin.upload.batch.import_hint')"
+            >
+              <CheckCircleIconSolid v-if="isImportSelected(item.path)" class="h-6 w-6 text-blue-500" />
               <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
             </div>
             <span
@@ -548,13 +606,18 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
             v-for="item in items"
             :key="item.name"
             class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors p-4 group"
-            :class="selectMode && item.hash_id && isSelected(item.hash_id) ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''"
-            @click.capture="onItemClickCapture(item.hash_id, $event)"
+            :class="selectMode && item.hash_id && isSelected(item.hash_id) ? 'bg-emerald-50 dark:bg-emerald-900/20'
+              : selectMode && isImportSelected(item.path) ? 'bg-blue-50 dark:bg-blue-900/20' : ''"
+            @click.capture="onItemClickCapture(item, $event)"
           >
             <div class="relative flex gap-4">
               <!-- Selection indicator -->
               <div v-if="selectMode && item.hash_id" class="flex-shrink-0 self-center pointer-events-none">
                 <CheckCircleIconSolid v-if="isSelected(item.hash_id)" class="h-6 w-6 text-emerald-500" />
+                <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
+              </div>
+              <div v-else-if="selectMode && isImportable(item)" class="flex-shrink-0 self-center pointer-events-none" :title="t('admin.upload.batch.import_hint')">
+                <CheckCircleIconSolid v-if="isImportSelected(item.path)" class="h-6 w-6 text-blue-500" />
                 <CheckCircleIcon v-else class="h-6 w-6 text-gray-400" />
               </div>
 
@@ -697,8 +760,16 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         {{ t('admin.unrecommend_selected') }}
       </button>
       <button
+        @click="startImport()"
+        :disabled="!selectedImports.size || importing"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <ArrowDownTrayIcon class="h-4 w-4" />
+        {{ t('admin.upload.batch.import_selected', { count: selectedImports.size }) }}
+      </button>
+      <button
         @click="clearSelection()"
-        :disabled="!selected.size"
+        :disabled="!selected.size && !selectedImports.size"
         class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
       >
         {{ t('admin.integrity.clear_selection') }}

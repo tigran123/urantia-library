@@ -24,7 +24,7 @@ import { viewerUrls, viewerParams, sourceHashId, sourceLoadKey, type ViewerSourc
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ source: ViewerSource }>()
+const props = defineProps<{ source: ViewerSource; embedded?: boolean }>()
 const hashId = computed(() => sourceHashId(props.source))
 
 const totalPages = ref(0)
@@ -462,9 +462,8 @@ watch(container, (el) => {
   <div
     :class="[
       'djvu-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full overscroll-contain',
-      immersive
-        ? 'fixed inset-0 z-50 h-dvh rounded-none'
-        : 'relative rounded-lg shadow djvu-resizable'
+      immersive ? 'fixed inset-0 z-50 h-dvh rounded-none' : 'relative rounded-lg shadow djvu-resizable',
+      { 'djvu-embedded': !immersive && embedded },
     ]"
   >
     <div v-if="loadingMetadata" class="p-8">
@@ -733,10 +732,20 @@ watch(container, (el) => {
 
 <style scoped>
 .djvu-resizable {
+  /* padding-bottom reserves a clear strip for the native resize grabber so the
+     inner scroll area's scrollbar can't sit on top of it — otherwise the viewer
+     was resizable only until the page overflowed. */
   resize: both;
   overflow: hidden;
   height: 80vh;
-  min-height: 400px;
+  min-height: 360px;
+  padding-bottom: 16px;
+}
+/* Embedded (upload/import preview): a modest *starting* height so the preview
+   isn't an enormously tall frame with the page floating at the top — but no
+   max-height, so the user can still drag it larger (or smaller) in both directions. */
+.djvu-embedded {
+  height: min(60vh, 700px);
 }
 /* hide number input arrows */
 input[type=number]::-webkit-inner-spin-button,

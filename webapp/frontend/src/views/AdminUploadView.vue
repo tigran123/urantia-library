@@ -22,6 +22,7 @@ import {
   type UploadItem, type UploadSource, type UploadStatus,
 } from '../components/upload/uploadTypes'
 import { detectVolume, sameSet, naturalCompare, incrementTitle } from '../lib/volume'
+import { pendingServerImports } from '../lib/pendingImports'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -52,6 +53,12 @@ let batchSeq = 0   // monotonic suffix for audit batch ids (no crypto.randomUUID
 
 onMounted(() => {
   if (!currentUser?.value?.is_admin) { router.replace('/'); return }
+  // Pick up files handed over from the Browse "Import to library" action.
+  if (pendingServerImports.value.length) {
+    const paths = pendingServerImports.value
+    pendingServerImports.value = []
+    addSources(paths.map((p) => ({ kind: 'server' as const, path: p })))
+  }
   // Keepalive: while the page holds staged (uncommitted) files, refresh their
   // 1-hour server-side TTL so a long editing session never expires. Interval is
   // well under the TTL; closing the tab stops it so abandoned uploads still
@@ -212,16 +219,25 @@ const processQueue = async () => {
 }
 
 const stageItem = async (item: UploadItem) => {
-  if (item.source.kind !== 'local') {
-    // FUTURE: server-path import → POST /api/admin/books/stage-from-path.
-    item.status = 'error'
-    item.errorMsg = t('admin.upload.batch.server_import_todo')
-    return
-  }
   item.status = 'uploading'
   item.progress = 0
   item.log = []
   item.errorMsg = ''
+
+  // Server-side import: the file is already on the server (e.g. /Books/Unsorted).
+  // The backend stages it and returns the same payload the multipart upload does.
+  if (item.source.kind === 'server') {
+    item.progress = 50
+    try {
+      const res = await api.post('/admin/books/stage-from-path', { path: item.source.path })
+      applyStaged(item, res.data)
+    } catch (err: any) {
+      item.errorMsg = err.response?.data?.detail || err.message || 'Import failed'
+      item.status = 'error'
+    }
+    return
+  }
+
   const ac = new AbortController()
   aborters.set(item.localId, ac)
   const form = new FormData()
@@ -258,6 +274,30 @@ const stageItem = async (item: UploadItem) => {
   }
 }
 
+// Apply a staging-result payload to an item. Shared by the multipart SSE `done`
+// event and the server-import JSON response.
+const applyStaged = (item: UploadItem, payload: any) => {
+  item.progress = 100
+  if (payload.existing) {
+    item.existingBook = payload.existing
+    item.status = 'duplicate'
+  } else if (payload.error) {
+    item.errorMsg = payload.error
+    item.status = 'error'
+  } else {
+    item.stagingId = payload.staging_id
+    item.hash = payload.hash
+    item.format = payload.format
+    item.size = payload.size
+    item.stagingFilename = payload.filename || sourceName(item.source)
+    item.filename = item.stagingFilename
+    item.stagingCoverUrl = payload.cover_url
+    item.meta = { ...DEFAULT_META, ...(payload.extracted_metadata || {}) }
+    item.status = 'staged'
+    prefillItem(item)
+  }
+}
+
 const handleSse = (item: UploadItem, raw: string) => {
   let eventName = 'message'
   let dataStr = ''
@@ -273,25 +313,7 @@ const handleSse = (item: UploadItem, raw: string) => {
     item.log.push(payload)
     item.progress = Math.min(95, item.progress + 6)
   } else if (eventName === 'done') {
-    item.progress = 100
-    if (payload.existing) {
-      item.existingBook = payload.existing
-      item.status = 'duplicate'
-    } else if (payload.error) {
-      item.errorMsg = payload.error
-      item.status = 'error'
-    } else {
-      item.stagingId = payload.staging_id
-      item.hash = payload.hash
-      item.format = payload.format
-      item.size = payload.size
-      item.stagingFilename = payload.filename || sourceName(item.source)
-      item.filename = item.stagingFilename
-      item.stagingCoverUrl = payload.cover_url
-      item.meta = { ...DEFAULT_META, ...(payload.extracted_metadata || {}) }
-      item.status = 'staged'
-      prefillItem(item)
-    }
+    applyStaged(item, payload)
   }
 }
 
@@ -453,7 +475,7 @@ const viewLog = (item: UploadItem) => { logModalId.value = item.localId; showLog
 </script>
 
 <template>
-  <div class="space-y-6 mx-auto px-6 py-6" :class="items.length > 1 ? 'max-w-6xl' : 'max-w-5xl'">
+  <div class="space-y-6 px-6 py-6">
     <AdminNav />
 
     <div>
@@ -758,10 +780,11 @@ const viewLog = (item: UploadItem) => { logModalId.value = item.localId; showLog
             </div>
           </div>
 
-          <!-- staged / committing → editor -->
+          <!-- staged / committing → editor. No :key — reusing the instance across
+               same-format tab switches keeps the user's resized preview height
+               (a fresh mount would reset it) and avoids needless remounts. -->
           <UploadItemEditor
             v-else
-            :key="activeItem.localId"
             :item="activeItem"
             :single="items.length === 1"
             @commit="onItemCommit(activeItem)"

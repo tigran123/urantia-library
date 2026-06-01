@@ -42,6 +42,12 @@ def _zip_bytes(inner_name: str, inner_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
+def _write(abs_path: str, data: bytes = b"x") -> None:
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "wb") as f:
+        f.write(data)
+
+
 # ---- harness ----------------------------------------------------------------
 
 @pytest.fixture
@@ -311,6 +317,61 @@ def test_purge_sweeps_orphan_dirs(upload_ctx):
         assert os.path.exists(tracked)      # tracked + not expired → kept despite age
     finally:
         main._STAGING.pop("tracked_old", None)
+
+
+# ---- server-side import (stage-from-path / importable) ----------------------
+
+def test_stage_from_path_copies_and_keeps_original(upload_ctx):
+    _h, client, books, data, _m = upload_ctx
+    src = os.path.join(str(books), "Unsorted", "book.fb2")
+    _write(src, FB2_XML)
+
+    res = client.post("/api/admin/books/stage-from-path", json={"path": "Unsorted/book.fb2"})
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert payload["format"] == "fb2.zip"           # rezipped in staging
+    assert payload["filename"] == "book.fb2.zip"
+    assert os.path.exists(src)                       # original untouched (copy semantics)
+
+    c = commit(client, payload["staging_id"], top_dir="Imported", metadata={"title": "B"})
+    assert c.status_code == 200, c.text
+    assert os.path.exists(os.path.join(str(data), payload["hash"]))   # in the vault
+    assert os.path.exists(src)                       # STILL in Unsorted after commit
+
+
+def test_stage_from_path_duplicate(upload_ctx):
+    _h, client, books, _d, _m = upload_ctx
+    src = os.path.join(str(books), "Unsorted", "dup.fb2")
+    _write(src, FB2_XML)
+    p1 = client.post("/api/admin/books/stage-from-path", json={"path": "Unsorted/dup.fb2"}).json()
+    assert commit(client, p1["staging_id"], top_dir="Imported", metadata={"title": "D"}).status_code == 200
+    # original still present (copy) → re-staging it is detected as a duplicate
+    res = client.post("/api/admin/books/stage-from-path", json={"path": "Unsorted/dup.fb2"})
+    assert res.status_code == 200, res.text
+    assert "existing" in res.json()
+
+
+def test_importable_recursion_filters(upload_ctx):
+    _h, client, books, _d, _m = upload_ctx
+    base = os.path.join(str(books), "Unsorted", "Set")
+    _write(os.path.join(base, "a.pdf"), PDF_STUB)
+    _write(os.path.join(base, "b.djvu"), b"AT&TFORM stub")
+    _write(os.path.join(base, "sub", "c.epub"), _zip_bytes("x.html", b"<html></html>"))
+    _write(os.path.join(base, "note.bin"), b"not a book")
+    os.symlink(os.path.join(str(books), "Unsorted", "missing-target"),
+               os.path.join(base, "link.pdf"))   # symlink → excluded
+
+    res = client.post("/api/admin/books/importable", json={"paths": ["Unsorted/Set"]})
+    assert res.status_code == 200, res.text
+    assert res.json()["files"] == [
+        "Unsorted/Set/a.pdf", "Unsorted/Set/b.djvu", "Unsorted/Set/sub/c.epub",
+    ]
+
+
+def test_stage_from_path_traversal_blocked(upload_ctx):
+    _h, client, _b, _d, _m = upload_ctx
+    assert client.post("/api/admin/books/stage-from-path", json={"path": "../etc/passwd"}).status_code == 403
+    assert client.post("/api/admin/books/stage-from-path", json={"path": ".data/anything"}).status_code == 403
 
 
 # ---- pure-helper unit tests -------------------------------------------------

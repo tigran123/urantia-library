@@ -51,12 +51,12 @@ const imageSrc = computed(() => {
 
 <template>
   <div class="w-full">
-    <PdfViewer v-if="isPdf" :source="source" />
-    <DjvuViewer v-else-if="isDjvu" :source="source" />
-    <EpubViewer v-else-if="isEpub" :source="source" />
-    <Fb2Viewer v-else-if="isFb2" :source="source" />
-    <MdViewer v-else-if="isMd || isTxt" :source="source" />
-    <HtmlViewer v-else-if="isHtml" :source="source" />
+    <PdfViewer v-if="isPdf" :source="source" embedded />
+    <DjvuViewer v-else-if="isDjvu" :source="source" embedded />
+    <EpubViewer v-else-if="isEpub" :source="source" embedded />
+    <Fb2Viewer v-else-if="isFb2" :source="source" embedded />
+    <MdViewer v-else-if="isMd || isTxt" :source="source" embedded />
+    <HtmlViewer v-else-if="isHtml" :source="source" embedded />
     <ImageViewer v-else-if="isImage" :src="imageSrc" />
     <audio v-else-if="isAudio" controls class="w-full" :src="imageSrc" />
     <video v-else-if="isVideo" controls class="w-full max-h-[60vh]" :src="imageSrc" />

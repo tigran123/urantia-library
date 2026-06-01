@@ -24,7 +24,7 @@ import { viewerUrls, sourceHashId, sourceLoadKey, type ViewerSource } from './vi
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ source: ViewerSource }>()
+const props = defineProps<{ source: ViewerSource; embedded?: boolean }>()
 const hashId = computed(() => sourceHashId(props.source))
 
 const viewer = ref<HTMLElement | null>(null)
@@ -516,7 +516,7 @@ onBeforeUnmount(() => {
       'epub-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full overscroll-contain',
       immersive
         ? 'fixed inset-0 z-50 h-dvh rounded-none'
-        : 'relative h-[80vh] rounded-lg shadow'
+        : (embedded ? 'relative h-[60vh] max-h-[700px] rounded-lg shadow' : 'relative h-[80vh] rounded-lg shadow')
     ]"
   >
     <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-30 rounded-lg">

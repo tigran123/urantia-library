@@ -127,6 +127,14 @@ class TouchStagingRequest(BaseModel):
     staging_ids: List[str] = []
 
 
+class ImportableRequest(BaseModel):
+    paths: List[str] = []
+
+
+class StageFromPathRequest(BaseModel):
+    path: str
+
+
 class UploadDuplicateError(BaseModel):
     existing: AdminBookDetail
 

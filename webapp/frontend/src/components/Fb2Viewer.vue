@@ -19,7 +19,7 @@ interface TocEntry {
 
 const { t } = useI18n({ useScope: 'global' })
 
-const props = defineProps<{ source: ViewerSource }>()
+const props = defineProps<{ source: ViewerSource; embedded?: boolean }>()
 const hashId = computed(() => sourceHashId(props.source))
 
 const loading = ref(true)
@@ -329,7 +329,7 @@ onBeforeUnmount(() => {
       'fb2-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full',
       immersive
         ? 'fixed inset-0 z-50 h-dvh rounded-none'
-        : 'relative rounded-lg shadow h-[80vh]'
+        : (embedded ? 'relative rounded-lg shadow h-[60vh] max-h-[700px]' : 'relative rounded-lg shadow h-[80vh]')
     ]"
   >
     <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10 rounded-lg">

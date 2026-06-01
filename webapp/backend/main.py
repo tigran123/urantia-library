@@ -3828,6 +3828,155 @@ async def admin_touch_staging(
     return {"touched": touched}
 
 
+def _safe_under_books(path: str) -> str:
+    """Resolve a user-supplied relative path under BOOKS_DIR with the standard
+    traversal guard, and reject the infra entries in _TOPDIR_SKIPLIST. Returns the
+    absolute path (existence is the caller's concern)."""
+    if not path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    base = os.path.abspath(BOOKS_DIR)
+    target = os.path.abspath(os.path.join(BOOKS_DIR, path))
+    if target != base and not target.startswith(base + os.sep):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    rel = os.path.relpath(target, base)
+    if rel != "." and rel.split(os.sep, 1)[0] in _TOPDIR_SKIPLIST:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return target
+
+
+def _is_importable_file(abs_path: str) -> bool:
+    """A plain (non-symlink) regular file with an accepted book extension. Symlinks
+    are committed books already in the vault, so they're not importable."""
+    if os.path.islink(abs_path) or not os.path.isfile(abs_path):
+        return False
+    return _detect_format(os.path.basename(abs_path)).split(".")[-1] in _ACCEPTED_BOOK_EXTS
+
+
+_IMPORTABLE_CAP = 200
+
+
+@app.post("/api/admin/books/importable")
+async def admin_importable(
+    payload: schemas.ImportableRequest,
+    _admin: models.User = Depends(require_admin),
+):
+    """Expand a Browse selection (files and/or directories) into the concrete list
+    of importable book files — plain (non-symlink) files with an accepted extension,
+    recursively for directories. Lets the Browse 'Import to library' action turn a
+    folder tick into file paths."""
+    base = os.path.abspath(BOOKS_DIR)
+    seen: set[str] = set()
+    found: list[str] = []
+
+    def _add(abs_fp: str) -> None:
+        if _is_importable_file(abs_fp):
+            rel = os.path.relpath(abs_fp, base).replace("\\", "/")
+            if rel not in seen:
+                seen.add(rel)
+                found.append(rel)
+
+    for raw in payload.paths:
+        try:
+            abs_p = _safe_under_books(raw)
+        except HTTPException:
+            continue
+        if not os.path.exists(abs_p):
+            continue
+        if os.path.isdir(abs_p) and not os.path.islink(abs_p):
+            for root, dirs, files in os.walk(abs_p, followlinks=False):
+                dirs[:] = [d for d in dirs if d not in _TOPDIR_SKIPLIST]
+                for name in files:
+                    _add(os.path.join(root, name))
+        else:
+            _add(abs_p)
+
+    found.sort()
+    return {"files": found[:_IMPORTABLE_CAP], "truncated": len(found) > _IMPORTABLE_CAP}
+
+
+@app.post("/api/admin/books/stage-from-path")
+async def admin_stage_from_path(
+    payload: schemas.StageFromPathRequest,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Stage a file already on the server (e.g. under /Books/Unsorted) for commit,
+    producing the SAME staging record the multipart upload does so the commit/
+    preview/cover flow works unchanged. COPIES the file into staging (commit later
+    moves the copy into the vault), leaving the original in place."""
+    _purge_expired_staging()
+    src = _safe_under_books(payload.path)
+    if os.path.islink(src):
+        raise HTTPException(status_code=409, detail="Already in the library")
+    if not os.path.isfile(src):
+        raise HTTPException(status_code=404, detail="File not found")
+    filename = os.path.basename(src)
+    fmt = _detect_format(filename)
+    if fmt.split(".")[-1] not in _ACCEPTED_BOOK_EXTS:
+        raise HTTPException(status_code=415, detail=f"Unsupported format: {fmt}")
+    if os.path.getsize(src) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    _ensure_writable_dir(STAGING_DIR)
+    staging_id = uuid.uuid4().hex
+    sdir = os.path.join(STAGING_DIR, staging_id)
+    os.makedirs(sdir, exist_ok=True)
+    work_path = os.path.join(sdir, filename)
+    try:
+        await asyncio.to_thread(shutil.copy2, src, work_path)
+
+        cur_fmt = fmt
+        if cur_fmt == "fb2":
+            work_path = await asyncio.to_thread(_zip_fb2_inplace, work_path)
+            filename = os.path.basename(work_path)
+            cur_fmt = "fb2.zip"
+        size = os.path.getsize(work_path)
+
+        file_hash = await asyncio.to_thread(_blake2b_of_file, work_path)
+        existing = db.query(models.Book).filter(models.Book.id == file_hash).first()
+        if existing:
+            shutil.rmtree(sdir, ignore_errors=True)
+            return {"existing": _book_to_admin_detail(existing, db)}
+
+        metadata = await asyncio.to_thread(_extract_upload_metadata, work_path, cur_fmt)
+        if not metadata.get("title"):
+            metadata["title"] = os.path.splitext(filename)[0].replace("-", " ").replace("_", " ")
+
+        cover_dest = os.path.join(sdir, "cover.jpg")
+        cover_dims = await asyncio.to_thread(_extract_cover_to, work_path, cur_fmt, cover_dest)
+
+        with _STAGING_LOCK:
+            _STAGING[staging_id] = {
+                "dir": sdir,
+                "filename": filename,
+                "hash": file_hash,
+                "size": size,
+                "format": cur_fmt,
+                "metadata": metadata,
+                "cover_w": cover_dims[0] if cover_dims else None,
+                "cover_h": cover_dims[1] if cover_dims else None,
+                "expires_at": datetime.now(timezone.utc).timestamp() + _STAGING_TTL_S,
+                "owner_id": admin.id,
+                "source_path": src,
+            }
+        return {
+            "staging_id": staging_id,
+            "hash": file_hash,
+            "size": size,
+            "format": cur_fmt,
+            "filename": filename,
+            "cover_url": f"/api/admin/books/upload/{staging_id}/cover.jpg" if cover_dims else None,
+            "extracted_metadata": metadata,
+        }
+    except HTTPException:
+        shutil.rmtree(sdir, ignore_errors=True)
+        raise
+    except Exception as e:
+        shutil.rmtree(sdir, ignore_errors=True)
+        logging.exception("stage-from-path failed")
+        raise HTTPException(status_code=500, detail=f"Import failed: {e}")
+
+
 @app.post("/api/admin/books/commit", response_model=schemas.AdminBookDetail)
 async def admin_commit_book(
     payload: schemas.UploadCommitRequest,
