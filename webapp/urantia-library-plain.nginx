@@ -1,0 +1,59 @@
+# Minimal LAN directory-browser for the book library — replaces the old Apache2
+ # mod_autoindex interface (was Pi 3B, 192.168.1.33:8080). Plain nginx autoindex:
+ # Name / Last modified / Size, folders first, human-readable sizes. No search,
+ # no cover-browse, no per-directory descriptions (stock nginx autoindex can't do
+ # those — they were Apache-only). Consumed mainly by the Koreader webbrowser
+ # plugin, which only needs to walk directories and download files.
+ #
+ # WARNING: this exposes the ENTIRE /Books tree on the LAN with no auth and no
+ # clearance filtering — exactly like the old Apache server. Keep it LAN-only;
+ # never expose :8080 to the internet.
+
+ server {
+     listen 8080;
+     # listen [::]:8080;        # uncomment only if the Pi has IPv6 enabled
+     server_name _;
+
+     root /Books;
+
+     # Book files under /Books/<Topic>/... are RELATIVE symlinks into
+     # /Books/.data/<blake2b-hash>. nginx follows symlinks by default; be explicit.
+     disable_symlinks off;
+
+     # Cyrillic / non-ASCII names render correctly in the generated listing.
+     charset utf-8;
+
+     # Unknown extensions (.djvu, .fb2, .mobi, ...) -> octet-stream so the Koreader
+     # plugin downloads them rather than trying to render inline.
+     default_type application/octet-stream;
+
+     location / {
+         autoindex on;
+         autoindex_exact_size off;   # show 2.0M / 340G like the old listing
+         autoindex_localtime on;     # local time, not UTC
+         index index.html;           # a future static index.html, if added, wins
+     }
+
+     # Hard-block the webapp source tree: it contains secrets.env, the git history
+     # and the DB path. It still shows as a NAME in the root listing (stock nginx
+     # has no IndexIgnore) but is unreadable.
+     location ^~ /urantia-library/ {
+         deny all;
+         return 404;
+     }
+
+     # Internal AI/docs symlinks point into urantia-library; don't serve them.
+     location ~ ^/(CLAUDE|GEMINI|README[-\w]*)\.md$ {
+         deny all;
+         return 404;
+     }
+
+     # Defense-in-depth: never serve dotfiles/dotdirs directly (/.data/db/lib.db,
+     # /.git, /.claude, ...). autoindex already hides them from listings; this
+     # blocks direct URL access. Book downloads are unaffected — they go through
+     # their /Topic/... symlink paths, never through /.data/.
+     location ~ /\. {
+         deny all;
+         return 404;
+     }
+ }
