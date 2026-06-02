@@ -2022,7 +2022,9 @@ async def admin_bulk_set_book_clearance(
 ):
     if payload.clearance < 0:
         raise HTTPException(status_code=400, detail="Clearance must be non-negative")
-    if not payload.hash_ids:
+    # Merge explicit hash_ids with the books beneath any selected directories.
+    hash_ids = list(dict.fromkeys((payload.hash_ids or []) + _expand_dirs_to_hash_ids(db, payload.paths)))
+    if not hash_ids:
         return {"updated": 0, "clearance": payload.clearance}
     # SQLite's UPDATE returns rows-matched, not rows-changed, so a no-op
     # bulk (every book already at the target clearance) would otherwise emit
@@ -2031,7 +2033,7 @@ async def admin_bulk_set_book_clearance(
     changing_ids = [
         h for (h,) in db.query(models.Book.id)
             .filter(
-                models.Book.id.in_(payload.hash_ids),
+                models.Book.id.in_(hash_ids),
                 models.Book.clearance != payload.clearance,
             )
             .all()
@@ -2297,14 +2299,15 @@ async def admin_recommend_bulk(
     one usage event per newly-recommended hash, so the per-book timeline
     filters at /api/admin/usage and /api/me/activity surface each action."""
     out = schemas.BulkRecommendResponse()
-    if not payload.hash_ids:
-        return out
+    # Merge explicit hash_ids with the books beneath any selected directories.
     # Dedup while preserving order — a client posting ["abc", "abc"] would
     # otherwise pass the `already` pre-check twice and produce duplicate
     # symlinks (Recommended/X.pdf, Recommended/X-2.pdf) plus a PK conflict at
     # commit. Frontend currently dedups, but the API contract makes no such
     # guarantee.
-    hash_ids = list(dict.fromkeys(payload.hash_ids))
+    hash_ids = list(dict.fromkeys((payload.hash_ids or []) + _expand_dirs_to_hash_ids(db, payload.paths)))
+    if not hash_ids:
+        return out
     books = {b.id: b for b in db.query(models.Book).filter(
         models.Book.id.in_(hash_ids)
     ).all()}
@@ -2372,10 +2375,11 @@ async def admin_unrecommend_bulk(
     recommended are counted as `unchanged`. One audit row + one usage event
     per affected hash, so per-book timeline filters surface each action."""
     out = schemas.BulkUnrecommendResponse()
-    if not payload.hash_ids:
-        return out
+    # Merge explicit hash_ids with the books beneath any selected directories.
     # Dedup while preserving order — see admin_recommend_bulk for why.
-    hash_ids = list(dict.fromkeys(payload.hash_ids))
+    hash_ids = list(dict.fromkeys((payload.hash_ids or []) + _expand_dirs_to_hash_ids(db, payload.paths)))
+    if not hash_ids:
+        return out
     affected: list[tuple[str, str]] = []   # (hash_id, topic_path)
     for hid in hash_ids:
         try:
@@ -2566,6 +2570,34 @@ def _rel_under_books(p: str) -> str:
     if not (abs_p == books_abs or abs_p.startswith(books_abs + os.sep)):
         raise HTTPException(status_code=400, detail="Path escapes library root")
     return os.path.relpath(abs_p, books_abs).replace("\\", "/")
+
+
+def _expand_dirs_to_hash_ids(db: Session, paths: list[str] | None) -> list[str]:
+    """Expand Browse directory selections into the hash_ids of every registered
+    book in their subtrees (recursively), order-preserving and de-duped. Mirrors
+    the prefix-scan in admin_move. Each path goes through the _rel_under_books
+    traversal guard; a path that is itself a registered book location is included
+    too. Admin-only callers — no clearance filtering (admins see everything)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in (paths or []):
+        try:
+            rel = _rel_under_books(raw)
+        except HTTPException:
+            continue
+        rows = (
+            db.query(models.BookLocation.hash_id)
+            .filter(or_(
+                models.BookLocation.symlink_path == rel,
+                models.BookLocation.symlink_path.like(rel + "/%"),
+            ))
+            .all()
+        )
+        for (hid,) in rows:
+            if hid not in seen:
+                seen.add(hid)
+                out.append(hid)
+    return out
 
 
 def _rmdir_empty_upwards(start_abs: str) -> None:
@@ -4260,7 +4292,8 @@ async def admin_start_integrity_job(
     if payload.scope == "all":
         hash_ids = [r[0] for r in db.query(models.Book.id).all()]
     else:
-        hash_ids = list(dict.fromkeys(payload.hash_ids or []))  # de-dup, preserve order
+        # Merge explicit hash_ids with the books beneath any selected directories.
+        hash_ids = list(dict.fromkeys((payload.hash_ids or []) + _expand_dirs_to_hash_ids(db, payload.paths)))
         if not hash_ids:
             raise HTTPException(status_code=400, detail="hash_ids must be non-empty")
 

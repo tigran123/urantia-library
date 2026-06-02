@@ -61,8 +61,11 @@ class BookClearanceUpdate(BaseModel):
     clearance: int
 
 class BulkBookClearanceUpdate(BaseModel):
-    hash_ids: List[str]
+    hash_ids: List[str] = []
     clearance: int
+    # Browse directory selections; expanded server-side into every registered
+    # book in their subtrees (recursively) and merged with hash_ids.
+    paths: Optional[List[str]] = None
 
 class BookUpdate(BaseModel):
     title: Optional[str] = None
@@ -163,6 +166,9 @@ class IntegrityCheckResult(BaseModel):
 class IntegrityJobCreate(BaseModel):
     scope: str  # 'all' | 'hash_ids'
     hash_ids: Optional[List[str]] = None
+    # Browse directory selections; expanded server-side into the books beneath
+    # them and merged with hash_ids (only when scope == 'hash_ids').
+    paths: Optional[List[str]] = None
     mode: str = 'quick'  # 'quick' | 'full'
 
 
@@ -288,7 +294,10 @@ class RecommendationResponse(BaseModel):
 
 
 class BulkRecommendRequest(BaseModel):
-    hash_ids: List[str]
+    hash_ids: List[str] = []
+    # Browse directory selections; expanded server-side into the books beneath
+    # them and merged with hash_ids. Consumed by recommend/bulk only.
+    paths: Optional[List[str]] = None
 
 
 class BulkRecommendResponse(BaseModel):

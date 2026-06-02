@@ -79,10 +79,11 @@ export const verifyBook = (hashId: string, mode: IntegrityMode) =>
 export const startIntegrityJob = (payload: {
   scope: 'all' | 'hash_ids'
   hash_ids?: string[]
+  paths?: string[]
   mode: IntegrityMode
 }) => api.post<IntegrityJobSummary>('/admin/integrity/jobs', payload)
 
-export const setBulkBookClearance = (payload: { hash_ids: string[]; clearance: number }) =>
+export const setBulkBookClearance = (payload: { hash_ids: string[]; clearance: number; paths?: string[] }) =>
   api.post<{ updated: number; clearance: number }>('/admin/books/clearance', payload)
 
 export interface RecommendationResponse {
@@ -99,13 +100,13 @@ export const recommendBook = (hashId: string) =>
 export const unrecommendBook = (hashId: string) =>
   api.delete<{ ok: true; removed: string[] }>(`/admin/books/${encodeURIComponent(hashId)}/recommend`)
 
-export const recommendBooksBulk = (hashIds: string[]) =>
+export const recommendBooksBulk = (hashIds: string[], paths?: string[]) =>
   api.post<{ recommended: number; unchanged: number; errors: { hash_id: string; reason: string }[] }>(
-    '/admin/books/recommend/bulk', { hash_ids: hashIds })
+    '/admin/books/recommend/bulk', { hash_ids: hashIds, paths })
 
-export const unrecommendBooksBulk = (hashIds: string[]) =>
+export const unrecommendBooksBulk = (hashIds: string[], paths?: string[]) =>
   api.post<{ unrecommended: number; unchanged: number; errors: { hash_id: string; reason: string }[] }>(
-    '/admin/books/unrecommend/bulk', { hash_ids: hashIds })
+    '/admin/books/unrecommend/bulk', { hash_ids: hashIds, paths })
 
 export const getIntegrityJob = (jobId: string, include: 'failures' | 'all' = 'failures') =>
   api.get<IntegrityJobDetail>(

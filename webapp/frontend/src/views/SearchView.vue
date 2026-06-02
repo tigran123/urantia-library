@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, computed, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, searchHashIds, getContainedKeys, type IntegrityMode } from '../api'
+import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, unrecommendBooksBulk, searchHashIds, getContainedKeys, type IntegrityMode } from '../api'
 import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 
 const { t, locale } = useI18n({ useScope: 'global' })
@@ -148,6 +148,25 @@ const startSelectionRecommend = async () => {
     }
     clearSelection()
     bulkResultAlert(t, 'recommend', res.data)
+  } catch (err: any) {
+    alert(err?.response?.data?.detail || err?.message || 'error')
+  } finally {
+    recommendingBulk.value = false
+  }
+}
+
+const startSelectionUnrecommend = async () => {
+  const ids = Array.from(selected.value)
+  if (!ids.length) return
+  recommendingBulk.value = true
+  try {
+    const res = await unrecommendBooksBulk(ids)
+    const idSet = new Set(ids)
+    for (const m of matches.value) {
+      if (m.hash_id && idSet.has(m.hash_id)) m.is_recommended = false
+    }
+    clearSelection()
+    bulkResultAlert(t, 'unrecommend', res.data)
   } catch (err: any) {
     alert(err?.response?.data?.detail || err?.message || 'error')
   } finally {
@@ -859,7 +878,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       <button
         @click="startSelectionVerify('quick')"
         :disabled="!selected.size || verifyStarting"
-        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 text-white hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
       >
         <ShieldCheckIcon class="h-4 w-4" />
         {{ t('admin.integrity.verify_selected') }} — {{ t('admin.integrity.quick') }}
@@ -880,9 +899,9 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         <LockClosedIcon class="h-4 w-4" />
         {{ t('admin.integrity.set_clearance_selected') }}
       </button>
-      <!-- Search results aren't path-scoped, so the "Unrecommend selected"
-           variant (BrowseView, only when inside /Recommended/) has no analogue
-           here — search only offers Recommend. -->
+      <!-- Search isn't path-scoped, so both Recommend and Unrecommend are always
+           offered (a result set can mix recommended and not). Each acts only on
+           its relevant subset — idempotent server-side. -->
       <button
         @click="startSelectionRecommend()"
         :disabled="!selected.size || recommendingBulk"
@@ -890,6 +909,14 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       >
         <QualityMark class="h-4 w-4" />
         {{ t('admin.recommend_selected') }}
+      </button>
+      <button
+        @click="startSelectionUnrecommend()"
+        :disabled="!selected.size || recommendingBulk"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+      >
+        <QualityMark class="h-4 w-4" />
+        {{ t('admin.unrecommend_selected') }}
       </button>
       <button
         @click="clearSelection()"

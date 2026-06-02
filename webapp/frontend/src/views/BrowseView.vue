@@ -16,7 +16,8 @@ const router = useRouter()
 
 const selectMode = ref(false)
 const selected = ref<Set<string>>(new Set())          // committed books, keyed by hash_id
-const selectedImports = ref<Set<string>>(new Set())    // importable files/dirs, keyed by path
+const selectedDirs = ref<Set<string>>(new Set())       // directory paths — recurse on action / import
+const selectedFiles = ref<Set<string>>(new Set())      // un-imported files, keyed by path — import only
 const verifyStarting = ref(false)
 const clearanceSaving = ref(false)
 const recommendingBulk = ref(false)
@@ -24,7 +25,7 @@ const importing = ref(false)
 
 const toggleSelectMode = () => {
   selectMode.value = !selectMode.value
-  if (!selectMode.value) { selected.value = new Set(); selectedImports.value = new Set() }
+  if (!selectMode.value) clearSelection()
 }
 
 const onSelectModeKeydown = (e: KeyboardEvent) => {
@@ -66,11 +67,15 @@ const hasAcceptedExt = (name: string) => {
 const isImportable = (item: any) =>
   item.is_dir ? !isRecommendedDir(item) : (!item.hash_id && hasAcceptedExt(item.name))
 
-const isImportSelected = (path: string) => selectedImports.value.has(path)
-const toggleImportSelect = (path: string) => {
-  const next = new Set(selectedImports.value)
-  if (next.has(path)) next.delete(path); else next.add(path)
-  selectedImports.value = next
+// A directory ticked in select mode lives in selectedDirs (the bulk actions
+// expand it server-side); an un-imported file lives in selectedFiles. Both are
+// keyed by path and both feed the Import action.
+const isImportSelected = (path: string) =>
+  selectedDirs.value.has(path) || selectedFiles.value.has(path)
+const toggleInSet = (set: Ref<Set<string>>, key: string) => {
+  const next = new Set(set.value)
+  if (next.has(key)) next.delete(key); else next.add(key)
+  set.value = next
 }
 
 const onItemClickCapture = (item: any, ev: Event) => {
@@ -78,27 +83,44 @@ const onItemClickCapture = (item: any, ev: Event) => {
   if (item?.hash_id) {
     ev.preventDefault(); ev.stopPropagation(); toggleSelect(item.hash_id)
   } else if (isImportable(item)) {
-    ev.preventDefault(); ev.stopPropagation(); toggleImportSelect(item.path)
+    ev.preventDefault(); ev.stopPropagation()
+    toggleInSet(item.is_dir ? selectedDirs : selectedFiles, item.path)
   }
 }
 
 const clearSelection = () => {
   selected.value = new Set()
-  selectedImports.value = new Set()
+  selectedDirs.value = new Set()
+  selectedFiles.value = new Set()
 }
 
 const selectableHashIds = computed<string[]>(() =>
   items.value.filter((i: any) => i.hash_id).map((i: any) => i.hash_id as string)
 )
+const selectableDirs = computed<string[]>(() =>
+  items.value.filter((i: any) => i.is_dir && isImportable(i)).map((i: any) => i.path as string)
+)
+const selectableFiles = computed<string[]>(() =>
+  items.value.filter((i: any) => !i.is_dir && isImportable(i)).map((i: any) => i.path as string)
+)
+// Everything tickable in the current listing — books + directories + importable files.
+const selectableCount = computed(() =>
+  selectableHashIds.value.length + selectableDirs.value.length + selectableFiles.value.length
+)
+const selectedTotal = computed(() =>
+  selected.value.size + selectedDirs.value.size + selectedFiles.value.size
+)
 
 const selectAll = () => {
   selected.value = new Set(selectableHashIds.value)
+  selectedDirs.value = new Set(selectableDirs.value)
+  selectedFiles.value = new Set(selectableFiles.value)
 }
 
 // Expand the import selection (files + dirs) into concrete file paths server-side,
 // hand them to the Upload view, and navigate there.
 const startImport = async () => {
-  const paths = Array.from(selectedImports.value)
+  const paths = [...selectedDirs.value, ...selectedFiles.value]
   if (!paths.length) return
   importing.value = true
   try {
@@ -115,7 +137,7 @@ const startImport = async () => {
       alert(t('admin.upload.batch.import_truncated', { count: files.length }))
     }
     pendingServerImports.value = files
-    selectedImports.value = new Set()
+    clearSelection()
     selectMode.value = false
     router.push({ name: 'admin-upload' })
   } catch (e: any) {
@@ -127,10 +149,11 @@ const startImport = async () => {
 
 const startSelectionVerify = async (mode: IntegrityMode) => {
   const ids = Array.from(selected.value)
-  if (!ids.length) return
+  const dirs = Array.from(selectedDirs.value)
+  if (!ids.length && !dirs.length) return
   verifyStarting.value = true
   try {
-    const res = await startIntegrityJob({ scope: 'hash_ids', hash_ids: ids, mode })
+    const res = await startIntegrityJob({ scope: 'hash_ids', hash_ids: ids, paths: dirs, mode })
     router.push({ path: '/admin/integrity', query: { job: res.data.job_id } })
   } catch (e: any) {
     const detailMsg = e?.response?.data?.detail
@@ -146,8 +169,9 @@ const startSelectionVerify = async (mode: IntegrityMode) => {
 
 const startSelectionSetClearance = async () => {
   const ids = Array.from(selected.value)
-  if (!ids.length) return
-  const raw = window.prompt(t('admin.integrity.set_clearance_prompt', { count: ids.length }))
+  const dirs = Array.from(selectedDirs.value)
+  if (!ids.length && !dirs.length) return
+  const raw = window.prompt(t('admin.integrity.set_clearance_prompt', { count: ids.length + dirs.length }))
   if (raw === null) return
   const next = Number(raw)
   if (!Number.isFinite(next) || !Number.isInteger(next) || next < 0 || next > 100) {
@@ -156,7 +180,7 @@ const startSelectionSetClearance = async () => {
   }
   clearanceSaving.value = true
   try {
-    await setBulkBookClearance({ hash_ids: ids, clearance: next })
+    await setBulkBookClearance({ hash_ids: ids, paths: dirs, clearance: next })
     const idSet = new Set(ids)
     for (const it of items.value) {
       if (it.hash_id && idSet.has(it.hash_id)) it.clearance = next
@@ -171,10 +195,11 @@ const startSelectionSetClearance = async () => {
 
 const startSelectionRecommend = async () => {
   const ids = Array.from(selected.value)
-  if (!ids.length) return
+  const dirs = Array.from(selectedDirs.value)
+  if (!ids.length && !dirs.length) return
   recommendingBulk.value = true
   try {
-    const res = await recommendBooksBulk(ids)
+    const res = await recommendBooksBulk(ids, dirs)
     const idSet = new Set(ids)
     for (const it of items.value) {
       if (it.hash_id && idSet.has(it.hash_id)) it.is_recommended = true
@@ -190,14 +215,22 @@ const startSelectionRecommend = async () => {
 
 const startSelectionUnrecommend = async () => {
   const ids = Array.from(selected.value)
-  if (!ids.length) return
+  const dirs = Array.from(selectedDirs.value)
+  if (!ids.length && !dirs.length) return
   recommendingBulk.value = true
   try {
-    const res = await unrecommendBooksBulk(ids)
-    // Inside /Recommended/, the removed books no longer belong here — drop them
-    // from the listing so the view reflects the new state without a reload.
+    const res = await unrecommendBooksBulk(ids, dirs)
     const idSet = new Set(ids)
-    items.value = items.value.filter((it: any) => !(it.hash_id && idSet.has(it.hash_id)))
+    if (isInRecommended.value) {
+      // Inside /Recommended/, the removed books no longer belong here — drop them
+      // from the listing so the view reflects the new state without a reload.
+      items.value = items.value.filter((it: any) => !(it.hash_id && idSet.has(it.hash_id)))
+    } else {
+      // Elsewhere the books stay in their topic; just clear the badge.
+      for (const it of items.value) {
+        if (it.hash_id && idSet.has(it.hash_id)) it.is_recommended = false
+      }
+    }
     clearSelection()
     bulkResultAlert(t, 'unrecommend', res.data)
   } catch (err: any) {
@@ -721,19 +754,19 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       class="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-40 flex flex-wrap items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg px-4 py-3"
     >
       <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-        {{ t('admin.integrity.selected_count', { count: selected.size }) }}
+        {{ t('admin.integrity.selected_count', { count: selectedTotal }) }}
       </span>
       <button
         @click="startSelectionVerify('quick')"
-        :disabled="!selected.size || verifyStarting"
-        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+        :disabled="(!selected.size && !selectedDirs.size) || verifyStarting"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 text-white hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
       >
         <ShieldCheckIcon class="h-4 w-4" />
         {{ t('admin.integrity.verify_selected') }} — {{ t('admin.integrity.quick') }}
       </button>
       <button
         @click="startSelectionVerify('full')"
-        :disabled="!selected.size || verifyStarting"
+        :disabled="(!selected.size && !selectedDirs.size) || verifyStarting"
         class="px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
       >
         <ShieldCheckIcon class="h-4 w-4" />
@@ -741,25 +774,27 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       </button>
       <button
         @click="startSelectionSetClearance()"
-        :disabled="!selected.size || clearanceSaving"
+        :disabled="(!selected.size && !selectedDirs.size) || clearanceSaving"
         class="px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
       >
         <LockClosedIcon class="h-4 w-4" />
         {{ t('admin.integrity.set_clearance_selected') }}
       </button>
+      <!-- Recommend is hidden inside Recommended/ (everything there is already
+           recommended); Unrecommend is always available. A mixed selection can
+           use either — each acts only on its relevant subset (idempotent). -->
       <button
         v-if="!isInRecommended"
         @click="startSelectionRecommend()"
-        :disabled="!selected.size || recommendingBulk"
+        :disabled="(!selected.size && !selectedDirs.size) || recommendingBulk"
         class="px-3 py-1.5 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
       >
         <QualityMark class="h-4 w-4" />
         {{ t('admin.recommend_selected') }}
       </button>
       <button
-        v-else
         @click="startSelectionUnrecommend()"
-        :disabled="!selected.size || recommendingBulk"
+        :disabled="(!selected.size && !selectedDirs.size) || recommendingBulk"
         class="px-3 py-1.5 rounded-lg text-sm font-medium bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
       >
         <QualityMark class="h-4 w-4" />
@@ -767,25 +802,25 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
       </button>
       <button
         @click="startImport()"
-        :disabled="!selectedImports.size || importing"
+        :disabled="(!selectedDirs.size && !selectedFiles.size) || importing"
         class="px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
       >
         <ArrowDownTrayIcon class="h-4 w-4" />
-        {{ t('admin.upload.batch.import_selected', { count: selectedImports.size }) }}
+        {{ t('admin.upload.batch.import_selected', { count: selectedDirs.size + selectedFiles.size }) }}
       </button>
       <button
         @click="clearSelection()"
-        :disabled="!selected.size && !selectedImports.size"
+        :disabled="!selectedTotal"
         class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
       >
         {{ t('admin.integrity.clear_selection') }}
       </button>
       <button
         @click="selectAll()"
-        :disabled="!selectableHashIds.length"
+        :disabled="!selectableCount"
         class="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
       >
-        {{ t('admin.integrity.select_all_count', { count: selectableHashIds.length }) }}
+        {{ t('admin.integrity.select_all_count', { count: selectableCount }) }}
       </button>
       <button
         @click="toggleSelectMode()"
