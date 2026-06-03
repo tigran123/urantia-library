@@ -502,16 +502,17 @@ const renderPage = async (n: number) => {
 
     await Promise.all(activeTasks.map(t => t.promise))
 
-    if (textSelectEnabled.value) {
-      const jobs: Promise<unknown>[] = []
-      if (pageL && cssL && textLayer.value) {
-        jobs.push(renderTextLayerFor(pageL, textLayer.value, cssL))
-      }
-      if (pageR && cssR && textLayer2.value) {
-        jobs.push(renderTextLayerFor(pageR, textLayer2.value, cssR))
-      }
-      await Promise.all(jobs)
+    // The text layer is always built — it hosts both the selectable text and
+    // the annotation marks, so annotations stay visible/clickable even when
+    // text selection is off (the toggle only gates selectability via CSS).
+    const jobs: Promise<unknown>[] = []
+    if (pageL && cssL && textLayer.value) {
+      jobs.push(renderTextLayerFor(pageL, textLayer.value, cssL))
     }
+    if (pageR && cssR && textLayer2.value) {
+      jobs.push(renderTextLayerFor(pageR, textLayer2.value, cssR))
+    }
+    await Promise.all(jobs)
 
     leftPage.value = sp.left
     rightPage.value = sp.right
@@ -556,10 +557,9 @@ const toggleOddSide = () => {
 }
 const toggleTextSelect = () => {
   textSelectEnabled.value = !textSelectEnabled.value
-  // Re-render so the text layer is built (or cleanly torn down) at the
-  // current scale. The canvas itself doesn't need to repaint, but reusing
-  // renderPage keeps page-spread / blank-cover bookkeeping in one place.
-  renderPage(currentPage.value)
+  // The text layer is always built now; the toggle only flips its
+  // selectability (a CSS class), so no re-render is needed — just persist.
+  saveProgress()
 }
 
 const goToPage = (e: Event) => {
@@ -983,14 +983,14 @@ onBeforeUnmount(() => {
         <div class="flex flex-row items-start gap-2 w-fit mx-auto">
           <div class="page-wrap relative shadow-md bg-white">
             <canvas ref="canvas"></canvas>
-            <div ref="textLayer" class="textLayer" v-show="textSelectEnabled" @mouseup="onTextLayerMouseUp($event, 'left')"></div>
+            <div ref="textLayer" :class="['textLayer', { 'textLayer--readonly': !textSelectEnabled }]" @mouseup="onTextLayerMouseUp($event, 'left')"></div>
           </div>
           <div
             class="page-wrap relative shadow-md bg-white"
             v-show="rightPage !== null"
           >
             <canvas ref="canvas2"></canvas>
-            <div ref="textLayer2" class="textLayer" v-show="textSelectEnabled" @mouseup="onTextLayerMouseUp($event, 'right')"></div>
+            <div ref="textLayer2" :class="['textLayer', { 'textLayer--readonly': !textSelectEnabled }]" @mouseup="onTextLayerMouseUp($event, 'right')"></div>
           </div>
         </div>
         <AnnotationPopover
@@ -1120,6 +1120,19 @@ input[type=number] {
   --min-font-size: 1;
   --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+/* Text selection disabled: the layer is always built (it hosts the annotation
+   marks) but here it acts as a read-only highlight overlay. Don't capture the
+   cursor — let mousedown fall through to the canvas so drag-to-pan still works
+   and no text caret appears — yet keep annotation marks clickable so they can
+   be viewed/edited/deleted without turning text selection on. */
+.textLayer.textLayer--readonly {
+  cursor: default;
+  pointer-events: none;
+}
+.textLayer.textLayer--readonly :deep(mark.anno) {
+  pointer-events: auto;
+  cursor: pointer;
 }
 .textLayer :deep(span),
 .textLayer :deep(br) {
