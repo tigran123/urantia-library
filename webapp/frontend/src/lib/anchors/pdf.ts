@@ -248,4 +248,31 @@ export const paintAnnotations = (
   }
 }
 
+// Paint a transient highlight for an in-progress (not-yet-saved) selection.
+// Focusing the note textarea clears the native browser selection, so this
+// keeps the user's selection visible while they type their note. Styled like
+// the native selection (see `mark.anno--pending`) and non-interactive — the
+// caller is responsible for removing it (a plain repaint via paintAnnotations,
+// which unwraps all marks, drops it).
+export const paintPendingHighlight = (
+  textLayer: HTMLElement,
+  page: number,
+  anchor: PdfAnchor,
+  selectedText: string,
+  prefix?: string | null,
+  suffix?: string | null,
+) => {
+  if (anchor.type !== 'pdf' || anchor.page !== page) return
+  const range = buildRange(textLayer, {
+    anchor,
+    selected_text: selectedText,
+    text_prefix: prefix ?? null,
+    text_suffix: suffix ?? null,
+  } as Annotation)
+  if (!range) return
+  try {
+    wrapRangeWithMarks(range, { id: -1, cls: 'anno anno--pending' })
+  } catch { /* skip on weird boundaries */ }
+}
+
 export const isPdfAnchor = (a: AnnotationAnchor): a is PdfAnchor => a.type === 'pdf'

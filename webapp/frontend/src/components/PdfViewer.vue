@@ -28,7 +28,7 @@ import AnnotationsSidebar from './AnnotationsSidebar.vue'
 import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
 import { useAnnotations } from '../composables/useAnnotations'
 import { useScrollPan } from '../composables/useScrollPan'
-import { anchorFromSelection as pdfAnchorFromSelection, paintAnnotations as pdfPaintAnnotations } from '../lib/anchors/pdf'
+import { anchorFromSelection as pdfAnchorFromSelection, paintAnnotations as pdfPaintAnnotations, paintPendingHighlight as pdfPaintPendingHighlight } from '../lib/anchors/pdf'
 import { popoverPosition, type PopoverPosition } from '../lib/anchors/popoverPosition'
 import type { Annotation } from '../api'
 import { viewerUrls, sourceHashId, sourceLoadKey, type ViewerSource } from './viewerSource'
@@ -164,6 +164,19 @@ const onAnnoClick = (id: number, ev: MouseEvent) => {
   }
 }
 
+// Re-paint the in-progress selection highlight. paintAnnotations unwraps every
+// mark first, so the pending mark must be re-added after each repaint.
+const paintPending = () => {
+  const p = annoPending.value
+  if (!p) return
+  if (textLayer.value && leftPage.value !== null) {
+    pdfPaintPendingHighlight(textLayer.value, leftPage.value, p.anchor, p.selectedText, p.prefix, p.suffix)
+  }
+  if (textLayer2.value && rightPage.value !== null) {
+    pdfPaintPendingHighlight(textLayer2.value, rightPage.value, p.anchor, p.selectedText, p.prefix, p.suffix)
+  }
+}
+
 const paintTextLayerAnnotations = () => {
   const list = annotationsApi.visible.value
   if (textLayer.value && leftPage.value !== null) {
@@ -172,7 +185,13 @@ const paintTextLayerAnnotations = () => {
   if (textLayer2.value && rightPage.value !== null) {
     pdfPaintAnnotations(textLayer2.value, list, { page: rightPage.value, onClick: onAnnoClick })
   }
+  paintPending()
 }
+
+// The note textarea steals focus when "Highlight + note" is clicked, which
+// clears the native selection. Paint a persistent highlight so the user keeps
+// seeing what they selected while writing the note.
+const onEnterNoteMode = () => paintTextLayerAnnotations()
 
 const samePdfAnchor = (a: any, b: any): boolean =>
   a?.type === 'pdf' && b?.type === 'pdf'
@@ -186,6 +205,9 @@ const samePdfAnchor = (a: any, b: any): boolean =>
 // mouseup hook and the document-wide selectionchange hook used for touch.
 const tryShowAnnotationPopoverFromSelection = () => {
   if (!textSelectEnabled.value) return
+  // Foreign files (not in the library DB) can't store annotations — don't pop
+  // our UI; native selection still works.
+  if (!annotationsApi.enabled.value) return
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
   const range = sel.getRangeAt(0)
@@ -314,6 +336,12 @@ const onAnnoJump = (a: Annotation) => {
 
 watch(() => annotationsApi.visible.value, () => {
   paintTextLayerAnnotations()
+})
+
+// When the create popover closes (save, cancel, or click-away), repaint without
+// the now-stale pending selection highlight.
+watch(annoPending, (v, old) => {
+  if (old && !v) paintTextLayerAnnotations()
 })
 
 const saveProgress = () => {
@@ -1001,6 +1029,7 @@ onBeforeUnmount(() => {
           @save="onAnnoSaveCreate"
           @update="onAnnoUpdate"
           @delete="onAnnoDelete"
+          @note-mode="onEnterNoteMode"
           @close="closeAnnoPopover"
         />
       </div>

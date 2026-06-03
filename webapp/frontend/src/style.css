@@ -21,3 +21,6 @@ mark.anno--mine  { background-color: rgba(255, 230, 0, 0.45); }
 mark.anno--other { background-color: rgba(255, 140, 0, 0.45); }
 mark.anno--mine:hover  { background-color: rgba(255, 230, 0, 0.7); }
 mark.anno--other:hover { background-color: rgba(255, 140, 0, 0.7); }
+/* Transient highlight for an in-progress selection while the note is typed.
+   Matches the native text-selection colour and is non-interactive. */
+mark.anno--pending { background-color: rgba(0, 100, 255, 0.3); pointer-events: none; }

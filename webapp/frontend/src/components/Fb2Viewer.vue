@@ -436,6 +436,7 @@ onBeforeUnmount(() => {
           @save="annoLayer.onSaveCreate"
           @update="annoLayer.onUpdate"
           @delete="annoLayer.onDelete"
+          @note-mode="annoLayer.onEnterNoteMode"
           @close="annoLayer.closePopover"
         />
       </div>

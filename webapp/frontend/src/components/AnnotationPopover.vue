@@ -31,6 +31,7 @@ const emit = defineEmits<{
   (e: 'save', payload: { body: string | null; isPublic: boolean }): void
   (e: 'update', payload: { id: number; body: string | null; isPublic: boolean }): void
   (e: 'delete', id: number): void
+  (e: 'note-mode'): void
   (e: 'close'): void
 }>()
 
@@ -79,6 +80,9 @@ const beginAddNote = async () => {
   showNoteInput.value = true
   await nextTick()
   noteRef.value?.focus()
+  // Focusing the textarea cleared the native page selection; ask the host to
+  // paint a persistent highlight so the selected text stays visible.
+  emit('note-mode')
 }
 
 const onSaveCreate = () => {

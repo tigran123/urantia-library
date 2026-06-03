@@ -108,6 +108,9 @@ const repaintEpubAnnotations = () => {
 
 const onEpubSelected = (cfiRange: string, contents: any) => {
   if (!rendition || !contents) return
+  // Foreign files (not in the library DB) can't store annotations — leave the
+  // native selection alone, don't pop our UI.
+  if (!annotationsApi.enabled.value) return
   // The iframe's selection still owns the Range we need for prefix/suffix.
   const win = contents.window as Window | undefined
   const sel = win?.getSelection?.()

@@ -35,6 +35,12 @@ export function useAnnotations(hashId: Ref<string | null | undefined>) {
     return annotations.value
   })
 
+  // Annotations require a committed library book (a real hash). Foreign files
+  // browsed off-disk and staging previews have no hash, so the whole annotation
+  // UI (selection popover, creation) must stay dormant for them — text
+  // selection and the native browser menu should work as on any plain page.
+  const enabled = computed(() => !!hashId.value)
+
   const load = async () => {
     if (!hashId.value) return
     loading.value = true
@@ -91,6 +97,7 @@ export function useAnnotations(hashId: Ref<string | null | undefined>) {
     loading,
     error,
     visibility,
+    enabled,
     load,
     create,
     update,

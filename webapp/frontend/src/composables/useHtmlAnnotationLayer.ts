@@ -1,6 +1,6 @@
 import { ref, watch, onBeforeUnmount, nextTick, type Ref } from 'vue'
 import type { Annotation } from '../api'
-import { anchorFromSelection, paintAnnotations } from '../lib/anchors/html'
+import { anchorFromSelection, paintAnnotations, paintPendingHighlight } from '../lib/anchors/html'
 import { popoverPosition, type PopoverPosition } from '../lib/anchors/popoverPosition'
 import type { useAnnotations } from './useAnnotations'
 
@@ -41,6 +41,16 @@ export function useHtmlAnnotationLayer(
     position.value = null
   }
 
+  // Re-add the in-progress selection highlight after a repaint (paintAnnotations
+  // unwraps every mark first). The note textarea steals focus and clears the
+  // native selection, so this keeps the selected text visible while typing.
+  const paintPending = () => {
+    const el = contentEl.value
+    const p = pending.value
+    if (!el || !p) return
+    paintPendingHighlight(el, p.anchor, p.selectedText, p.prefix, p.suffix)
+  }
+
   const repaint = () => {
     const el = contentEl.value
     if (!el) return
@@ -58,7 +68,12 @@ export function useHtmlAnnotationLayer(
         }
       },
     })
+    paintPending()
   }
+
+  // "Highlight + note" focuses the textarea, which clears the native selection;
+  // repaint so the persistent pending highlight is drawn in its place.
+  const onEnterNoteMode = () => repaint()
 
   // Wait one tick after v-html mounts before painting, so the DOM is ready.
   const repaintSoon = async () => {
@@ -69,6 +84,12 @@ export function useHtmlAnnotationLayer(
   watch(ann.visible, repaintSoon, { deep: false })
   watch(ann.annotations, repaintSoon, { deep: false })
 
+  // When the create popover closes (save, cancel, click-away, Escape), repaint
+  // without the now-stale pending highlight.
+  watch(pending, (v, old) => {
+    if (old && !v) repaint()
+  })
+
   // Capture the current selection (if any) and either open the create-mode
   // popover for it or — when it exactly matches an annotation the current
   // user already owns — open that annotation in edit mode. The latter case
@@ -77,6 +98,9 @@ export function useHtmlAnnotationLayer(
   // anchor, paintAnnotations nests them so only the inner mark is clickable,
   // making the older one effectively unreachable.
   const tryShowPopoverFromSelection = () => {
+    // Foreign files (not in the library DB) can't store annotations — leave the
+    // native selection and browser context menu alone, don't pop our UI.
+    if (!ann.enabled.value) return
     const content = contentEl.value
     if (!content) return
     const sel = window.getSelection()
@@ -228,6 +252,7 @@ export function useHtmlAnnotationLayer(
     repaint,
     repaintSoon,
     onSelectionEnd,
+    onEnterNoteMode,
     onSaveCreate,
     onUpdate,
     onDelete,
