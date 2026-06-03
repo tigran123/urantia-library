@@ -5,6 +5,7 @@ import api, { getMyNotificationPrefs, setMyNotificationPrefs, type NotificationP
 import { userInitials } from '../userDisplay'
 import { useI18n } from 'vue-i18n'
 import { gridItemSize, type GridItemSize } from '../composables/useGridItemSize'
+import { textSize, TEXT_SIZE_PX, type TextSize } from '../composables/useTextSize'
 
 const { t } = useI18n()
 
@@ -36,6 +37,12 @@ const GRID_SIZE_OPTIONS: { id: GridItemSize; cols: string; count: number }[] = [
   { id: 'small',  cols: 'grid-cols-6', count: 6 },
   { id: 'normal', cols: 'grid-cols-4', count: 4 },
   { id: 'large',  cols: 'grid-cols-3', count: 3 },
+]
+
+const TEXT_SIZE_OPTIONS: { id: TextSize; px: string }[] = [
+  { id: 'small',  px: TEXT_SIZE_PX.small },
+  { id: 'normal', px: TEXT_SIZE_PX.normal },
+  { id: 'large',  px: TEXT_SIZE_PX.large },
 ]
 
 const notifPrefs = ref<NotificationPrefs>({
@@ -277,6 +284,38 @@ const close = () => {
               </label>
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">{{ t('settings.grid_item_size_help') }}</p>
+
+            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 mt-8">
+              {{ t('settings.text_size') }}
+            </label>
+            <div class="space-y-3">
+              <label
+                v-for="opt in TEXT_SIZE_OPTIONS"
+                :key="opt.id"
+                :class="[
+                  'flex items-center gap-4 p-3 border rounded-lg cursor-pointer transition-colors',
+                  textSize === opt.id
+                    ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                    : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                ]"
+              >
+                <input
+                  type="radio"
+                  :value="opt.id"
+                  v-model="textSize"
+                  class="h-4 w-4 text-blue-600 border-gray-300 dark:border-gray-600 focus:ring-blue-500"
+                />
+                <span class="w-16 shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {{ t(`settings.text_size_opts.${opt.id}`) }}
+                </span>
+                <span
+                  class="flex-1 font-medium text-gray-700 dark:text-gray-200 leading-none"
+                  :style="{ fontSize: opt.px }"
+                  aria-hidden="true"
+                >Aa</span>
+              </label>
+            </div>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">{{ t('settings.text_size_help') }}</p>
           </div>
 
           <div v-if="activeTab === 'Notifications'">

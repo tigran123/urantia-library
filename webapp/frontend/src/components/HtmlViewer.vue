@@ -376,14 +376,14 @@ onBeforeUnmount(() => {
           v-if="!rawMode"
           ref="contentEl"
           class="html-content w-full max-w-4xl mx-auto px-6 py-8 leading-relaxed"
-          :style="{ fontSize: `${fontScale}rem`, fontFamily }"
+          :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
           v-html="html"
           @click="onContentClick"
         ></div>
         <pre
           v-else
           class="html-raw w-full max-w-4xl mx-auto px-6 py-8 whitespace-pre-wrap break-words"
-          :style="{ fontSize: `${fontScale}rem`, fontFamily }"
+          :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
         >{{ raw }}</pre>
         <AnnotationPopover
           :pending="annoLayer.pending.value"

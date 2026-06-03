@@ -297,6 +297,13 @@ const messages = {
         small: 'Small',
         normal: 'Normal',
         large: 'Large'
+      },
+      text_size: 'Text size',
+      text_size_help: 'Adjusts the size of text throughout the app interface. Document readers keep their own font controls.',
+      text_size_opts: {
+        small: 'Small',
+        normal: 'Normal',
+        large: 'Large'
       }
     },
     feedback: {
@@ -1230,6 +1237,13 @@ const messages = {
       grid_item_size: 'Размер элементов в сетке',
       grid_item_size_help: 'Определяет размер элементов в режиме сетки при просмотре библиотеки.',
       grid_size: {
+        small: 'Мелкий',
+        normal: 'Обычный',
+        large: 'Крупный'
+      },
+      text_size: 'Размер текста',
+      text_size_help: 'Регулирует размер текста во всём интерфейсе приложения. У читалок документов остаётся собственное управление шрифтом.',
+      text_size_opts: {
         small: 'Мелкий',
         normal: 'Обычный',
         large: 'Крупный'
