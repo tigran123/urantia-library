@@ -50,7 +50,9 @@ const onSelectModeKeydown = (e: KeyboardEvent) => {
   }
   if (
     e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
-    (e.key === 'm' || e.key === 'M') &&
+    // e.code ('KeyM') matches under non-Latin layouts (e.g. Russian) where
+    // e.key is the produced Cyrillic character.
+    (e.key === 'm' || e.key === 'M' || e.code === 'KeyM') &&
     currentUser.value?.is_admin
   ) {
     e.preventDefault()

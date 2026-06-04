@@ -206,7 +206,10 @@ const openFromQuery = () => {
 // selected inside an editable field we yield to the native cut behaviour so
 // they don't lose the cut affordance for incidental text-editing on the page.
 const onShortcut = (e: KeyboardEvent) => {
-  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'x') return
+  // Match e.code ('KeyX') as well so the shortcut works under non-Latin
+  // keyboard layouts (e.g. Russian), where e.key is the produced Cyrillic
+  // character but e.code stays the layout-independent physical key.
+  if (!(e.ctrlKey || e.metaKey) || (e.key.toLowerCase() !== 'x' && e.code !== 'KeyX')) return
   const active = document.activeElement as HTMLElement | null
   const inEditable = !!active && (
     active.tagName === 'INPUT' ||

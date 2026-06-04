@@ -94,7 +94,7 @@ const onGlobalShortcut = (e: KeyboardEvent) => {
   // preventDefault is enough. Gated on signed-in users (the Settings entry
   // in the profile menu is only shown when signed in) and skipped on auth
   // routes where the modal isn't mounted.
-  if (key === ',') {
+  if (key === ',' || e.code === 'Comma') {
     if (isAuthRoute.value || !currentUser.value) return
     e.preventDefault()
     isSettingsModalOpen.value = true
@@ -105,8 +105,11 @@ const onGlobalShortcut = (e: KeyboardEvent) => {
   // admin-books page so that view's own handler (which targets its local
   // search box) wins, and skip auth routes where the global search isn't
   // mounted. If the user has text selected in an editable field we yield to
-  // the native cut behaviour.
-  if (key !== 'x') return
+  // the native cut behaviour. We also match e.code ('KeyX') so the shortcut
+  // fires under non-Latin keyboard layouts (e.g. Russian), where e.key is the
+  // produced Cyrillic character but e.code stays the layout-independent
+  // physical key.
+  if (key !== 'x' && e.code !== 'KeyX') return
   if (route.name === 'admin-books' || isAuthRoute.value) return
   const active = document.activeElement as HTMLElement | null
   const inEditable = !!active && (

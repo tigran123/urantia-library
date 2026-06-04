@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { XMarkIcon } from '@heroicons/vue/24/outline'
 import api, { getMyNotificationPrefs, setMyNotificationPrefs, type NotificationPrefs } from '../api'
 import { userInitials } from '../userDisplay'
@@ -167,6 +167,15 @@ const close = () => {
   selectedFile.value = null
   previewUrl.value = null
 }
+
+// Esc closes the dialog, matching the X button and backdrop click. The
+// component is always mounted (the inner v-if="isOpen" controls visibility),
+// so we gate the window listener on props.isOpen.
+const onKeydown = (e: KeyboardEvent) => {
+  if (props.isOpen && e.key === 'Escape') close()
+}
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
