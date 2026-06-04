@@ -25,6 +25,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import logging
+import calendar
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -1302,7 +1303,7 @@ _SEARCH_FIELD_COLUMNS = {
     "tags": models.Book.tags,
 }
 _SEARCH_FIELD_ALIASES = {"tag": "tags"}
-_STRUCTURAL_KEYS = {"path", "ext", "needs_review", "clearance"}
+_STRUCTURAL_KEYS = {"path", "ext", "needs_review", "clearance", "added"}
 # Relevance weight of a scoped-field match (used by _relevance_score).
 _SEARCH_FIELD_WEIGHT = {
     "title": 4, "author": 3, "publisher": 2, "series": 2, "tags": 2,
@@ -1320,13 +1321,71 @@ _SEARCH_TOKEN_RE = re.compile(r'''
 ''', re.VERBOSE)
 
 
+# A present-but-unparseable `added:` value resolves to this sentinel cutoff so
+# the filter matches nothing — never silently falling through to "no filter"
+# and returning the whole library. It sorts lexicographically after any real
+# ISO-8601 import_date (whose year is 4 digits), so `import_date >= sentinel` is
+# always false.
+_ADDED_NO_MATCH = "9999-12-31T23:59:59+00:00"
+
+# An `added:` window so large it underflows the representable date range means
+# "everything ever added" — clamp to a floor that sorts before every real
+# import_date so the filter matches all, instead of overflowing.
+_ADDED_MATCH_ALL = "0001-01-01T00:00:00+00:00"
+
+# Fixed-length relative-window units accepted by `added:` → timedelta kwargs.
+# Months ('m') and years ('y') are calendar-based (see _subtract_months), since
+# they aren't a constant number of days.
+_ADDED_UNITS = {"h": "hours", "d": "days", "w": "weeks"}
+
+
+def _subtract_months(dt: datetime, months: int) -> datetime:
+    """Return ``dt`` shifted back ``months`` calendar months, clamping the day to
+    the target month's last day (e.g. 31 Mar − 1 month → 28/29 Feb)."""
+    total = dt.year * 12 + (dt.month - 1) - months
+    year, month0 = divmod(total, 12)
+    month = month0 + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def _parse_added_cutoff(val: str) -> str | None:
+    """Parse an ``added:`` filter value into an ISO-8601 UTC lower-bound string.
+
+    Accepts a relative window ``<N><unit>`` where unit ∈ ``h``/``d``/``w``/``m``/``y``
+    (hours/days/weeks/months/years, e.g. ``7d``, ``6m``, ``1y``), or an absolute
+    ``YYYY-MM-DD`` date. Returns ``None`` when unparseable. The window is computed
+    relative to ``now`` so it matches the ``books_added_7d`` math in ``library_stats``."""
+    val = (val or "").strip().lower()
+    m = re.fullmatch(r"(\d+)\s*([hdwmy])", val)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        now = datetime.now(timezone.utc)
+        try:
+            if unit in _ADDED_UNITS:
+                return (now - timedelta(**{_ADDED_UNITS[unit]: n})).isoformat()
+            return _subtract_months(now, n if unit == "m" else n * 12).isoformat()
+        except (OverflowError, ValueError):
+            # `now - <window>` fell off the bottom of the representable range
+            # (e.g. `added:99999y`); that just means "no effective lower bound".
+            return _ADDED_MATCH_ALL
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", val)
+    if m:
+        try:
+            dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return dt.isoformat()
+    return None
+
+
 def parse_search_query(q: str):
     """Tokenize a raw query string.
 
     Returns ``(terms, filters)`` where ``filters`` holds the structural
     path/ext/needs_review filters and ``terms`` is a list of dicts:
     ``{text, field, negate, is_phrase}`` (text is lowercased)."""
-    filters = {"path": None, "ext": [], "needs_review": None, "clearance": None}
+    filters = {"path": None, "ext": [], "needs_review": None, "clearance": None, "added": None}
     terms = []
 
     for m in _SEARCH_TOKEN_RE.finditer(q or ""):
@@ -1377,6 +1436,13 @@ def parse_search_query(q: str):
                     if n < 0:
                         continue
                     filters["clearance"] = (op, n, None)
+            elif field == "added":
+                # `added:7d` → ISO-8601 UTC lower bound; same window math as
+                # /api/library-stats so a footer "added this week" click reproduces
+                # that exact count. A non-empty but unparseable value (e.g.
+                # `added:xyz`) resolves to a sentinel that matches nothing, rather
+                # than silently dropping the filter and returning every book.
+                filters["added"] = _parse_added_cutoff(val) or _ADDED_NO_MATCH
             continue
 
         scope = _SEARCH_FIELD_ALIASES.get(field, field)
@@ -1668,6 +1734,12 @@ def _build_search_query(q: str, current_user: models.User | None, db: Session):
         elif op == "between":
             query = query.filter(models.Book.clearance.between(n1, n2))
 
+    if filters["added"]:
+        # Inclusive lower bound: `added:2026-06-04` should include a book imported
+        # at exactly 2026-06-04T00:00:00. For relative windows the cutoff is a
+        # sub-second instant no book lands on exactly, so `>=` vs `>` is a no-op.
+        query = query.filter(models.Book.import_date >= filters["added"])
+
     return query, terms
 
 
@@ -1677,7 +1749,7 @@ async def search(
     q: str = "",
     page: int = 1,
     per_page: int = 50,
-    sort: str = Query("relevance", pattern="^(relevance|size|directory)$"),
+    sort: str = Query("relevance", pattern="^(relevance|size|directory|import_date)$"),
     direction: str = Query("desc", alias="dir", pattern="^(asc|desc)$"),
     cols: int = 1,
     current_user: models.User | None = Depends(get_optional_user),
@@ -1693,21 +1765,31 @@ async def search(
 
     query, terms = _build_search_query(q, current_user, db)
 
-    # Build ORDER BY. `direction` only meaningfully affects size and directory;
-    # relevance is always score-desc with a stable tiebreak.
+    # A book can live at several locations (CAS many-to-one), so results are
+    # de-duplicated to one row per book (GROUP BY Book.id) and the full location
+    # list is attached below. Path-based ordering/tiebreaks use a representative
+    # path = MIN(symlink_path) — the book's alphabetically-first location.
+    #
+    # Build ORDER BY. `direction` only meaningfully affects size, directory and
+    # import_date; relevance is always score-desc with a stable tiebreak.
     asc = direction == "asc"
+    rep_path = func.min(models.BookLocation.symlink_path)
     order_cols: list = []
     if sort == "size":
         size_col = models.Book.size
         order_cols.append((size_col.asc() if asc else size_col.desc()).nulls_last())
-        order_cols += [models.Book.title, models.Book.id, models.BookLocation.symlink_path]
+        order_cols += [models.Book.title, models.Book.id, rep_path]
+    elif sort == "import_date":
+        # import_date is ISO-8601 UTC TEXT, so lexicographic order == chronological.
+        d = models.Book.import_date
+        order_cols.append(d.asc() if asc else d.desc())
+        order_cols += [models.Book.title, models.Book.id, rep_path]
     elif sort == "directory":
-        # Lexicographic ordering on the full path puts same-parent siblings
-        # adjacent (their shared prefix sorts together), and within a group
-        # falls back to filename order — exactly what we want for multi-volume
-        # sets. No SQL dirname() needed.
-        path_col = models.BookLocation.symlink_path
-        order_cols.append(path_col.asc() if asc else path_col.desc())
+        # Lexicographic ordering on the representative path puts same-parent
+        # siblings adjacent (their shared prefix sorts together), and within a
+        # group falls back to filename order — exactly what we want for
+        # multi-volume sets. No SQL dirname() needed.
+        order_cols.append(rep_path.asc() if asc else rep_path.desc())
         order_cols.append(models.Book.id)
     else:
         avg_rating = (
@@ -1721,8 +1803,15 @@ async def search(
             order_cols.append(score.desc())
         order_cols += [
             avg_rating.desc().nulls_last(),
-            models.Book.title, models.Book.id, models.BookLocation.symlink_path,
+            models.Book.title, models.Book.id, rep_path,
         ]
+
+    # One row per distinct book, carrying its representative (ordering) path so
+    # the displayed primary location matches the row's sort position even under a
+    # path: filter — where MIN() runs over the *surviving* locations, which may
+    # exclude the book's global-min path. The BookLocation join from
+    # _build_search_query is retained for the MIN() and path:/ext: filters.
+    book_query = query.with_entities(models.Book, rep_path.label("rep_path")).group_by(models.Book.id)
 
     # Page-boundary strategy. In directory mode + grid view (cols >= 2), pages
     # are computed so that the last directory on each page either ends naturally
@@ -1731,12 +1820,14 @@ async def search(
     # up to (cols-1) items to fill that row. This eliminates the visual ugliness
     # where, e.g., a directory of 10 items at 13-wide grid splits 8/2 across two
     # pages instead of 10/0. We do the walk in Python over a path-only
-    # projection of the sorted result set; for any realistic library this is
-    # microseconds and avoids a much more invasive offset-based pagination.
+    # projection (one representative path per book) of the sorted result set; for
+    # any realistic library this is microseconds and avoids a much more invasive
+    # offset-based pagination.
     if sort == "directory" and cols >= 2:
         paths: list[str] = [
             row[0] for row in
-            query.with_entities(models.BookLocation.symlink_path)
+            query.with_entities(rep_path)
+                 .group_by(models.Book.id)
                  .order_by(*order_cols)
                  .all()
         ]
@@ -1762,29 +1853,47 @@ async def search(
             i = j
         total_pages = max(1, len(boundaries) - 1)
         if page > total_pages:
-            results = []
+            books = []
         else:
             start_idx = boundaries[page - 1]
             end_idx = boundaries[page]
-            results = (
-                query.order_by(*order_cols)
+            books = (
+                book_query.order_by(*order_cols)
                 .offset(start_idx)
                 .limit(end_idx - start_idx)
                 .all()
             )
     else:
-        total = query.order_by(None).count()
+        total = query.with_entities(func.count(func.distinct(models.Book.id))).scalar() or 0
         total_pages = (total + per_page - 1) // per_page
-        results = (
-            query.order_by(*order_cols)
+        books = (
+            book_query.order_by(*order_cols)
             .offset((page - 1) * per_page)
             .limit(per_page)
             .all()
         )
 
+    # One round-trip for every location of the books on this page, so each match
+    # can list all the directories its book lives in.
+    locs_by_book: dict[str, list[str]] = {}
+    if books:
+        loc_rows = (
+            db.query(models.BookLocation.hash_id, models.BookLocation.symlink_path)
+            .filter(models.BookLocation.hash_id.in_([b.id for b, _ in books]))
+            .all()
+        )
+        for hid, sp in loc_rows:
+            locs_by_book.setdefault(hid, []).append(sp)
+        for paths_list in locs_by_book.values():
+            paths_list.sort()
+
     matches = []
-    for book, loc in results:
-        sym_path = loc.symlink_path
+    for book, rep_path_val in books:
+        book_paths = locs_by_book.get(book.id) or []
+        # Primary path = the representative used for ORDER BY (MIN over the
+        # *filtered* locations), so name/path/parent_dir match the row's sort
+        # position. `locations` below still lists every place the book lives.
+        sym_path = rep_path_val or (book_paths[0] if book_paths else "")
         cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{book.id}.jpg")
         cover_url = f"/api/covers/{book.id}" if os.path.exists(cover_fs_path) else None
         # books.size is populated at upload time and by backfill_sizes.py; a NULL
@@ -1804,6 +1913,11 @@ async def search(
             "match_context": _match_context(book, terms),
             "clearance": int(book.clearance or 0),
             "size": book.size,
+            "import_date": book.import_date,
+            "locations": [
+                {"path": p, "parent_dir": os.path.dirname(p), "name": os.path.basename(p)}
+                for p in book_paths
+            ],
         })
 
     stats = _rating_stats(db, [m["hash_id"] for m in matches])

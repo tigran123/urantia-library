@@ -7,13 +7,13 @@ import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 
 const { t, locale } = useI18n({ useScope: 'global' })
 const recTip = (it: any) => recommendedTooltip(t, locale.value, it?.recommended_by_name, it?.recommended_at)
-import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon, FolderIcon, ArrowUpIcon, ArrowDownIcon, ScaleIcon, LockClosedIcon, CursorArrowRaysIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
+import { DocumentIcon, MagnifyingGlassIcon, BookmarkIcon, ShieldCheckIcon, CheckCircleIcon, XMarkIcon as XMarkIconOutline, Squares2X2Icon, ListBulletIcon, FolderIcon, ClockIcon, ArrowUpIcon, ArrowDownIcon, ScaleIcon, LockClosedIcon, CursorArrowRaysIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid, XMarkIcon, CheckCircleIcon as CheckCircleIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
 import QualityMark from '../components/QualityMark.vue'
 import { recommendedTooltip, bulkResultAlert } from '../lib/recommended'
 import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultiple } from '../composables/useGridItemSize'
-import { formatBytes, fileTypeLabel } from '../lib/itemFormat'
+import { formatBytes, fileTypeLabel, formatShortDate } from '../lib/itemFormat'
 import { useEditClearance } from '../composables/useEditClearance'
 import { getFullUrl } from '../lib/assets'
 
@@ -228,12 +228,12 @@ const goToPage = (page: number) => {
   router.push({ name: 'search', query: { ...route.query, page: String(page) } })
 }
 
-type SortMode = 'relevance' | 'size' | 'directory'
+type SortMode = 'relevance' | 'size' | 'directory' | 'import_date'
 type SortDir = 'asc' | 'desc'
 
 const sortMode = computed<SortMode>(() => {
   const s = route.query.sort as string
-  return s === 'size' || s === 'directory' ? s : 'relevance'
+  return s === 'size' || s === 'directory' || s === 'import_date' ? s : 'relevance'
 })
 const sortDir = computed<SortDir>(() => (route.query.dir === 'asc' ? 'asc' : 'desc'))
 
@@ -250,10 +250,10 @@ const setSort = (next: SortMode) => {
   } else {
     q.sort = next
     // Pick a sensible default direction the first time someone enters this
-    // mode: desc for size (largest first — facsimiles), asc for directory
-    // (alphabetical). Existing dir wins so the toggle isn't clobbered when
-    // bouncing back to a mode the user already configured.
-    if (!route.query.dir) q.dir = next === 'size' ? 'desc' : 'asc'
+    // mode: desc for size (largest first — facsimiles) and import_date (newest
+    // first), asc for directory (alphabetical). Existing dir wins so the toggle
+    // isn't clobbered when bouncing back to a mode the user already configured.
+    if (!route.query.dir) q.dir = next === 'directory' ? 'asc' : 'desc'
   }
   router.push({ name: 'search', query: q })
 }
@@ -278,6 +278,7 @@ const parsedSearch = computed(() => {
   const exts: {value: string, fullMatch: string}[] = []
   let pathF: {value: string, fullMatch: string} | null = null
   let nrF: {value: string, fullMatch: string} | null = null
+  let addedF: {value: string, fullMatch: string} | null = null
   const residual: string[] = []
   const re = /(-)?(?:([A-Za-z_]+):)?(?:"([^"]*)"|'([^']*)'|([^\s"']+))/g
   let m: RegExpExecArray | null
@@ -286,12 +287,14 @@ const parsedSearch = computed(() => {
     const neg = m[1] === '-'
     const field = (m[2] || '').toLowerCase()
     const value = m[3] ?? m[4] ?? m[5] ?? ''
-    const structural = field === 'path' || field === 'ext' || (isAdmin && field === 'needs_review')
+    const structural = field === 'path' || field === 'ext' || field === 'added' || (isAdmin && field === 'needs_review')
     if (structural && value) {
       if (field === 'ext') {
         if (!exts.some(e => e.value.toLowerCase() === value.toLowerCase())) exts.push({ value, fullMatch: m[0] })
       } else if (field === 'path') {
         pathF = { value, fullMatch: m[0] }
+      } else if (field === 'added') {
+        addedF = { value, fullMatch: m[0] }
       } else {
         nrF = { value, fullMatch: m[0] }
       }
@@ -303,6 +306,7 @@ const parsedSearch = computed(() => {
   const filters: {key: string, value: string, fullMatch: string}[] = []
   if (pathF) filters.push({ key: 'Path', value: pathF.value, fullMatch: pathF.fullMatch })
   for (const e of exts) filters.push({ key: 'Extension', value: e.value, fullMatch: e.fullMatch })
+  if (addedF) filters.push({ key: 'Added', value: addedF.value, fullMatch: addedF.fullMatch })
   if (nrF) filters.push({ key: 'Needs review', value: nrF.value, fullMatch: nrF.fullMatch })
 
   return { text: residual.join(' ').trim(), filters }
@@ -580,6 +584,14 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <FolderIcon class="h-4 w-4" />
               <span class="hidden sm:inline">{{ $t('search.sort_directory') }}</span>
             </button>
+            <button
+              @click="setSort('import_date')"
+              :class="['px-2 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1', sortMode === 'import_date' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+              :title="$t('search.sort_date_added')"
+            >
+              <ClockIcon class="h-4 w-4" />
+              <span class="hidden sm:inline">{{ $t('search.sort_date_added') }}</span>
+            </button>
           </div>
           <button
             v-if="directionMeaningful"
@@ -664,6 +676,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
            <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">author:harnum</code> {{ $t('search.tip_field') }}</li>
            <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">path:Law/</code> {{ $t('search.tip_path') }}</li>
            <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">ext:djvu ext:pdf</code> {{ $t('search.tip_ext') }}</li>
+           <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">added:7d</code> {{ $t('search.tip_added') }}</li>
            <li>{{ $t('search.tip_combine') }} <code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">path:History/ ext:epub rome</code></li>
            <li><code class="bg-gray-200 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">Ctrl+X</code> {{ $t('search.tip_clear') }}</li>
         </ul>
@@ -765,8 +778,19 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                      <span v-if="fileTypeLabel(match.name)" class="font-semibold">{{ fileTypeLabel(match.name) }}</span>
                      <span v-if="fileTypeLabel(match.name) && match.size != null">·</span>
                      <span v-if="match.size != null">{{ formatBytes(match.size) }}</span>
-                     <span v-if="fileTypeLabel(match.name) || match.size != null" class="text-gray-300 dark:text-gray-600">·</span>
-                     <span class="flex items-center gap-1">
+                     <span v-if="(fileTypeLabel(match.name) || match.size != null) && match.import_date" class="text-gray-300 dark:text-gray-600">·</span>
+                     <span v-if="match.import_date" :title="match.import_date">{{ formatShortDate(locale, match.import_date) }}</span>
+                     <span v-if="fileTypeLabel(match.name) || match.size != null || match.import_date" class="text-gray-300 dark:text-gray-600">·</span>
+                     <span v-if="match.locations && match.locations.length > 1" class="flex items-center gap-1 flex-wrap">
+                       {{ $t('search.locations_label') }}:
+                       <template v-for="(loc, i) in match.locations" :key="loc.path">
+                         <span v-if="i" class="text-gray-300 dark:text-gray-600">·</span>
+                         <router-link :to="`/browse/${loc.parent_dir}`" class="hover:text-blue-500 dark:hover:text-blue-400 hover:underline">
+                           /{{ loc.parent_dir || 'Root' }}
+                         </router-link>
+                       </template>
+                     </span>
+                     <span v-else class="flex items-center gap-1">
                        {{ $t('app.location') }}:
                        <router-link :to="`/browse/${match.parent_dir}`" class="hover:text-blue-500 dark:hover:text-blue-400 hover:underline">
                          /{{ match.parent_dir || 'Root' }}

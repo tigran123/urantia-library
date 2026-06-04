@@ -545,7 +545,10 @@ const handleLogout = async () => {
 
     <footer v-if="!isAuthRoute && !isPublicChrome" class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-6 text-center text-sm text-gray-500 dark:text-gray-400 mt-auto">
       <template v-if="stats">
-        <span>{{ t('app.stats.books', { n: nFmt(stats.total_books) }, stats.total_books) }}</span>
+        <router-link
+          :to="{ name: 'search', query: { q: '*' } }"
+          class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+        >{{ t('app.stats.books', { n: nFmt(stats.total_books) }, stats.total_books) }}</router-link>
         <template v-if="stats.total_audio > 0">
           <span class="mx-2">·</span>
           <span>{{ t('app.stats.audio', { n: nFmt(stats.total_audio) }, stats.total_audio) }}</span>
@@ -562,7 +565,10 @@ const handleLogout = async () => {
         </template>
         <template v-if="stats.books_added_7d > 0">
           <span class="mx-2">·</span>
-          <span>{{ t('app.stats.addedThisWeek', { n: nFmt(stats.books_added_7d) }, stats.books_added_7d) }}</span>
+          <router-link
+            :to="{ name: 'search', query: { q: 'added:7d', sort: 'import_date', dir: 'desc' } }"
+            class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+          >{{ t('app.stats.addedThisWeek', { n: nFmt(stats.books_added_7d) }, stats.books_added_7d) }}</router-link>
         </template>
       </template>
       <span v-else>&nbsp;</span>

@@ -57,6 +57,7 @@ CREATE TABLE books (
 
 CREATE INDEX idx_books_clearance ON books(clearance);
 CREATE INDEX idx_books_size ON books(size);
+CREATE INDEX idx_books_import_date ON books(import_date);
 
 -- ==============================================================================
 -- 3. The Spatial Search Index
@@ -356,4 +357,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '9');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '10');
