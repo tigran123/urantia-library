@@ -18,6 +18,7 @@ import asyncio
 import threading
 import xml.etree.ElementTree as ET
 from html import escape as _html_escape
+from html import unescape as _html_unescape
 from PIL import Image
 import djvu.decode
 from typing import List, Dict, Any, Optional
@@ -1286,6 +1287,12 @@ _SEARCH_ALL_COLUMNS = [
     models.Book.publisher, models.Book.series, models.Book.tags,
     models.Book.original_filename,
 ]
+# Attribute names paralleling _SEARCH_ALL_COLUMNS, used by _match_context to read
+# the matched field value off a loaded Book without re-deriving the column.
+_SEARCH_ALL_COLUMN_NAMES = [
+    "title", "author", "description", "publisher", "series", "tags",
+    "original_filename",
+]
 # Field scopes the user may name explicitly (`tag` is an alias for `tags`).
 _SEARCH_FIELD_COLUMNS = {
     "title": models.Book.title,
@@ -1472,6 +1479,146 @@ def _relevance_score(terms: list):
     return score
 
 
+# Fields used to justify a search hit, in the order we prefer to show context
+# from. Excludes title/author — those are always rendered in full on the card,
+# so a match there needs no snippet.
+_CONTEXT_FIELD_ORDER = ["description", "series", "tags", "publisher", "original_filename"]
+
+
+def _term_regex(term: dict) -> "re.Pattern | None":
+    """Compile a positive term to a regex mirroring its SQL ``LIKE`` semantics,
+    used to LOCATE the match inside a field value so the snippet anchors exactly
+    where the search matched. For non-phrase tokens `*`→`.*?` and `?`→`.` (SQL's
+    `%`/`_`); phrases and the literal runs between wildcards are matched
+    verbatim. Returns None when there's no literal text to anchor on (e.g. a bare
+    ``*``). ``term['text']`` is already lowercased; the field value is matched
+    case-insensitively, so this stays consistent with the LIKE query."""
+    text = term["text"]
+    if not text:
+        return None
+    if term["is_phrase"]:
+        return re.compile(re.escape(text), re.IGNORECASE | re.DOTALL)
+    parts = re.split(r"([*?])", text)
+    if not any(p and p not in ("*", "?") for p in parts):
+        return None
+    frag = "".join(
+        ".*?" if p == "*" else "." if p == "?" else re.escape(p)
+        for p in parts
+    )
+    return re.compile(frag, re.IGNORECASE | re.DOTALL)
+
+
+def _term_matches_field(rx: "re.Pattern", term: dict, field: str, book: models.Book) -> bool:
+    """True if this term matches ``field`` on ``book`` (scope-aware). A
+    `field:`-scoped term only counts against its own field. Matches the RAW field
+    value, exactly like the SQL query — only the snippet display is cleaned."""
+    if term["field"] is not None and term["field"] != field:
+        return False
+    return rx.search(getattr(book, field, None) or "") is not None
+
+
+# Strip pattern for an actual HTML/XML tag (applied only once a value is
+# recognized as HTML by _HTML_HINT_RE): `<`, optional `/`, a letter-led tag name,
+# optional attributes, optional self-closing `/`, `>`.
+_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9]*(?:\s[^>]*)?/?>")
+
+# Heuristic: does this value actually contain HTML? Real HTML prose has a closing
+# tag, a void element (<br>/<hr>), an unmistakable block opener, or a self-close.
+# It deliberately excludes ambiguous inline names (<i>, <b>, <a>, <code>, <map>,
+# …) and bracketed identifiers (<iostream>, <T>) from the *detector*, so literal
+# bracketed text in non-HTML fields is left intact; once a value IS recognized as
+# HTML, _TAG_RE then removes every tag within it.
+_HTML_HINT_RE = re.compile(
+    r"</[A-Za-z]"
+    r"|<br\b|<hr\b"
+    r"|<(?:p|div|h[1-6]|ul|ol|li|blockquote|pre|table|tr|td|th|section|article|figure)\b[^>]*>"
+    r"|/>",
+    re.IGNORECASE,
+)
+
+
+def _to_plain_text(text: str) -> str:
+    """Reduce metadata to readable plain text for a snippet. Entities are always
+    decoded; HTML tags are stripped ONLY when the value actually looks like HTML
+    (see _HTML_HINT_RE). That gate preserves literal bracketed text in non-HTML
+    fields — e.g. «<О Небе>», "#include <iostream>", or "2 < 3" — which the
+    snippet would otherwise mangle. Entities are decoded first so an
+    entity-encoded tag (&lt;p&gt;) is detected and stripped too."""
+    t = _html_unescape(text or "")
+    if _HTML_HINT_RE.search(t):
+        t = _TAG_RE.sub(" ", t)
+    return t
+
+
+def _build_snippet(text: str, rx: "re.Pattern", radius: int = 48) -> str | None:
+    """A ``…``-bracketed window of ``text`` around the first match of ``rx``,
+    snapped to word boundaries. Returns the original-cased text, or None if the
+    pattern isn't found. HTML is reduced to plain text and whitespace collapsed
+    so the snippet renders as a single tidy line. When a wide ``*`` makes the
+    matched span longer than the window, the middle is elided (``… … …``) so both
+    the leading and trailing literals that satisfied the search stay visible."""
+    flat = " ".join(_to_plain_text(text).split())
+    if not flat:
+        return None
+    m = rx.search(flat)
+    if m is None:
+        return None
+    n = len(flat)
+    mstart, mend = m.start(), m.end()
+
+    def clip(a: int, b: int, keep_lo: int, keep_hi: int) -> tuple[int, int]:
+        """Snap outer bounds [a,b] to word boundaries without eating into the
+        [keep_lo, keep_hi] span that must stay visible."""
+        if a > 0:
+            sp = flat.find(" ", a, keep_lo)
+            if sp != -1:
+                a = sp + 1
+        if b < n:
+            sp = flat.rfind(" ", keep_hi, b)
+            if sp != -1:
+                b = sp
+        return a, b
+
+    if mend - mstart <= 2 * radius:
+        a, b = clip(max(0, mstart - radius), min(n, mend + radius), mstart, mend)
+        return ("…" if a > 0 else "") + flat[a:b] + ("…" if b < n else "")
+
+    # Matched span is long (a wide `*`): show both anchors with the middle elided.
+    ha, hb = clip(max(0, mstart - radius), min(n, mstart + radius), mstart, mstart)
+    ta, tb = clip(max(0, mend - radius), min(n, mend + radius), mend, mend)
+    head = ("…" if ha > 0 else "") + flat[ha:hb]
+    tail = flat[ta:tb] + ("…" if tb < n else "")
+    return head + " … " + tail
+
+
+def _match_context(book: models.Book, terms: list) -> dict | None:
+    """For a search hit, return ``{field, text}`` explaining why it matched when
+    the match isn't already visible in the always-shown title/author — otherwise
+    None. Purely presentational; never affects which rows match or their rank."""
+    positives = []
+    for t in terms:
+        if t["negate"]:
+            continue
+        rx = _term_regex(t)
+        if rx is not None:
+            positives.append((t, rx))
+    if not positives:
+        return None
+    # Self-evident when every positive term already appears in title or author.
+    if all(_term_matches_field(rx, t, "title", book) or _term_matches_field(rx, t, "author", book)
+           for t, rx in positives):
+        return None
+    for t, rx in positives:
+        if _term_matches_field(rx, t, "title", book) or _term_matches_field(rx, t, "author", book):
+            continue
+        for field in _CONTEXT_FIELD_ORDER:
+            if _term_matches_field(rx, t, field, book):
+                snippet = _build_snippet(getattr(book, field, None) or "", rx)
+                if snippet:
+                    return {"field": field, "text": snippet}
+    return None
+
+
 def _build_search_query(q: str, current_user: models.User | None, db: Session):
     """Shared query builder for /api/search and /api/search/hash_ids.
     Returns ``(query, terms)`` — the joined Book+BookLocation query with all
@@ -1655,6 +1802,7 @@ async def search(
             "title": book.title,
             "author": book.author,
             "description": book.description,
+            "match_context": _match_context(book, terms),
             "clearance": int(book.clearance or 0),
             "size": book.size,
         })

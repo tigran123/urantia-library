@@ -500,6 +500,9 @@ const wrapMatches = (html: string) => {
 const highlightText = (text: string) => wrapMatches(escapeHtml(text || ''))
 const highlightHtml = (html: string) => wrapMatches(html || '')
 
+// Localized label for a match-context field ('description' | 'series' | …).
+const matchFieldLabel = (field: string) => t(`search.matched_field.${field}`)
+
 // Interleave directory-header markers with matches so list and grid views can
 // share one v-for loop. In non-directory modes this is just the flat match
 // list. Backend orders by symlink_path in directory mode, so same-parent
@@ -735,6 +738,17 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                       ><span v-html="highlightText(match.author)"></span></router-link>
                       <p v-if="match.title" class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-all">{{ match.name }}</p>
                       <p v-if="match.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="highlightHtml(match.description)"></p>
+                      <p
+                        v-if="match.match_context"
+                        class="text-sm text-gray-500 dark:text-gray-400 mt-1 italic flex items-start gap-1.5"
+                        :title="$t('search.matched_context_help')"
+                      >
+                        <MagnifyingGlassIcon class="h-4 w-4 mt-0.5 shrink-0 opacity-60" aria-hidden="true" />
+                        <span>
+                          <span class="font-semibold not-italic">{{ matchFieldLabel(match.match_context.field) }}:</span>
+                          <span v-html="highlightText(match.match_context.text)"></span>
+                        </span>
+                      </p>
                     </div>
                   </div>
 
@@ -841,6 +855,14 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               </div>
               <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words line-clamp-2']" :title="match.title || match.name"><span v-html="highlightText(match.title || formatFilename(match.name, match.is_dir))"></span></h3>
               <p v-if="match.author" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate font-bold italic']" :title="match.author"><span v-html="highlightText(match.author)"></span></p>
+              <p
+                v-if="match.match_context"
+                :class="[gridCls.subtitle, 'text-gray-400 dark:text-gray-500 mt-1 text-center w-full line-clamp-2 italic']"
+                :title="`${matchFieldLabel(match.match_context.field)}: ${match.match_context.text}`"
+              >
+                <span class="font-semibold not-italic">{{ matchFieldLabel(match.match_context.field) }}:</span>
+                <span v-html="highlightText(match.match_context.text)"></span>
+              </p>
               <StarRating v-if="match.rating_count" :rating="match.avg_rating" :count="match.rating_count" class="mt-1" />
             </router-link>
           </div>
