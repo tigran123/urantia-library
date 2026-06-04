@@ -152,12 +152,11 @@ async def custom_logging_middleware(request: Request, call_next):
 
     response = await call_next(request)
 
-    # Format current date/time
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # Format and print the log
+    # No timestamp here on purpose: stdout is captured by systemd-journald, which
+    # already records the full timestamp (year + tz + microseconds). View it with
+    # `journalctl -o short-iso` to surface the year that the default `short` hides.
     url_with_query = f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path
-    print(f"{now} {client_host} - {user_email} - \"{request.method} {url_with_query} HTTP/{request.scope.get('http_version', '1.1')}\" {response.status_code}")
+    print(f"{client_host} {user_email} \"{request.method} {url_with_query} HTTP/{request.scope.get('http_version', '1.1')}\" {response.status_code}")
 
     return response
 
