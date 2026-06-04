@@ -421,7 +421,7 @@ onBeforeUnmount(() => {
       >
         <div
           ref="contentEl"
-          class="fb2-content w-full px-6 py-8 leading-relaxed"
+          class="fb2-content w-full max-w-5xl mx-auto px-4 sm:px-5 lg:px-6 py-8 leading-relaxed"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
           v-html="html"
           @click="onContentClick"

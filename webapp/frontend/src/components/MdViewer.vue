@@ -397,7 +397,7 @@ onBeforeUnmount(() => {
         <div
           v-if="!rawMode"
           ref="contentEl"
-          class="md-content w-full max-w-4xl mx-auto px-6 py-8 leading-relaxed"
+          class="md-content w-full max-w-5xl mx-auto px-4 sm:px-5 lg:px-6 py-8 leading-relaxed"
           :class="{ 'md-content--txt': isTxt }"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
           v-html="html"
@@ -405,7 +405,7 @@ onBeforeUnmount(() => {
         ></div>
         <pre
           v-else
-          class="md-raw w-full max-w-4xl mx-auto px-6 py-8 whitespace-pre-wrap break-words"
+          class="md-raw w-full max-w-5xl mx-auto px-4 sm:px-5 lg:px-6 py-8 whitespace-pre-wrap break-words"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
         >{{ raw }}</pre>
         <AnnotationPopover

@@ -513,7 +513,9 @@ const submitReply = async () => {
 </script>
 
 <template>
-  <div class="w-full px-2 py-4 md:p-6">
+  <!-- No vertical padding of its own: App.vue's main py-8 is the page gutter,
+       same as Browse/Search — keeps top/bottom margins at side-gutter scale. -->
+  <div class="w-full">
     <div v-if="loading" class="flex justify-center py-12">
       <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
     </div>
@@ -522,10 +524,10 @@ const submitReply = async () => {
       {{ error }}
     </div>
     
-    <div v-else-if="item" class="space-y-8 transition-colors duration-300 bg-gray-50 dark:bg-gray-900 min-h-screen rounded-xl pb-12 pt-8">
+    <div v-else-if="item" class="space-y-8 transition-colors duration-300 bg-gray-50 dark:bg-gray-900 rounded-xl">
       
       <!-- Main Content Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-8 px-2 md:px-8">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
         
         <!-- Left Column: Cover Image -->
         <div class="md:col-span-1 flex flex-col items-center">
@@ -812,8 +814,8 @@ const submitReply = async () => {
         </div>
       </div>
 
-      <!-- Built-in Viewer -->
-      <div class="px-2 md:px-8 pt-8 w-full">
+      <!-- Built-in Viewer (the card's space-y-8 provides the gap above) -->
+      <div class="w-full">
         <div class="rounded-xl overflow-hidden shadow-inner border border-gray-200 dark:border-gray-700 min-h-[500px] flex items-center justify-center bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
           <!-- Audio Player -->
           <audio v-if="isAudio" controls class="w-full max-w-md" :src="getDownloadUrl()">

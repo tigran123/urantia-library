@@ -609,7 +609,7 @@ onBeforeUnmount(() => {
       </aside>
 
       <div class="relative flex-grow min-w-0 bg-white dark:bg-gray-900 overflow-hidden">
-        <div ref="viewer" class="absolute inset-0" :class="immersive ? 'p-0' : 'p-1 sm:p-4'"></div>
+        <div ref="viewer" class="absolute inset-0" :class="immersive ? 'p-0' : 'p-1 sm:p-2 lg:p-3'"></div>
         <AnnotationPopover
           :pending="annoPending"
           :existing="annoExisting"

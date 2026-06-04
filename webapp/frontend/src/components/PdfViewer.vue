@@ -40,6 +40,7 @@ const { t } = useI18n({ useScope: 'global' })
 const props = defineProps<{ source: ViewerSource; embedded?: boolean }>()
 const hashId = computed(() => sourceHashId(props.source))
 
+const rootEl = ref<HTMLElement | null>(null)
 const canvas = ref<HTMLCanvasElement | null>(null)
 const canvas2 = ref<HTMLCanvasElement | null>(null)
 const textLayer = ref<HTMLElement | null>(null)
@@ -387,12 +388,21 @@ const loadProgress = async (): Promise<{ page: number; fitMode?: 'width' | 'heig
   }
 }
 
+const containerPadding = () => {
+  if (!container.value) return { x: 0, y: 0 }
+  const style = getComputedStyle(container.value)
+  return {
+    x: (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0),
+    y: (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0),
+  }
+}
+
 const computeFitScale = (page: PDFPageProxy): number => {
   if (!container.value) return 1
   const base = page.getViewport({ scale: 1 })
-  // Match the container's padding (p-2 lg:p-4) and the gap-2 between pages.
-  const padX = 32
-  const padY = 32
+  // Measure the actual container padding so fit-width/height stays correct when
+  // the non-immersive reader gutter changes across breakpoints.
+  const { x: padX, y: padY } = containerPadding()
   const gap = isDoublePage.value ? 8 : 0
   // Use offsetWidth/offsetHeight (the outer box, unaffected by an internal
   // scrollbar toggling) and reserve a constant for a possible perpendicular
@@ -409,6 +419,40 @@ const computeFitScale = (page: PDFPageProxy): number => {
   const usableW = container.value.offsetWidth - padX - gap - scrollbar
   const perPage = isDoublePage.value ? usableW / 2 : usableW
   return Math.max(0.05, perPage / base.width)
+}
+
+// Keep the frame height tracking the fitted content: the 80vh default in
+// .pdf-resizable is a *starting* height, blind to content — on a
+// narrow-but-tall window a width-fitted spread is a small strip floating at
+// the top of a mostly-empty frame, and a window resize should look the same
+// as a fresh load at the new size. Tracking stops the moment the user drags
+// the native resize grabber (detected below: the grabber writes inline sizes
+// directly, so an inline width, or an inline height we didn't set, means the
+// frame belongs to the user now). CSS min-height floors every height we set.
+let userResized = false
+let autoHeight = '' // last inline height we set ourselves ('' = CSS default)
+const syncHeightToContent = (contentH: number) => {
+  if (userResized || immersive.value || !rootEl.value || !container.value) return
+  const style = rootEl.value.style
+  if (style.width !== '' || (style.height !== '' && style.height !== autoHeight)) {
+    userResized = true
+    return
+  }
+  if (fitMode.value === 'height') {
+    // Fit-height fills whatever frame it's given — hand the frame back to the
+    // CSS default so it matches what a fresh load at this size would show.
+    if (autoHeight !== '') { autoHeight = ''; style.height = '' }
+    return
+  }
+  if (contentH <= 0) return
+  const chrome = rootEl.value.offsetHeight - container.value.offsetHeight
+  const desired = Math.ceil(chrome + contentH + containerPadding().y)
+  // Reveal the CSS default height to act as the growth cap, then track the
+  // content below it. Both writes land in the same task, so no flicker.
+  style.height = ''
+  const defaultH = rootEl.value.offsetHeight
+  autoHeight = desired < defaultH ? `${desired}px` : ''
+  style.height = autoHeight
 }
 
 const renderOne = async (page: PDFPageProxy, canvasEl: HTMLCanvasElement, effective: number): Promise<{ task: RenderTask; cssViewport: PageViewport } | null> => {
@@ -548,6 +592,7 @@ const renderPage = async (n: number) => {
     saveProgress()
     paintTextLayerAnnotations()
     updateCanPan()
+    syncHeightToContent(Math.max(cssL?.height ?? 0, cssR?.height ?? 0))
   } catch (e: any) {
     if (e?.name !== 'RenderingCancelledException') {
       error.value = e?.message || 'Render failed'
@@ -696,10 +741,25 @@ const onKeyDown = (e: KeyboardEvent) => {
   }
 }
 
+// Native CSS resize (and the content-tracking auto height) writes *inline*
+// width and height on the root, which would override the `h-dvh` class in the
+// fixed immersive branch and pin the fullscreen viewer at the dragged size.
+// Stash the inline size on enter, restore it on exit.
+let stashedInlineSize: { width: string; height: string } | null = null
 watch(immersive, (v) => {
   document.body.style.overflow = v ? 'hidden' : ''
   document.documentElement.style.overflow = v ? 'hidden' : ''
   if (v) tocOpen.value = false
+  if (!rootEl.value) return
+  if (v) {
+    stashedInlineSize = { width: rootEl.value.style.width, height: rootEl.value.style.height }
+    rootEl.value.style.width = ''
+    rootEl.value.style.height = ''
+  } else if (stashedInlineSize) {
+    rootEl.value.style.width = stashedInlineSize.width
+    rootEl.value.style.height = stashedInlineSize.height
+    stashedInlineSize = null
+  }
 })
 
 const initPdf = async () => {
@@ -815,11 +875,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div
+    ref="rootEl"
     :class="[
       'pdf-viewer flex flex-col items-stretch bg-gray-100 dark:bg-gray-800 w-full overscroll-contain',
-      immersive
-        ? 'fixed inset-0 z-50 h-dvh rounded-none'
-        : (embedded ? 'relative h-[60vh] max-h-[700px] rounded-lg shadow' : 'relative h-[80vh] rounded-lg shadow')
+      immersive ? 'fixed inset-0 z-50 h-dvh rounded-none' : 'relative rounded-lg shadow pdf-resizable',
+      { 'pdf-embedded': !immersive && embedded },
     ]"
   >
     <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-30 rounded-lg">
@@ -998,7 +1058,7 @@ onBeforeUnmount(() => {
 
       <div
         ref="container"
-        class="relative flex-grow min-w-0 bg-gray-200 dark:bg-gray-900 overflow-auto p-2 lg:p-4"
+        class="relative flex-grow min-w-0 bg-gray-200 dark:bg-gray-900 overflow-auto p-1 sm:p-2 lg:p-3"
         :class="canPan ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : ''"
         @mousedown="onPanMouseDown"
       >
@@ -1110,6 +1170,22 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.pdf-resizable {
+  /* padding-bottom reserves a clear strip for the native resize grabber so the
+     inner scroll area's scrollbar can't sit on top of it — otherwise the viewer
+     was resizable only until the page overflowed. */
+  resize: both;
+  overflow: hidden;
+  height: 80vh;
+  min-height: 360px;
+  padding-bottom: 16px;
+}
+/* Embedded (upload/import preview): a modest *starting* height so the preview
+   isn't an enormously tall frame with the page floating at the top — but no
+   max-height, so the user can still drag it larger (or smaller) in both directions. */
+.pdf-embedded {
+  height: min(60vh, 700px);
+}
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button {
   -webkit-appearance: none;
