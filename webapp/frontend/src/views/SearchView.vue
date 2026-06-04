@@ -249,11 +249,13 @@ const setSort = (next: SortMode) => {
     delete q.dir
   } else {
     q.sort = next
-    // Pick a sensible default direction the first time someone enters this
-    // mode: desc for size (largest first — facsimiles) and import_date (newest
-    // first), asc for directory (alphabetical). Existing dir wins so the toggle
-    // isn't clobbered when bouncing back to a mode the user already configured.
-    if (!route.query.dir) q.dir = next === 'directory' ? 'asc' : 'desc'
+    // `dir` is a single shared query param, so a value left over from the
+    // previous mode must not leak in. We only reach here on an actual mode
+    // switch (same-mode clicks early-return above), so always apply the new
+    // mode's default direction: asc for directory (alphabetical), desc for
+    // size (largest first) and import_date (newest first). Flipping direction
+    // within a mode goes through toggleSortDir, which this never clobbers.
+    q.dir = next === 'directory' ? 'asc' : 'desc'
   }
   router.push({ name: 'search', query: q })
 }
@@ -315,7 +317,9 @@ const parsedSearch = computed(() => {
 const removeFilter = (fullMatch: string) => {
   const currentQ = route.query.q as string || ''
   const newQ = currentQ.replace(fullMatch, '').replace(/\s+/g, ' ').trim()
-  router.push({ name: 'search', query: { q: newQ } })
+  // Only the filter set changed — preserve sort/dir (and anything else in the
+  // query); just reset to page 1 since the result set shifts.
+  router.push({ name: 'search', query: { ...route.query, q: newQ, page: '1' } })
 }
 
 // `favoriteIds` now tracks which books sit in >=1 of the user's playlists —
