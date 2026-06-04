@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, provide } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter, useRoute, isNavigationFailure, NavigationFailureType } from 'vue-router'
 import { MagnifyingGlassIcon, BookOpenIcon, ArrowRightOnRectangleIcon, QuestionMarkCircleIcon, XMarkIcon, BookmarkIcon, Cog6ToothIcon, ShieldCheckIcon, ChatBubbleLeftRightIcon, InboxIcon, ClockIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import api, { getLibraryStats, type LibraryStats } from './api'
@@ -300,11 +300,17 @@ const onSearchEnter = (e: KeyboardEvent) => {
   lastEnterFromPhysicalKey = !!e.code
 }
 
-const performSearch = () => {
+const performSearch = async () => {
   const fromPhysical = lastEnterFromPhysicalKey
   lastEnterFromPhysicalKey = false
   if (searchQuery.value.trim()) {
-    router.push({ name: 'search', query: { q: searchQuery.value } })
+    const failure = await router.push({ name: 'search', query: { q: searchQuery.value } })
+    if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
+      // Same query, but the library may have changed since the last search.
+      // force re-commits the identical route (replace: no extra history entry),
+      // which re-fires SearchView's route.query watcher → doSearch().
+      router.replace({ name: 'search', query: { q: searchQuery.value }, force: true })
+    }
     if (!fromPhysical) {
       // Blur to dismiss the on-screen keyboard on touch devices. A no-op on
       // desktop, since focus only matters when a soft keyboard is up.
