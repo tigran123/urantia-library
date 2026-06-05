@@ -159,6 +159,10 @@ export interface LibraryStats {
   total_video: number
   total_languages: number
   books_added_7d: number
+  // Canonical audio/video format sets, used to build the footer's
+  // audio/video search links so they match the counts above.
+  audio_exts: string[]
+  video_exts: string[]
   // Only present for signed-in viewers.
   total_users?: number
   online_users?: number

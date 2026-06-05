@@ -1041,12 +1041,17 @@ async def library_stats(
         .scalar() or 0
     )
 
-    response: dict[str, int] = {
+    response: dict[str, object] = {
         "total_books": int(total_books),
         "total_audio": int(total_audio),
         "total_video": int(total_video),
         "total_languages": int(total_languages),
         "books_added_7d": int(books_added_7d),
+        # Canonical format sets (same ones used for the counts above) so the
+        # footer's audio/video links build their `ext:` search from a single
+        # source of truth and can never drift from the displayed count.
+        "audio_exts": sorted(_AUDIO_EXTS),
+        "video_exts": sorted(_VIDEO_EXTS),
     }
 
     # User counts are only exposed to signed-in viewers.

@@ -191,6 +191,11 @@ const fetchStats = async () => {
   }
 }
 
+// Footer audio/video links: build an OR'd `ext:` search from the format sets
+// the backend reports, so the search set always matches the displayed count.
+const audioQuery = computed(() => (stats.value?.audio_exts ?? []).map(e => `ext:${e}`).join(' '))
+const videoQuery = computed(() => (stats.value?.video_exts ?? []).map(e => `ext:${e}`).join(' '))
+
 // Lets admin panels (e.g. Sessions Refresh) drive a footer refresh so the
 // online-users / in-sessions count can't visibly disagree with the table.
 provide('refreshStats', fetchStats)
@@ -557,11 +562,17 @@ const handleLogout = async () => {
         >{{ t('app.stats.books', { n: nFmt(stats.total_books) }, stats.total_books) }}</router-link>
         <template v-if="stats.total_audio > 0">
           <span class="mx-2">·</span>
-          <span>{{ t('app.stats.audio', { n: nFmt(stats.total_audio) }, stats.total_audio) }}</span>
+          <router-link
+            :to="{ name: 'search', query: { q: audioQuery } }"
+            class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+          >{{ t('app.stats.audio', { n: nFmt(stats.total_audio) }, stats.total_audio) }}</router-link>
         </template>
         <template v-if="stats.total_video > 0">
           <span class="mx-2">·</span>
-          <span>{{ t('app.stats.video', { n: nFmt(stats.total_video) }, stats.total_video) }}</span>
+          <router-link
+            :to="{ name: 'search', query: { q: videoQuery } }"
+            class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+          >{{ t('app.stats.video', { n: nFmt(stats.total_video) }, stats.total_video) }}</router-link>
         </template>
         <span class="mx-2">·</span>
         <span>{{ t('app.stats.languages', { n: nFmt(stats.total_languages) }, stats.total_languages) }}</span>
