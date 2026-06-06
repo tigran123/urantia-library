@@ -433,6 +433,18 @@ onBeforeUnmount(() => {
 })
 
 watch(() => route.params.path, (newPath) => {
+  // Album view at the library root is never useful (there's no meaningful "play
+  // the whole library"), so navigating to the root while in Album view — e.g.
+  // clicking the Home icon after switching an audio directory to Album — drops
+  // back to the last grid/list mode (List stays List; otherwise Grid, via
+  // lastNonAlbum). An explicit ?view=album request (the now-playing bar's "back
+  // to origin" for a library-wide recursive album) still wins: we read the query
+  // here synchronously, before the ?view watcher's nextTick strips it. A manual
+  // album-button click at the root isn't a path change, so it's left alone.
+  const p = Array.isArray(newPath) ? newPath.join('/') : newPath || ''
+  if (p === '' && viewMode.value === 'album' && route.query.view !== 'album') {
+    viewMode.value = lastNonAlbum.value
+  }
   loadPath(newPath as string)
 })
 
