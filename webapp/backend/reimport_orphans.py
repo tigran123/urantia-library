@@ -81,6 +81,34 @@ MIME_TO_FMT: dict[str, tuple[str, str]] = {
     "text/rtf":                       ("rtf", "rtf"),
     "text/xml":                       ("fb2", "fb2"),
     "application/xml":                ("fb2", "fb2"),
+    # Audio/video. `_extract_upload_metadata`, `_extract_cover_to` and
+    # `_extract_media_meta` in main.py all already handle these formats; without
+    # these entries `detect_format` returns None and audio/video orphans are
+    # silently dropped as "unknown/ambiguous MIME". The primary key on each line
+    # is what `file --mime-type` emits here; the extra spellings cover libmagic
+    # version drift (e.g. audio/x-wav vs audio/wav). fmt == ext, matching the
+    # bare extensions in main._AUDIO_EXTS / _VIDEO_EXTS.
+    "audio/mpeg":                     ("mp3", "mp3"),
+    "audio/mp3":                      ("mp3", "mp3"),
+    "audio/x-wav":                    ("wav", "wav"),
+    "audio/wav":                      ("wav", "wav"),
+    "audio/vnd.wave":                 ("wav", "wav"),
+    "audio/ogg":                      ("ogg", "ogg"),
+    "application/ogg":                ("ogg", "ogg"),
+    "audio/flac":                     ("flac", "flac"),
+    "audio/x-flac":                   ("flac", "flac"),
+    "audio/x-m4a":                    ("m4a", "m4a"),
+    "audio/m4a":                      ("m4a", "m4a"),
+    "audio/mp4":                      ("m4a", "m4a"),
+    "audio/x-hx-aac-adts":           ("aac", "aac"),
+    "audio/aac":                      ("aac", "aac"),
+    "audio/x-aac":                    ("aac", "aac"),
+    "video/mp4":                      ("mp4", "mp4"),
+    "video/webm":                     ("webm", "webm"),
+    "video/x-matroska":              ("mkv", "mkv"),
+    "video/x-msvideo":               ("avi", "avi"),
+    "video/avi":                      ("avi", "avi"),
+    "video/quicktime":                ("mov", "mov"),
 }
 
 _FS_FORBIDDEN_RE = re.compile(r"[/\x00-\x1f\x7f]")

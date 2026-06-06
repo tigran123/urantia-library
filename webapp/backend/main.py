@@ -1372,8 +1372,19 @@ async def album_subtree(request: Request, path: str = "", current_user: models.U
                 break
             collect(it["path"], it["name"])
 
-    root_name = os.path.basename(path.rstrip("/")) or "Library"
-    collect(path, root_name, is_root=True)
+    # The walk is synchronous (os.listdir + per-directory DB queries, up to
+    # _ALBUM_MAX_DIRS deep), so run it off the event loop — otherwise a deep
+    # subtree would block every other request for the duration of the walk
+    # (browse pays the per-directory cost once; this walk pays it up to 200x).
+    # Reusing the request-scoped Session in a worker thread is safe here: the
+    # engine sets check_same_thread=False and this coroutine just awaits the
+    # walk, so nothing else touches `db` meanwhile. A root HTTPException raised
+    # inside the thread propagates out of to_thread unchanged (real 403/404).
+    def _walk():
+        root_name = os.path.basename(path.rstrip("/")) or "Library"
+        collect(path, root_name, is_root=True)
+
+    await asyncio.to_thread(_walk)
     return {"path": path, "groups": groups}
 
 # --- Intelligent search -----------------------------------------------------

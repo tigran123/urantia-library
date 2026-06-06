@@ -130,13 +130,26 @@ onBeforeUnmount(() => { subtreeSeq++; subtreeAbort?.abort() })
 // Also watch the query, not just the path: the now-playing bar's "back to origin"
 // link can target the directory we're already on (only ?recursive=1|0 changes, not
 // currentPath), and a path-only watcher would never re-derive then. An explicit
-// param always wins; without one we re-derive the per-directory default only when the
-// directory itself changed, so an unrelated query change (the ?view=album strip, or
-// "open current dir") doesn't clobber a manual header toggle.
-watch([() => props.currentPath, () => route.query.recursive], ([path, q], oldVals) => {
-  if (q === '1') { recursive.value = true; return }
-  if (q === '0') { recursive.value = false; return }
-  if (path !== oldVals?.[0]) recursive.value = !!path && !flatTracks.value.length
+// param always wins; without one we re-derive the per-directory default once per
+// directory, so an unrelated query change (the ?view=album strip, or "open current
+// dir") doesn't clobber a manual header toggle.
+//
+// We key the watcher on flatTracks rather than currentPath: BrowseView updates
+// currentPath synchronously but assigns items (hence flatTracks) only after the
+// awaited /browse call, so a currentPath-keyed watcher would read the *previous*
+// directory's flatTracks and pick the wrong default. flatTracks changes once the
+// new directory's items land; lastDerivedPath gates us to one derivation per
+// directory (an items refresh for the same directory leaves a manual toggle alone).
+let lastDerivedPath: string | undefined
+watch([flatTracks, () => route.query.recursive], () => {
+  const path = props.currentPath
+  const q = route.query.recursive
+  if (q === '1') { recursive.value = true; lastDerivedPath = path; return }
+  if (q === '0') { recursive.value = false; lastDerivedPath = path; return }
+  if (path !== lastDerivedPath) {
+    recursive.value = !!path && !flatTracks.value.length
+    lastDerivedPath = path
+  }
 }, { immediate: true })
 
 // (Re)load the subtree whenever recursive turns on or we navigate while it's on.

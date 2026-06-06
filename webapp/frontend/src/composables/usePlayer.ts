@@ -62,7 +62,11 @@ const VOL_KEY = 'playerVolume'
 // `getItem` returns null when unset, and `Number(null)` is 0 — an in-range value
 // that would pass the check below and mute first-time users. Treat null/empty as
 // "unset" so the 72 default actually applies.
-const storedVolRaw = localStorage.getItem(VOL_KEY)
+// Storage access can throw (disabled/partitioned storage). This runs at module
+// import, so an unguarded throw would fail the whole app bundle — treat any
+// failure as "unset" and fall back to the default volume.
+let storedVolRaw: string | null = null
+try { storedVolRaw = localStorage.getItem(VOL_KEY) } catch { /* storage unavailable */ }
 const storedVol = storedVolRaw == null || storedVolRaw === '' ? NaN : Number(storedVolRaw)
 const volume = ref<number>(Number.isFinite(storedVol) && storedVol >= 0 && storedVol <= 100 ? storedVol : 72)
 
@@ -96,7 +100,7 @@ function getAudio(): HTMLAudioElement {
 
 watch(volume, (v) => {
   if (audio) audio.volume = v / 100
-  localStorage.setItem(VOL_KEY, String(Math.round(v)))
+  try { localStorage.setItem(VOL_KEY, String(Math.round(v))) } catch { /* storage unavailable/full */ }
 })
 
 // ---- transport ----
