@@ -15,7 +15,7 @@ import { recommendedTooltip, bulkResultAlert } from '../lib/recommended'
 import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultiple } from '../composables/useGridItemSize'
 import { formatBytes, fileTypeLabel, formatShortDate } from '../lib/itemFormat'
 import { useEditClearance } from '../composables/useEditClearance'
-import { getFullUrl } from '../lib/assets'
+import { fileUrl, getFullUrl } from '../lib/assets'
 
 const { editClearance } = useEditClearance()
 const route = useRoute()
@@ -455,7 +455,7 @@ const downloadItem = (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
   if (!item || item.is_dir) return
-  const url = getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)
+  const url = fileUrl(item.path)
   const a = document.createElement('a')
   a.href = url
   a.download = item.name

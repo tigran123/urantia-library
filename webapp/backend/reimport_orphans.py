@@ -47,7 +47,10 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from main import (  # noqa: E402
     _extract_upload_metadata,
+    _extract_media_meta,
     _extract_cover_to,
+    _AUDIO_EXTS,
+    _VIDEO_EXTS,
     DATA_DIR,
     COVERS_DIR,
     BOOKS_DIR,
@@ -214,20 +217,23 @@ def apply_orphan(conn: sqlite3.Connection, hash_id: str) -> dict:
             os.stat(vault_path).st_mtime, tz=timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         size = os.path.getsize(vault_path)
+        duration = bitrate = None
+        if fmt in _AUDIO_EXTS or fmt in _VIDEO_EXTS:
+            duration, bitrate = _extract_media_meta(vault_path)
 
         conn.execute(
             "INSERT INTO books "
             "  (id, original_filename, title, author, publisher, published, "
             "   description, tags, series, languages, identifiers, "
-            "   needs_review, clearance, import_date, size) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 100, ?, ?)",
+            "   needs_review, clearance, import_date, size, duration, bitrate) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 100, ?, ?, ?, ?)",
             (
                 hash_id, filename,
                 meta.get("title") or os.path.splitext(filename)[0],
                 meta.get("author"), meta.get("publisher"), meta.get("published"),
                 meta.get("description"), meta.get("tags"), meta.get("series"),
                 meta.get("languages"), meta.get("identifiers"),
-                import_date, size,
+                import_date, size, duration, bitrate,
             ),
         )
         conn.execute(

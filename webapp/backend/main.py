@@ -1139,8 +1139,16 @@ async def upload_avatar(file: UploadFile = File(...), current_user: models.User 
 
     return _user_response_dict(current_user)
 
-@app.get("/api/browse")
-async def browse(request: Request, path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+def _list_directory(path: str, current_user: models.User | None, db: Session):
+    """List one directory with the exact filtering/enrichment /api/browse applies:
+    the BOOKS_DIR traversal guard, the non-admin subdirectory clearance filter, the
+    per-book clearance gate, and ratings/locations/recommendations enrichment.
+
+    Returns (items, accessible_rows): `accessible_rows` is the
+    _accessible_locations_query result for non-admins (None for admins) — browse
+    reuses it for the subtree_has_audio scan without a second query. Raises
+    HTTPException(403/404) exactly like browse. Shared by /api/browse and the
+    /api/album-subtree walk so there is one clearance code path."""
     target_dir = os.path.join(BOOKS_DIR, path)
     if not os.path.abspath(target_dir).startswith(os.path.abspath(BOOKS_DIR)):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -1151,6 +1159,7 @@ async def browse(request: Request, path: str = "", current_user: models.User | N
     # (and 403 on direct access to such a directory) so the topic structure of
     # the library isn't leaked via directory names.
     accessible_subdirs: set[str] = set()
+    rows = None
     if not _is_admin(current_user):
         prefix = f"{path.rstrip('/')}/" if path else ""
         rows = _accessible_locations_query(db, prefix, current_user).all()
@@ -1227,6 +1236,12 @@ async def browse(request: Request, path: str = "", current_user: models.User | N
                         item_data["identifiers"] = book.identifiers
                     item_data["clearance"] = int(book.clearance or 0)
                     item_data["import_date"] = book.import_date
+                    # Audio/video media facts (NULL for other formats); the Album
+                    # view reads these instead of probing each file client-side.
+                    if book.duration is not None:
+                        item_data["duration"] = book.duration
+                    if book.bitrate is not None:
+                        item_data["bitrate"] = book.bitrate
                     if _is_admin(current_user):
                         item_data["last_verified_at"] = book.last_verified_at
                         item_data["last_verified_ok"] = book.last_verified_ok
@@ -1274,9 +1289,92 @@ async def browse(request: Request, path: str = "", current_user: models.User | N
                 it["locations"] = sorted(locs_by_hash.get(h, []))
 
     _attach_recommendations(items, db)
+    return items, rows
+
+
+@app.get("/api/browse")
+async def browse(request: Request, path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    items, rows = _list_directory(path, current_user, db)
+
+    # Whether any audio lives in this directory's subtree — drives the Album view
+    # toggle for directories (e.g. an artist directory of album subdirectories) that
+    # contain no direct audio files of their own. Resolved from the listing when
+    # possible; otherwise one indexed prefix scan over book_locations,
+    # clearance-filtered for non-admins (reusing the materialized `rows`) so the flag
+    # can't leak gated audio. The scan only sees imported audio — direct un-imported
+    # files are covered by the listing check. Known, deliberate gap: audio that is
+    # *only* in un-imported nested subdirectories won't flip this flag (a per-browse
+    # os.walk would pay the whole-subtree cost on every non-audio directory just to
+    # return False); it resolves once that subtree is imported.
+    has_direct_audio = any(
+        not it["is_dir"] and "." in it["name"] and it["name"].rsplit(".", 1)[1].lower() in _AUDIO_EXTS
+        for it in items
+    )
+    if has_direct_audio:
+        subtree_has_audio = True
+    elif not any(it["is_dir"] for it in items):
+        subtree_has_audio = False
+    elif rows is not None:  # non-admin: reuse the accessible locations materialized in _list_directory
+        subtree_has_audio = any(
+            "." in sp and sp.rsplit(".", 1)[1].lower() in _AUDIO_EXTS for (sp,) in rows
+        )
+    else:
+        prefix = f"{path.rstrip('/')}/" if path else ""
+        audio_q = db.query(models.BookLocation.symlink_path).filter(
+            models.BookLocation.symlink_path.like(f"{prefix}%"),
+            or_(*(func.lower(models.BookLocation.symlink_path).like(f"%.{e}") for e in _AUDIO_EXTS)),
+        )
+        subtree_has_audio = audio_q.first() is not None
 
     _record_usage_event(request, "page", user=current_user, path=path or "/")
-    return {"path": path, "items": items}
+    return {"path": path, "items": items, "subtree_has_audio": subtree_has_audio}
+
+
+# Bounds for the recursive Album walk (mirror the caps the old client walker used).
+_ALBUM_MAX_DIRS = 200
+_ALBUM_MAX_TRACKS = 1000
+
+
+@app.get("/api/album-subtree")
+async def album_subtree(request: Request, path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    """Bounded, clearance-filtered recursive walk of `path`, returning audio tracks
+    grouped by the subdirectory they live in (tree order). Replaces the old
+    client-side walk that fetched /api/browse?probe=1 per subdirectory: one request,
+    server-bounded. This is a data fetch for a directory the user already navigated
+    to — /api/browse logged that `page` event — so it records none of its own, or the
+    directory's page views would be double-counted. Reuses _list_directory for
+    identical gating (imported + un-imported audio, per-book clearance, hidden subdirs)."""
+    groups: list[dict] = []
+    state = {"dirs": 0, "tracks": 0}
+
+    def collect(rel_path: str, name: str, is_root: bool = False):
+        if state["dirs"] >= _ALBUM_MAX_DIRS or state["tracks"] >= _ALBUM_MAX_TRACKS:
+            return
+        state["dirs"] += 1
+        try:
+            items, _rows = _list_directory(rel_path, current_user, db)
+        except HTTPException:
+            if is_root:
+                raise          # invalid/forbidden root → real 403/404, like browse
+            return             # gated or vanished subdir → skip silently
+        audio = [
+            it for it in items
+            if not it["is_dir"] and "." in it["name"]
+            and it["name"].rsplit(".", 1)[1].lower() in _AUDIO_EXTS
+        ]
+        if audio:
+            state["tracks"] += len(audio)
+            groups.append({"path": rel_path, "name": name, "tracks": audio})
+        for it in items:
+            if not it["is_dir"]:
+                continue
+            if state["dirs"] >= _ALBUM_MAX_DIRS or state["tracks"] >= _ALBUM_MAX_TRACKS:
+                break
+            collect(it["path"], it["name"])
+
+    root_name = os.path.basename(path.rstrip("/")) or "Library"
+    collect(path, root_name, is_root=True)
+    return {"path": path, "groups": groups}
 
 # --- Intelligent search -----------------------------------------------------
 #
@@ -3377,6 +3475,32 @@ def _extract_upload_metadata(src_path: str, fmt: str) -> dict:
     return out
 
 
+def _extract_media_meta(path: str) -> tuple[Optional[float], Optional[int]]:
+    """Audio/video length (seconds) and container bitrate (bits/sec) via ffprobe.
+    Reads the extension-less vault file by content, so it works on /Books/.data/<id>
+    directly. Returns (None, None) when ffprobe is unavailable or the values are
+    missing/unparseable. These are intrinsic file facts — derive them server-side,
+    never trust a client-supplied value."""
+    try:
+        r = _run(["ffprobe", "-v", "error", "-print_format", "json",
+                  "-show_format", path], timeout=10)
+        if r.returncode != 0:
+            return (None, None)
+        fmt = json.loads(r.stdout or "{}").get("format") or {}
+        raw_dur, raw_br = fmt.get("duration"), fmt.get("bit_rate")
+        duration = float(raw_dur) if raw_dur not in (None, "", "N/A") else None
+        bitrate = int(raw_br) if raw_br not in (None, "", "N/A") else None
+        # Guard against ffprobe's occasional 0/garbage on streams it can't size.
+        if duration is not None and duration <= 0:
+            duration = None
+        if bitrate is not None and bitrate <= 0:
+            bitrate = None
+        return (duration, bitrate)
+    except Exception as e:
+        logging.warning("media meta extraction failed for %s: %s", path, e)
+        return (None, None)
+
+
 def _extract_cover_to(src_path: str, fmt: str, dest_jpg: str) -> Optional[tuple[int, int]]:
     """Run the format-appropriate cover extraction, resize to 300px-wide JPEG
     written at dest_jpg. Returns (width, height) of the saved cover, or None on
@@ -4379,6 +4503,15 @@ async def admin_commit_book(
         vault_size = os.path.getsize(vault_path)
     except OSError:
         vault_size = None  # backfill_sizes.py will pick it up
+    # Intrinsic media facts derived server-side from the vault bytes (never from the
+    # client payload). NULL for non-A/V or if ffprobe can't read it; backfill_durations.py
+    # is the catch-all.
+    media_duration = media_bitrate = None
+    file_ext = os.path.splitext(filename)[1].lstrip(".").lower()
+    if file_ext in _AUDIO_EXTS or file_ext in _VIDEO_EXTS:
+        # ffprobe is a blocking subprocess; run it off the event loop so a slow or
+        # large file doesn't stall other requests for the duration of the probe.
+        media_duration, media_bitrate = await asyncio.to_thread(_extract_media_meta, vault_path)
     book = models.Book(
         id=file_hash,
         title=title,
@@ -4395,6 +4528,8 @@ async def admin_commit_book(
         clearance=int(payload.clearance),
         import_date=_now_iso(),
         size=vault_size,
+        duration=media_duration,
+        bitrate=media_bitrate,
     )
     db.add(book)
     db.add(models.BookLocation(hash_id=file_hash, symlink_path=rel_path))
@@ -4651,12 +4786,22 @@ async def get_file(
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     assert_can_read_path(file_path, current_user, db)
-    _record_usage_event(
-        request, "book_open",
-        user=current_user,
-        hash_id=_resolve_vault_hash(file_path),
-        path=path,
-    )
+    # Log the open, but don't let media streaming inflate the count: an <audio>/
+    # <video> element issues many Range GETs per file (initial buffer + every seek),
+    # so for A/V we count one "open" per play-from-start (no Range, or a Range that
+    # begins at byte 0) and ignore the seek/continuation chunks. Non-media is logged
+    # unconditionally as before. Server-side only — durations are derived at import,
+    # so there is no client metadata-probe to exempt and no way to opt out.
+    ext = os.path.splitext(path)[1].lstrip(".").lower()
+    is_media = ext in _AUDIO_EXTS or ext in _VIDEO_EXTS
+    rng = (request.headers.get("range") or "").replace(" ", "")
+    if not is_media or not rng or rng.startswith("bytes=0-"):
+        _record_usage_event(
+            request, "book_open",
+            user=current_user,
+            hash_id=_resolve_vault_hash(file_path),
+            path=path,
+        )
     return FileResponse(file_path)
 
 def sanitize_fb2_path(path: str) -> str:

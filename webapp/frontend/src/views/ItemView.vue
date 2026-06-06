@@ -9,7 +9,8 @@ import api, {
   getContainedKeys,
   type IntegrityCheckResult, type IntegrityMode, type CommentNode,
 } from '../api'
-import { getFullUrl } from '../lib/assets'
+import { fileUrl, getFullUrl } from '../lib/assets'
+import { formatClockLong } from '../lib/itemFormat'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, FlagIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from '../components/StarRating.vue'
@@ -281,7 +282,7 @@ watch(() => currentUser.value?.email ?? null, () => {
 
 const getDownloadUrl = () => {
   if (!item.value) return ''
-  return getFullUrl(`/api/files/${item.value.path.split('/').map(encodeURIComponent).join('/')}`)
+  return fileUrl(item.value.path)
 }
 
 const formatBytes = (bytes: number, decimals = 2) => {
@@ -666,6 +667,14 @@ const submitReply = async () => {
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.size') }}</th>
                   <td class="px-6 py-3 text-gray-600 dark:text-gray-400">{{ formatBytes(item.size, 0) }} ({{ item.size }} {{ t('app.bytes') }})</td>
+                </tr>
+                <tr v-if="item.duration != null" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.duration') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400 tabular-nums">{{ formatClockLong(item.duration) }}</td>
+                </tr>
+                <tr v-if="item.bitrate != null" class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">{{ t('app.bitrate') }}</th>
+                  <td class="px-6 py-3 text-gray-600 dark:text-gray-400 tabular-nums">{{ Math.round(item.bitrate / 1000) }} kbps</td>
                 </tr>
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
                   <th scope="row" class="px-6 py-3 font-medium text-gray-900 dark:text-gray-100 align-top whitespace-nowrap">

@@ -134,6 +134,8 @@ class Book(Base):
     last_verified_error = Column(String, nullable=True)
     import_date = Column(String, nullable=False)
     size = Column(Integer, nullable=True)
+    duration = Column(Float, nullable=True)   # seconds; audio/video only, from ffprobe
+    bitrate = Column(Integer, nullable=True)  # bits/sec; audio/video only, from ffprobe
 
 class BookLocation(Base):
     __tablename__ = "book_locations"

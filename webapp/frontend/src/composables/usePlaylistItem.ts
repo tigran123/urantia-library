@@ -2,7 +2,7 @@ import { computed, inject, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { fileTypeLabel } from '../lib/itemFormat'
 import { recommendedTooltip } from '../lib/recommended'
-import { getFullUrl } from '../lib/assets'
+import { fileUrl } from '../lib/assets'
 import type { PlaylistItem } from '../api'
 
 // Build the AddToPlaylistPopover `target` from a playlist item. Books carry
@@ -51,7 +51,7 @@ export function usePlaylistItem(props: {
     event.preventDefault()
     event.stopPropagation()
     if (!props.item.path || isDir.value) return
-    const url = getFullUrl(`/api/files/${props.item.path.split('/').map(encodeURIComponent).join('/')}`)
+    const url = fileUrl(props.item.path)
     const a = document.createElement('a')
     a.href = url
     a.download = props.item.name || ''

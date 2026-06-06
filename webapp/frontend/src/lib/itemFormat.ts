@@ -50,6 +50,46 @@ export function formatShortDate(locale: string, iso?: string | null): string {
   }).format(d).replace(/\s*г\.?$/u, '')
 }
 
+// Audio formats mirror the backend `_AUDIO_EXTS` (main.py). Used to decide
+// whether a directory listing can offer the Album view.
+export const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'])
+
+export function isAudioFile(name: string): boolean {
+  const m = (name || '').toLowerCase().match(/\.([^.]+)$/)
+  return !!m && AUDIO_EXTS.has(m[1])
+}
+
+// mm:ss clock for a duration in seconds (player elapsed / track length).
+export function formatClock(sec: number | null | undefined): string {
+  if (sec == null || !isFinite(sec) || sec < 0) return '0:00'
+  const s = Math.round(sec)
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')}`
+}
+
+// H:MM:SS (or M:SS under an hour) for a duration in seconds — precise clock for the
+// ItemView Details panel. Returns '' for unknown/invalid input.
+export function formatClockLong(sec: number | null | undefined): string {
+  if (sec == null || !isFinite(sec) || sec < 0) return ''
+  const s = Math.round(sec)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = s % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return h > 0 ? `${h}:${pad(m)}:${pad(r)}` : `${m}:${pad(r)}`
+}
+
+// Localized album runtime, e.g. "36 min" / "1 hr 4 min". Uses the i18n `t`
+// from the caller so en/ru units stay in one place (i18n `album.runtime_*`).
+export function formatRuntime(sec: number, t: (key: string, named?: Record<string, unknown>) => string): string {
+  const totalMin = Math.round(sec / 60)
+  if (totalMin < 60) return t('album.runtime_min', { n: totalMin })
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return t('album.runtime_hr_min', { h, m })
+}
+
 export function fileTypeLabel(name: string): string | null {
   if (!name) return null
   const n = name.toLowerCase()

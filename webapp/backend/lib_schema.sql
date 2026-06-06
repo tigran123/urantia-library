@@ -52,7 +52,9 @@ CREATE TABLE books (
     last_verified_mode VARCHAR,         -- 'quick' or 'full'
     last_verified_error VARCHAR,        -- Short failure key when last_verified_ok = FALSE
     import_date TEXT NOT NULL,          -- ISO-8601 UTC; source file mtime at migration time, or _now_iso() for webapp uploads
-    size INTEGER                        -- Byte size of /Books/.data/<id>; populated by backfill_sizes.py, NULL until then
+    size INTEGER,                       -- Byte size of /Books/.data/<id>; populated by backfill_sizes.py, NULL until then
+    duration REAL,                      -- Audio/video length in seconds (ffprobe); set at import + backfill_durations.py, NULL until then
+    bitrate INTEGER                     -- Audio/video bitrate in bits/sec (ffprobe); set at import + backfill_durations.py, NULL until then
 );
 
 CREATE INDEX idx_books_clearance ON books(clearance);
@@ -357,4 +359,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '10');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '11');

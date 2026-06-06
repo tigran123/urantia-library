@@ -8,3 +8,10 @@ export function getFullUrl(url?: string | null): string {
   if (!url) return ''
   return (api.defaults.baseURL?.replace('/api', '') || '') + url
 }
+
+// Full `/api/files/...` URL for a library-relative path, encoding each path
+// segment. Single source of truth for every surface that links to or streams a
+// raw library file (reader, browse/search downloads, playlist items, audio player).
+export function fileUrl(path: string): string {
+  return getFullUrl(`/api/files/${path.split('/').map(encodeURIComponent).join('/')}`)
+}

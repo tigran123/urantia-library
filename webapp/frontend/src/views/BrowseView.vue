@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch, inject, type Ref } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, inject, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, unrecommendBooksBulk, getContainedKeys, type IntegrityMode } from '../api'
 import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 import { useEditClearance } from '../composables/useEditClearance'
-import { getFullUrl } from '../lib/assets'
+import { fileUrl, getFullUrl } from '../lib/assets'
 import { pendingServerImports } from '../lib/pendingImports'
 
 const { t, locale } = useI18n({ useScope: 'global' })
@@ -24,6 +24,9 @@ const recommendingBulk = ref(false)
 const importing = ref(false)
 
 const toggleSelectMode = () => {
+  // Select mode is Grid/List-only — never enable it in the (already busy) Album view.
+  // (Guards the Ctrl+M shortcut too; exiting an existing selection still works.)
+  if (!selectMode.value && viewMode.value === 'album') return
   selectMode.value = !selectMode.value
   if (!selectMode.value) clearSelection()
 }
@@ -253,7 +256,9 @@ import StarRating from '../components/StarRating.vue'
 import QualityMark from '../components/QualityMark.vue'
 import { recommendedTooltip, bulkResultAlert } from '../lib/recommended'
 import { gridItemSize, GRID_CLASSES, gridCls } from '../composables/useGridItemSize'
-import { formatBytes, fileTypeLabel } from '../lib/itemFormat'
+import { formatBytes, fileTypeLabel, isAudioFile } from '../lib/itemFormat'
+import AlbumView from '../components/album/AlbumView.vue'
+import AlbumDiscIcon from '../components/album/icons/AlbumDiscIcon.vue'
 
 const route = useRoute()
 const items = ref<any[]>([])
@@ -268,8 +273,17 @@ const RECOMMENDED_DIR_NAME = 'Recommended'
 const isRecommendedDir = (item: any) =>
   currentPath.value === '' && item.is_dir && item.name === RECOMMENDED_DIR_NAME
 const isInRecommended = computed(() => currentPath.value === RECOMMENDED_DIR_NAME)
+// viewMode now has a third value, 'album', shown only for directories that
+// contain audio (see hasAudio). The 'album' value joins the existing shared
+// localStorage['viewMode'] key — other views that read it (PlaylistDetailView)
+// already coerce anything other than 'list' to 'grid', so they're unaffected.
 const savedViewMode = localStorage.getItem('viewMode')
-const viewMode = ref<'grid' | 'list'>(savedViewMode === 'list' ? 'list' : 'grid')
+const viewMode = ref<'grid' | 'list' | 'album'>(
+  savedViewMode === 'list' ? 'list' : savedViewMode === 'album' ? 'album' : 'grid'
+)
+// The mode to fall back to when a directory has no audio (so 'album' never
+// sticks on a non-audio listing).
+const lastNonAlbum = ref<'grid' | 'list'>(savedViewMode === 'list' ? 'list' : 'grid')
 const favoriteIds = ref<Set<string>>(new Set())
 const dirFavorites = ref<Set<string>>(new Set())
 
@@ -350,8 +364,46 @@ const deleteDirectory = async (path: string, name: string, event?: Event) => {
 }
 
 watch(viewMode, (newMode) => {
+  if (newMode !== 'album') lastNonAlbum.value = newMode
   localStorage.setItem('viewMode', newMode)
+  // Switching into Album exits any active selection (select mode is Grid/List-only).
+  if (newMode === 'album' && selectMode.value) toggleSelectMode()
 })
+
+// The Album view is offered when the listing has a direct audio file, or when
+// the backend's subtree scan says audio lives somewhere beneath this directory
+// (e.g. an artist directory of album subdirectories). `subtree_has_audio`
+// arrives in the same /browse response as the items, so there is no pending
+// state to handle. The client-side direct check still matters for un-imported
+// audio files (visible to admins) that the DB scan can't see.
+const hasAudio = computed(() => items.value.some((i: any) => !i.is_dir && isAudioFile(i.name)))
+const subtreeHasAudio = ref(false)
+const albumAvailable = computed(() => hasAudio.value || subtreeHasAudio.value)
+
+// If 'album' was persisted (or active) but we land in a directory with no audio
+// anywhere beneath it, fall back to the last grid/list mode. Fires after each
+// load via the items change below.
+watch(items, () => {
+  if (viewMode.value === 'album' && !albumAvailable.value) viewMode.value = lastNonAlbum.value
+})
+
+// Honor an explicit ?view=album request (the now-playing bar's "open album"
+// jump), even when this component instance is reused across the navigation and
+// keeps its current viewMode. The items watcher above still reverts it if the
+// target directory turns out to have no audio.
+watch(() => route.query.view, (v) => {
+  if (v !== 'album') return
+  viewMode.value = 'album'
+  // One-shot deep-link params (the now-playing bar's "open album" / "back to
+  // origin" jumps): consume them once applied so a later manual switch back to
+  // grid/list — or a manual Include-subdirectories toggle — isn't re-forced on
+  // reload. AlbumView has already read ?recursive at mount, before this nextTick.
+  nextTick(() => {
+    if (route.query.view !== 'album') return
+    const { view: _view, recursive: _recursive, ...rest } = route.query
+    router.replace({ path: route.path, query: rest }).catch(() => {})
+  })
+}, { immediate: true })
 
 const loadPath = async (path: string) => {
   loading.value = true
@@ -361,8 +413,10 @@ const loadPath = async (path: string) => {
     currentPath.value = p
     const res = await api.get('/browse', { params: { path: p } })
     items.value = res.data.items
+    subtreeHasAudio.value = res.data.subtree_has_audio === true
   } catch (err: any) {
     error.value = err.response?.data?.detail || err.message
+    subtreeHasAudio.value = false
   } finally {
     loading.value = false
   }
@@ -417,7 +471,7 @@ const downloadItem = (item: any, event: Event) => {
   event.preventDefault()
   event.stopPropagation()
   if (!item || item.is_dir) return
-  const url = getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}`)
+  const url = fileUrl(item.path)
   const a = document.createElement('a')
   a.href = url
   a.download = item.name
@@ -484,7 +538,8 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
         <button
           v-if="currentUser?.is_admin"
           @click="toggleSelectMode()"
-          class="p-1.5 rounded-md transition-colors border text-sm font-medium flex items-center gap-1"
+          :disabled="viewMode === 'album'"
+          class="p-1.5 rounded-md transition-colors border text-sm font-medium flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           :class="selectMode
             ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-200 dark:hover:bg-emerald-900'
             : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-emerald-600 hover:bg-gray-100 dark:hover:bg-gray-700'"
@@ -510,6 +565,15 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
           >
             <ListBulletIcon class="h-5 w-5" />
           </button>
+          <!-- Album view — directories with audio in their subtree -->
+          <button
+            v-if="albumAvailable"
+            @click="viewMode = 'album'"
+            :class="['p-1.5 rounded-md transition-colors', viewMode === 'album' ? 'bg-white dark:bg-gray-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200']"
+            :title="$t('album.label')"
+          >
+            <AlbumDiscIcon class="h-5 w-5" />
+          </button>
         </div>
       </div>
     </div>
@@ -529,8 +593,17 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
     </div>
 
     <template v-else>
+      <!-- Album View — audio directories only -->
+      <AlbumView
+        v-if="viewMode === 'album'"
+        :items="items"
+        :current-path="currentPath"
+        :favorite-ids="favoriteIds"
+        @membership-changed="onMembershipChanged"
+      />
+
       <!-- Grid View -->
-      <div v-if="viewMode === 'grid'" :class="['grid', GRID_CLASSES[gridItemSize]]">
+      <div v-else-if="viewMode === 'grid'" :class="['grid', GRID_CLASSES[gridItemSize]]">
         <template v-for="item in items" :key="item.name">
           <div
             class="relative group"
@@ -583,7 +656,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <BookmarkIcon v-else :class="gridCls.icon" />
             </button>
             <template v-if="item.is_dir">
-              <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500', gridCls.card]">
+              <a v-if="currentPath.startsWith('Websites')" :href="fileUrl(item.path) + '/'" target="_blank" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500', gridCls.card]">
                 <div :class="['aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors', gridCls.coverMargin]">
                   <QualityMark
                     v-if="isRecommendedDir(item)"
@@ -679,7 +752,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                 <div class="flex items-start justify-between">
                   <div>
                     <template v-if="item.is_dir">
-                      <a v-if="currentPath.startsWith('Websites')" :href="getFullUrl(`/api/files/${item.path.split('/').map(encodeURIComponent).join('/')}/`)" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
+                      <a v-if="currentPath.startsWith('Websites')" :href="fileUrl(item.path) + '/'" target="_blank" class="text-lg font-medium text-blue-600 hover:underline break-words">
                         {{ formatFilename(item.name, item.is_dir) }}
                       </a>
                       <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" class="text-lg font-medium text-blue-600 hover:underline break-words">

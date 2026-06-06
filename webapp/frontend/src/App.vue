@@ -10,9 +10,16 @@ import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import ThemeSwitcher from './components/ThemeSwitcher.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import LegalReacceptanceModal from './components/LegalReacceptanceModal.vue'
+import NowPlayingBar from './components/album/NowPlayingBar.vue'
+import { usePlayer } from './composables/usePlayer'
 import type { CurrentUser } from './api'
 
 const { t, n: nFmt } = useI18n({ useScope: 'global' })
+
+// App-level audio player — drives the persistent now-playing bar below. We read
+// the current track to reserve bottom space so the fixed bar never occludes page
+// content, and `stop` to halt playback when entering an auth route (no session).
+const { currentTrack: playerTrack, stop: stopPlayer, reset: resetPlayer, togglePlay: togglePlayer } = usePlayer()
 
 const searchQuery = ref('')
 const showSearchTips = ref(false)
@@ -78,7 +85,21 @@ watch(isAuthRoute, (newVal) => {
     fetchCurrentUser()
   } else {
     currentUser.value = null
+    // Entering an auth route means there's no usable library session (logout or
+    // termination) — stop playback so audio can't keep going without controls,
+    // and so the next person to sign in on this device doesn't inherit the track.
+    stopPlayer()
   }
+})
+
+// Tear the player down on any identity handover, not just when we land on an
+// auth route: logout pushes straight to /browse (a guest session), where the
+// isAuthRoute watch above never fires — so without this the now-playing bar
+// would keep exposing a higher-clearance track's title/cover and a deep-link to
+// the directory it lives in. The email guard means the every-30s /me heartbeat
+// (which swaps in a fresh object for the same user) doesn't reset playback.
+watch(() => currentUser.value?.email ?? null, (email, prev) => {
+  if (email !== prev) resetPlayer()
 })
 
 // Ctrl/Cmd+X clears the global search box and focuses it. We skip the
@@ -87,6 +108,22 @@ watch(isAuthRoute, (newVal) => {
 // If the user has text selected in an editable field we yield to the native
 // cut behaviour.
 const onGlobalShortcut = (e: KeyboardEvent) => {
+  // Space = play/pause whenever the now-playing bar is up — a global media control,
+  // not tied to the Album view. Skipped while typing or when a focusable control
+  // (which has its own Space behaviour) is focused, and on auth routes (no player).
+  // The readers page with PgUp/PgDn (never Space), so this doesn't steal their nav.
+  if ((e.code === 'Space' || e.key === ' ') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (!playerTrack.value || isAuthRoute.value) return
+    const el = document.activeElement as HTMLElement | null
+    const tag = el?.tagName
+    if (el && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+               tag === 'BUTTON' || tag === 'A' || el.isContentEditable ||
+               el.getAttribute('role') === 'button')) return
+    e.preventDefault()  // stop the page from scrolling
+    togglePlayer()
+    return
+  }
+
   if (!(e.ctrlKey || e.metaKey)) return
   const key = e.key.toLowerCase()
 
@@ -339,6 +376,10 @@ const handleLogout = async () => {
   } catch (e) {
     console.error(e)
   } finally {
+    // Stop/clear playback synchronously here too (the currentUser watch also
+    // fires, but on the next tick) so the now-playing bar never lingers for a
+    // frame into the guest session we're about to land on.
+    resetPlayer()
     currentUser.value = null
     router.push({ name: 'browse' })
   }
@@ -346,7 +387,10 @@ const handleLogout = async () => {
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col relative dark:bg-gray-900">
+  <!-- Reserve space at the very bottom for the fixed now-playing bar so the
+       footer (and page content) clear it. Applied to the root wrapper, not
+       <main>, because the footer is a sibling after <main>. -->
+  <div class="min-h-screen flex flex-col relative dark:bg-gray-900" :style="(playerTrack && !isAuthRoute) ? { paddingBottom: '88px' } : undefined">
     <!-- Auth Language & Theme Switcher -->
     <div v-if="isAuthRoute" class="absolute top-4 right-4 z-20 flex items-center gap-2">
       <ThemeSwitcher />
@@ -646,6 +690,12 @@ const handleLogout = async () => {
       @accepted="onLegalAccepted"
       @signout="handleLogout"
     />
+
+    <!-- Persistent audio player — mounted above the router view so playback
+         continues while the user browses other directories. Hidden on auth chrome
+         (playback is stopped there); on public-share pages it self-hides unless the
+         signed-in viewer has an active track. Renders nothing until a track loads. -->
+    <NowPlayingBar v-if="!isAuthRoute" />
   </div>
 </template>
 
