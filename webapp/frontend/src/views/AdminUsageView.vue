@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
+import { ArrowPathIcon } from '@heroicons/vue/24/outline'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -24,7 +25,21 @@ const currentUser = inject<Ref<{ search_per_page?: number | null } | null>>(
 watch(() => currentUser.value?.search_per_page, () => loadActive())
 
 type Tab = 'overview' | 'geography' | 'books' | 'users' | 'ips' | 'timeline' | 'settings'
-const tab = ref<Tab>('overview')
+const TABS: Tab[] = ['overview', 'geography', 'books', 'users', 'ips', 'timeline', 'settings']
+
+// Remember the active sub-tab across reloads (and revisits) so an operator who
+// reloads while on, say, Timeline isn't bounced back to Overview. Stored in
+// localStorage; an unknown/legacy value falls back to 'overview'.
+const TAB_KEY = 'adminUsageTab'
+function readSavedTab(): Tab {
+  try {
+    const v = localStorage.getItem(TAB_KEY)
+    if (v && (TABS as string[]).includes(v)) return v as Tab
+  } catch { /* storage unavailable */ }
+  return 'overview'
+}
+const tab = ref<Tab>(readSavedTab())
+watch(tab, (v) => { try { localStorage.setItem(TAB_KEY, v) } catch { /* storage unavailable */ } })
 
 type Range = '7' | '30' | '90' | '365'
 const days = ref<Range>('30')
@@ -229,7 +244,7 @@ function formatExtra(extra: Record<string, any> | null): string {
     <div class="flex items-center justify-between flex-wrap gap-3 mb-4 mt-3">
       <div class="flex items-center gap-1">
         <button
-          v-for="tabKey in ['overview', 'geography', 'books', 'users', 'ips', 'timeline', 'settings'] as Tab[]"
+          v-for="tabKey in TABS"
           :key="tabKey"
           @click="tab = tabKey"
           :class="[
@@ -242,6 +257,20 @@ function formatExtra(extra: Record<string, any> | null): string {
       </div>
 
       <div class="flex items-center gap-2">
+        <!-- Loading indicator lives here, on the controls line, so it never
+             occupies (and then vacates) space above the list — that toggle was
+             what made the whole list jump on refresh/reload. Kept always-rendered
+             but `invisible` when idle so the controls don't shift sideways. -->
+        <span class="text-sm text-gray-500 dark:text-gray-400 italic" :class="loading ? '' : 'invisible'">{{ t('admin.usage.loading') }}</span>
+        <button
+          @click="loadActive"
+          :disabled="loading"
+          :title="t('admin.usage.refresh')"
+          :aria-label="t('admin.usage.refresh')"
+          class="inline-flex items-center justify-center h-7 w-7 rounded-md text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <ArrowPathIcon class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+        </button>
         <label class="text-sm text-gray-600 dark:text-gray-400">{{ t('admin.usage.rangeLabel') }}</label>
         <select v-model="days" class="text-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800">
           <option value="7">{{ t('admin.usage.range.7d') }}</option>
@@ -255,8 +284,6 @@ function formatExtra(extra: Record<string, any> | null): string {
     <div v-if="errorMsg" class="mb-4 p-3 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 rounded text-sm">
       {{ errorMsg }}
     </div>
-
-    <div v-if="loading" class="text-sm text-gray-500 italic">{{ t('admin.usage.loading') }}</div>
 
     <!-- Overview --------------------------------------------------------- -->
     <div v-if="tab === 'overview' && overview && !loading">

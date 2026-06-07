@@ -1387,6 +1387,29 @@ async def album_subtree(request: Request, path: str = "", current_user: models.U
     await asyncio.to_thread(_walk)
     return {"path": path, "groups": groups}
 
+
+@app.get("/api/item")
+async def get_item(path: str = "", current_user: models.User | None = Depends(get_optional_user), db: Session = Depends(get_db)):
+    """One file's enriched metadata — the same item shape /api/browse returns for
+    a single listing entry — looked up by listing its parent directory and
+    matching the filename. The reader/ItemView needs the full dict (title, cover,
+    ratings, locations, media facts) for a deep-linked or reloaded file.
+
+    Unlike /api/browse this records NO `page` usage event: opening a book is not a
+    directory navigation, and routing this lookup through /api/browse logged a
+    phantom page view for the parent directory on every book open (double-count).
+    Reuses _list_directory for identical clearance gating + enrichment, so a file
+    the caller can't read (gated, or absent) is simply not in the listing → 404."""
+    p = (path or "").strip("/")
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    parent, _, name = p.rpartition("/")
+    items, _rows = _list_directory(parent, current_user, db)
+    found = next((it for it in items if it["name"] == name), None)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return found
+
 # --- Intelligent search -----------------------------------------------------
 #
 # A query is a sequence of tokens. Every positive token must match somewhere

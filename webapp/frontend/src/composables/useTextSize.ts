@@ -1,9 +1,9 @@
 import { ref, watch } from 'vue'
 
-export type TextSize = 'small' | 'normal' | 'large'
+export type TextSize = 'small' | 'normal' | 'large' | 'xlarge'
 
 const KEY = 'textSize'
-const VALID: TextSize[] = ['small', 'normal', 'large']
+const VALID: TextSize[] = ['small', 'normal', 'large', 'xlarge']
 
 // Root font-size applied to <html>. Because Tailwind text/spacing utilities are
 // rem-based, this scales the whole app UI from one knob. Cover thumbnails use px
@@ -14,6 +14,7 @@ export const TEXT_SIZE_PX: Record<TextSize, string> = {
   small:  '14px',
   normal: '16px',
   large:  '18px',
+  xlarge: '20px',
 }
 
 const stored = localStorage.getItem(KEY)

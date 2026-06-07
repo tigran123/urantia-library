@@ -43,6 +43,7 @@ const TEXT_SIZE_OPTIONS: { id: TextSize; px: string }[] = [
   { id: 'small',  px: TEXT_SIZE_PX.small },
   { id: 'normal', px: TEXT_SIZE_PX.normal },
   { id: 'large',  px: TEXT_SIZE_PX.large },
+  { id: 'xlarge', px: TEXT_SIZE_PX.xlarge },
 ]
 
 const notifPrefs = ref<NotificationPrefs>({
@@ -314,7 +315,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                   v-model="textSize"
                   class="h-4 w-4 text-blue-600 border-gray-300 dark:border-gray-600 focus:ring-blue-500"
                 />
-                <span class="w-16 shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100">
+                <span class="w-24 shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100">
                   {{ t(`settings.text_size_opts.${opt.id}`) }}
                 </span>
                 <span

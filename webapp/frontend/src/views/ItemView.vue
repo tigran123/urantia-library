@@ -232,22 +232,14 @@ const loadItem = async (path: string) => {
   try {
     const p = Array.isArray(path) ? path.join('/') : path || ''
     currentPath.value = p
-    
-    // We need to fetch the file details. We can use the /browse API on the parent directory
-    // and find the specific file.
-    const parts = p.split('/')
-    const fileName = parts.pop()
-    const parentPath = parts.join('/')
-    
-    const res = await api.get('/browse', { params: { path: parentPath } })
-    const foundItem = res.data.items.find((i: any) => i.name === fileName)
-    
-    if (foundItem) {
-      item.value = foundItem
-      document.title = foundItem.name.replace(/\.[^/.]+$/, "")
-    } else {
-      error.value = 'Item not found'
-    }
+
+    // Fetch this one file's metadata via /api/item. It returns the same enriched
+    // item shape as a /browse listing entry but records no `page` usage event —
+    // opening a book is not a directory navigation, and going through /browse
+    // logged a phantom page view for the parent directory on every open.
+    const res = await api.get('/item', { params: { path: p } })
+    item.value = res.data
+    document.title = (res.data.name || '').replace(/\.[^/.]+$/, "")
   } catch (err: any) {
     error.value = err.response?.data?.detail || err.message
   } finally {

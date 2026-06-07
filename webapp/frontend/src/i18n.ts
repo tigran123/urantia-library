@@ -352,7 +352,8 @@ const messages = {
       text_size_opts: {
         small: 'Small',
         normal: 'Normal',
-        large: 'Large'
+        large: 'Large',
+        xlarge: 'X-Large'
       }
     },
     feedback: {
@@ -784,6 +785,7 @@ const messages = {
       usage: {
         tab: 'Usage',
         loading: 'Loading…',
+        refresh: 'Refresh',
         rangeLabel: 'Range',
         range: {
           '7d':   'Last 7 days',
@@ -1344,7 +1346,8 @@ const messages = {
       text_size_opts: {
         small: 'Мелкий',
         normal: 'Обычный',
-        large: 'Крупный'
+        large: 'Крупный',
+        xlarge: 'Очень крупный'
       }
     },
     feedback: {
@@ -1776,6 +1779,7 @@ const messages = {
       usage: {
         tab: 'Активность',
         loading: 'Загрузка…',
+        refresh: 'Обновить',
         rangeLabel: 'Период',
         range: {
           '7d':   'Последние 7 дней',
