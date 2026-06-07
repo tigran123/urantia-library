@@ -19,7 +19,7 @@ import threading
 import xml.etree.ElementTree as ET
 from html import escape as _html_escape
 from html import unescape as _html_unescape
-from PIL import Image
+from PIL import Image, ImageOps
 import djvu.decode
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -1101,42 +1101,78 @@ AVATAR_DIR = os.path.join(DATA_DIR, "avatars")
 os.makedirs(AVATAR_DIR, exist_ok=True)
 app.mount("/api/avatars", StaticFiles(directory=AVATAR_DIR), name="avatars")
 
+def _delete_avatar_file(user_id: int, avatar_url: str | None) -> None:
+    """Remove a user's avatar file from AVATAR_DIR. Guarded so only a file that
+    lives inside AVATAR_DIR and is named with that user's own id is touched;
+    a no-op for None / a foreign / an already-missing file."""
+    if not avatar_url or not avatar_url.startswith("/api/avatars/"):
+        return
+    name = os.path.basename(avatar_url)
+    path = os.path.join(AVATAR_DIR, name)
+    if (name.startswith(f"{user_id}_")
+            and os.path.abspath(path).startswith(os.path.abspath(AVATAR_DIR) + os.sep)
+            and os.path.isfile(path)):
+        try: os.remove(path)
+        except OSError: pass
+
+
+def _process_avatar(raw: bytes, dest_path: str) -> None:
+    """Decode the uploaded bytes and write a normalized 512x512 JPEG to dest_path:
+    bake EXIF orientation, drop alpha/metadata, and center-crop-to-cover so the
+    result is always square regardless of the input. Raises on a non-image (the
+    caller maps that to HTTP 400). The client already sends a square crop; this is
+    the server-side guarantee (bounds size, strips metadata, normalizes format)."""
+    with Image.open(io.BytesIO(raw)) as im:
+        im = ImageOps.exif_transpose(im)
+        im = im.convert("RGB")
+        im = ImageOps.fit(im, (512, 512), Image.LANCZOS)
+        im.save(dest_path, "JPEG", quality=85)
+
+
 @app.post("/api/users/me/avatar", response_model=schemas.UserResponse)
 async def upload_avatar(file: UploadFile = File(...), current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not file.content_type.startswith("image/"):
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid image file")
 
-    ext = file.filename.split(".")[-1]
-    filename = f"{current_user.id}_{uuid.uuid4().hex}.{ext}"
-    filepath = os.path.join(AVATAR_DIR, filename)
+    # Read into memory with a size cap (don't rely on nginx to bound the body).
+    buf = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > _AVATAR_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="Avatar too large")
 
-    # Stream with a size cap. Without it, any logged-in user could fill the
-    # disk now that nginx allows large request bodies through.
-    bytes_written = 0
+    filename = f"{current_user.id}_{uuid.uuid4().hex}.jpg"
+    filepath = os.path.join(AVATAR_DIR, filename)
+    # Pillow decode/resize is CPU-bound and blocking — run it off the event loop.
     try:
-        with open(filepath, "wb") as buffer:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                bytes_written += len(chunk)
-                if bytes_written > _AVATAR_MAX_BYTES:
-                    buffer.close()
-                    os.remove(filepath)
-                    raise HTTPException(status_code=400, detail="Avatar too large")
-                buffer.write(chunk)
-    except HTTPException:
-        raise
-    except Exception as e:
+        await asyncio.to_thread(_process_avatar, bytes(buf), filepath)
+    except Exception:
         try: os.remove(filepath)
         except OSError: pass
-        raise HTTPException(status_code=500, detail=f"Avatar upload failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid image file")
 
-    avatar_url = f"/api/avatars/{filename}"
-    current_user.avatar_url = avatar_url
+    # Remove the user's previous avatar so files don't accumulate (the new file
+    # has a fresh uuid, so it is never the same path).
+    _delete_avatar_file(current_user.id, current_user.avatar_url)
+
+    current_user.avatar_url = f"/api/avatars/{filename}"
     db.commit()
     db.refresh(current_user)
 
+    return _user_response_dict(current_user)
+
+
+@app.delete("/api/users/me/avatar", response_model=schemas.UserResponse)
+async def delete_avatar(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Remove the profile photo: delete the file from disk and clear avatar_url so
+    the UI falls back to the user's initials. Idempotent — still 200 if none set."""
+    _delete_avatar_file(current_user.id, current_user.avatar_url)
+    current_user.avatar_url = None
+    db.commit()
+    db.refresh(current_user)
     return _user_response_dict(current_user)
 
 def _list_directory(path: str, current_user: models.User | None, db: Session):

@@ -466,10 +466,10 @@ const handleLogout = async () => {
             <!-- User Profile Menu Dropdown -->
             <div v-else class="relative ml-2">
               <button @click="isProfileMenuOpen = !isProfileMenuOpen" class="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white focus:outline-none">
-                <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-8 w-8 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
+                <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-10 w-10 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
                 <span
                   v-else
-                  class="h-8 w-8 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-xs font-semibold text-gray-600 dark:text-gray-200"
+                  class="h-10 w-10 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-sm font-semibold text-gray-600 dark:text-gray-200"
                 >{{ userInitials(currentUser) }}</span>
               </button>
 
@@ -585,8 +585,8 @@ const handleLogout = async () => {
               <span>{{ t('playlists.sign_in_to_save') }}</span>
             </router-link>
             <router-link v-else to="/playlists" class="flex items-center" :title="t('playlists.title')">
-              <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-8 w-8 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
-              <span v-else class="h-8 w-8 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-xs font-semibold text-gray-600 dark:text-gray-200">{{ userInitials(currentUser) }}</span>
+              <img v-if="currentUser?.avatar_url" :src="getFullUrl(currentUser.avatar_url)" class="h-10 w-10 object-cover rounded-full border border-gray-200 dark:border-gray-700" alt="Avatar" />
+              <span v-else class="h-10 w-10 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-sm font-semibold text-gray-600 dark:text-gray-200">{{ userInitials(currentUser) }}</span>
             </router-link>
           </div>
         </div>

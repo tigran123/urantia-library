@@ -6,6 +6,7 @@ import { userInitials } from '../userDisplay'
 import { useI18n } from 'vue-i18n'
 import { gridItemSize, type GridItemSize } from '../composables/useGridItemSize'
 import { textSize, TEXT_SIZE_PX, type TextSize } from '../composables/useTextSize'
+import AvatarCropper from './AvatarCropper.vue'
 
 const { t } = useI18n()
 
@@ -21,7 +22,6 @@ const emit = defineEmits<{
 
 const activeTab = ref('Avatar')
 const selectedFile = ref<File | null>(null)
-const previewUrl = ref<string | null>(null)
 const isUploading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -130,9 +130,10 @@ const saveSearchSettings = async () => {
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   if (target.files && target.files.length > 0) {
-    selectedFile.value = target.files[0]
-    previewUrl.value = URL.createObjectURL(selectedFile.value)
+    selectedFile.value = target.files[0]  // entering crop mode — the template shows AvatarCropper
   }
+  // Reset so picking the *same* file again still fires @change.
+  target.value = ''
 }
 
 const getFullUrl = (url: string | undefined) => {
@@ -140,11 +141,13 @@ const getFullUrl = (url: string | undefined) => {
   return api.defaults.baseURL?.replace('/api', '') + url
 }
 
-const uploadAvatar = async () => {
-  if (!selectedFile.value) return
+// The cropper emits a finished square JPEG Blob; upload it to the existing
+// endpoint (the backend re-encodes + normalizes server-side).
+const onCropped = async (blob: Blob) => {
+  if (isUploading.value) return
   isUploading.value = true
   const formData = new FormData()
-  formData.append('file', selectedFile.value)
+  formData.append('file', blob, 'avatar.jpg')
   try {
     const response = await api.post('/users/me/avatar', formData, {
       headers: {
@@ -159,14 +162,31 @@ const uploadAvatar = async () => {
   } finally {
     isUploading.value = false
     selectedFile.value = null
-    previewUrl.value = null
+  }
+}
+
+const resetSelection = () => { selectedFile.value = null }
+
+// Delete the profile photo: clears avatar_url server-side (and removes the file
+// on disk), so the UI falls back to the initials. Stays in the modal.
+const isRemoving = ref(false)
+const removeAvatar = async () => {
+  if (isRemoving.value) return
+  isRemoving.value = true
+  try {
+    const response = await api.delete('/users/me/avatar')
+    emit('update-user', response.data)
+  } catch (error) {
+    console.error('Failed to remove avatar', error)
+    alert('Failed to remove avatar')
+  } finally {
+    isRemoving.value = false
   }
 }
 
 const close = () => {
   emit('close')
   selectedFile.value = null
-  previewUrl.value = null
 }
 
 // Esc closes the dialog, matching the X button and backdrop click. The
@@ -384,11 +404,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
           <div v-if="activeTab === 'Avatar'">
             <h4 class="text-md font-medium text-gray-900 dark:text-white mb-4">{{ t('settings.profile_picture') }}</h4>
-            <div class="flex items-center space-x-6">
+
+            <!-- Crop mode: zoom/reposition the chosen image, then save -->
+            <AvatarCropper
+              v-if="selectedFile"
+              :file="selectedFile"
+              @crop="onCropped"
+              @cancel="resetSelection"
+            />
+
+            <!-- Otherwise: current avatar + choose-file entry point -->
+            <div v-else class="flex items-center space-x-6">
               <div class="shrink-0">
                 <img
-                  v-if="previewUrl || user?.avatar_url"
-                  :src="previewUrl || getFullUrl(user?.avatar_url ?? undefined)"
+                  v-if="user?.avatar_url"
+                  :src="getFullUrl(user?.avatar_url ?? undefined)"
                   class="h-24 w-24 object-cover rounded-full border border-gray-200 dark:border-gray-700"
                   alt="Avatar"
                 />
@@ -396,7 +426,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                   <span class="text-gray-500 dark:text-gray-300 text-2xl font-semibold">{{ userInitials(user) }}</span>
                 </div>
               </div>
-              <div class="flex items-center gap-3">
+              <!-- Stacked vertically so both buttons stay visible on narrow
+                   screens (side-by-side overflowed the panel on mobile). -->
+              <div class="flex flex-col gap-2">
                 <input
                   ref="fileInput"
                   type="file"
@@ -412,19 +444,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                 >
                   {{ t('settings.choose_file') }}
                 </button>
-                <span class="text-sm text-gray-500 dark:text-gray-400 truncate" :title="selectedFile?.name || ''">
-                  {{ selectedFile?.name || t('settings.no_file_chosen') }}
-                </span>
+                <button
+                  v-if="user?.avatar_url"
+                  type="button"
+                  @click="removeAvatar"
+                  :disabled="isRemoving"
+                  class="px-4 py-2 rounded-md text-sm font-semibold bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {{ t('settings.remove_photo') }}
+                </button>
               </div>
-            </div>
-            <div class="mt-6 flex justify-end">
-              <button
-                @click="uploadAvatar"
-                :disabled="!selectedFile || isUploading"
-                class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {{ isUploading ? t('settings.uploading') : t('settings.save_avatar') }}
-              </button>
             </div>
           </div>
         </div>
