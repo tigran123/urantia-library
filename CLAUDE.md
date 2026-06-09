@@ -50,6 +50,19 @@ The unit file checked into the repo (`webapp/urantia-library.service`) is the pr
 
 `webapp/start.sh` is idempotent: it creates `backend/.venv` via `uv` and runs `npm ci && npm run build` if `frontend/dist` is missing, then `exec`s uvicorn. The built SPA is served by `app.mount("/", StaticFiles(directory="../frontend/dist", html=True))` at the bottom of `main.py` — there is no SPA fallback handler, which is why the frontend uses hash routing.
 
+### System prerequisites (OS packages + Python version)
+
+The backend's Python interpreter is pinned by `webapp/backend/.python-version` (currently `3.12`) so `uv venv` builds against a uv-managed standalone CPython 3.12.x **regardless of the host OS Python**. This keeps dev identical to prod (Ubuntu 22 / 3.12.13) and sidesteps the fact that `uvloop` and `httptools` — both pulled in by `uvicorn[standard]` — ship no cp314 wheels yet (so a host on Python 3.14, e.g. Ubuntu 26, would otherwise fail `uv pip sync`). Don't remove the pin without confirming uvloop/httptools have 3.14 wheels.
+
+The app also needs OS-level packages that are **not** in `requirements.txt`:
+- Build deps for the sdist-only `djvulibre-python` C extension (compiles at install time): `libdjvulibre-dev`, `pkg-config`, `build-essential`. Without pkg-config you get `RuntimeError: cannot determine DjVuLibre version` during `uv pip sync`. (uv's standalone CPython bundles its own headers, so no `python3-dev` needed.)
+- CLI tools invoked via subprocess from `main.py` (`_run`): `poppler-utils` (`pdfinfo`, `pdftoppm`), `djvulibre-bin` (`djvused`, `ddjvu`), `calibre` (`ebook-meta`), `ffmpeg` (`ffprobe`, `ffmpeg`). Missing tools degrade gracefully (metadata/cover extraction is skipped), they don't block startup.
+
+```
+sudo apt install libdjvulibre-dev pkg-config build-essential \
+                 poppler-utils djvulibre-bin calibre ffmpeg
+```
+
 ### Running the backend manually (rare)
 
 The systemd unit is the normal path even in dev. If you do need to run uvicorn by hand (e.g. attaching a debugger), source `secrets.env` first so `JWT_SECRET_KEY`, `COOKIE_SECURE`, `SMTP_*`, and `APP_URL` are all set — otherwise JWTs fall back to the hardcoded dev secret in `security.py`, the auth cookie defaults to `Secure=true` (which the browser drops over http), and any code path that sends mail will blow up.
