@@ -204,6 +204,105 @@ def test_admin_usage_by_country_groups_correctly(app_ctx, monkeypatch):
     assert am["events"] >= 2
 
 
+def test_share_records_playlist_share_not_visibility(app_ctx, monkeypatch):
+    """Sharing a playlist (POST .../share, private->public) emits a dedicated
+    `playlist_share` event, not the generic `playlist_visibility`. Unshare
+    (going private) still emits `playlist_visibility`."""
+    helpers, _, TestSession = app_ctx
+    main = helpers["main"]
+    models = helpers["models"]
+    _mock_geo(monkeypatch, main)
+
+    helpers["make_user"]("sharer@example.com")
+    c = helpers["client_for"]("sharer@example.com")
+
+    pid = c.post("/api/playlists", json={"name": "L"}).json()["id"]
+    r = c.post(f"/api/playlists/{pid}/share")
+    assert r.status_code == 200, r.text
+
+    ev = _last_event(TestSession, models, kind="playlist_share")
+    assert ev is not None
+    assert ev.user_id is not None
+    import json
+    extra = json.loads(ev.extra_json)
+    assert extra["playlist_id"] == pid
+    # The share action must not also emit a generic visibility event.
+    assert _count_events(TestSession, models, kind="playlist_visibility") == 0
+
+    # Going private still records playlist_visibility (only the public->share
+    # path moved to the dedicated kind).
+    c.delete(f"/api/playlists/{pid}/share")
+    assert _count_events(TestSession, models, kind="playlist_visibility") == 1
+
+
+def test_copy_records_playlist_copy_with_self_copy_flag(app_ctx, monkeypatch):
+    """Copying a shared playlist emits `playlist_copy`. The actor is the copier,
+    and extra.self_copy distinguishes a copy by another user from a self-copy."""
+    helpers, _, TestSession = app_ctx
+    main = helpers["main"]
+    models = helpers["models"]
+    _mock_geo(monkeypatch, main)
+
+    owner_id = helpers["make_user"]("owner@example.com")
+    viewer_id = helpers["make_user"]("viewer@example.com")
+    owner = helpers["client_for"]("owner@example.com")
+    viewer = helpers["client_for"]("viewer@example.com")
+
+    pid = owner.post("/api/playlists", json={"name": "Src"}).json()["id"]
+    token = owner.post(f"/api/playlists/{pid}/share").json()["token"]
+
+    import json
+    # A different user copies it -> self_copy False, source owner recorded.
+    r = viewer.post(f"/api/shared/{token}/copy")
+    assert r.status_code == 200, r.text
+    new_id = r.json()["id"]
+    ev = _last_event(TestSession, models, kind="playlist_copy")
+    assert ev is not None
+    assert ev.user_id == viewer_id
+    extra = json.loads(ev.extra_json)
+    assert extra["self_copy"] is False
+    assert extra["source_owner_id"] == owner_id
+    assert extra["source_playlist_id"] == pid
+    assert extra["new_playlist_id"] == new_id
+
+    # The owner copying their own shared list -> self_copy True.
+    owner.post(f"/api/shared/{token}/copy")
+    ev2 = _last_event(TestSession, models, kind="playlist_copy")
+    assert ev2 is not None
+    assert ev2.user_id == owner_id
+    assert json.loads(ev2.extra_json)["self_copy"] is True
+
+
+def test_share_link_copied_records_event_owner_only(app_ctx, monkeypatch):
+    """Clicking "Copy link" in the Share dialog pings POST .../share-link-copied,
+    which records a `playlist_link_copy` event. Owner-gated: a non-owner is
+    forbidden and records nothing."""
+    helpers, _, TestSession = app_ctx
+    main = helpers["main"]
+    models = helpers["models"]
+    _mock_geo(monkeypatch, main)
+
+    owner_id = helpers["make_user"]("owner@example.com")
+    helpers["make_user"]("other@example.com")
+    owner = helpers["client_for"]("owner@example.com")
+    other = helpers["client_for"]("other@example.com")
+
+    pid = owner.post("/api/playlists", json={"name": "L"}).json()["id"]
+    owner.post(f"/api/playlists/{pid}/share")
+
+    # A non-owner cannot record against someone else's playlist (and no row).
+    assert other.post(f"/api/playlists/{pid}/share-link-copied").status_code == 403
+    assert _count_events(TestSession, models, kind="playlist_link_copy") == 0
+
+    r = owner.post(f"/api/playlists/{pid}/share-link-copied")
+    assert r.status_code == 200, r.text
+    ev = _last_event(TestSession, models, kind="playlist_link_copy")
+    assert ev is not None
+    assert ev.user_id == owner_id
+    import json
+    assert json.loads(ev.extra_json)["playlist_id"] == pid
+
+
 def test_geoip_lookup_failure_does_not_break_request(app_ctx, monkeypatch):
     """If _geo_lookup raises, the request must still succeed and the event
     must still be recorded with NULL geo. The recorder swallows exceptions

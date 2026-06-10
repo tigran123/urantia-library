@@ -400,7 +400,9 @@ def test_playlist_actions_record_usage_events(app_ctx):
 
     pid = c.post("/api/playlists", json={"name": "L"}).json()["id"]      # playlist_create
     item = c.post(f"/api/playlists/{pid}/items", json={"book_hash_id": _h(1)}).json()  # playlist_add_item
-    c.post(f"/api/playlists/{pid}/share")                                # playlist_visibility
+    c.post(f"/api/playlists/{pid}/share")                                # playlist_share
+    c.post(f"/api/playlists/{pid}/share-link-copied")                    # playlist_link_copy
+    c.delete(f"/api/playlists/{pid}/share")                              # playlist_visibility (-> private)
     c.delete(f"/api/playlists/{pid}/items/{item['id']}")                 # playlist_remove_item
     c.delete(f"/api/playlists/{pid}")                                    # playlist_delete
 
@@ -409,7 +411,8 @@ def test_playlist_actions_record_usage_events(app_ctx):
         kinds = [r[0] for r in db.query(models.UsageEvent.kind).all()]
     finally:
         db.close()
-    for k in ("playlist_create", "playlist_add_item", "playlist_visibility",
+    for k in ("playlist_create", "playlist_add_item", "playlist_share",
+              "playlist_link_copy", "playlist_visibility",
               "playlist_remove_item", "playlist_delete"):
         assert k in kinds, f"missing {k}: {kinds}"
 

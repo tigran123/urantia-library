@@ -6874,9 +6874,9 @@ async def share_playlist(playlist_id: int, request: Request, current_user: model
     db.commit()
     db.refresh(pl)
     if not was_public:
-        _record_usage_event(request, "playlist_visibility", user=current_user,
+        _record_usage_event(request, "playlist_share", user=current_user,
                             path=f"playlists/{pl.id}",
-                            extra={"playlist_id": pl.id, "name": pl.name, "visibility": "public"})
+                            extra={"playlist_id": pl.id, "name": pl.name})
     return {"token": pl.share_token, "visibility": pl.visibility}
 
 
@@ -6894,6 +6894,19 @@ async def unshare_playlist(playlist_id: int, request: Request, current_user: mod
                             path=f"playlists/{playlist_id}",
                             extra={"playlist_id": playlist_id, "name": pl.name, "visibility": "private"})
     return {"visibility": "private"}
+
+
+@app.post("/api/playlists/{playlist_id}/share-link-copied")
+async def note_share_link_copied(playlist_id: int, request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Telemetry-only: the owner clicked "Copy link" in the Share dialog. Records
+    a playlist_link_copy usage event and does nothing else (no state change).
+    Owner-gated via _get_owned_playlist so the count reflects deliberate
+    link-grabs by the playlist owner; the frontend calls it fire-and-forget."""
+    pl = _get_owned_playlist(db, playlist_id, current_user)
+    _record_usage_event(request, "playlist_link_copy", user=current_user,
+                        path=f"playlists/{pl.id}",
+                        extra={"playlist_id": pl.id, "name": pl.name})
+    return {"ok": True}
 
 
 @app.get("/api/shared/{token}")
@@ -6940,7 +6953,7 @@ async def get_shared_playlist(token: str, current_user: models.User | None = Dep
 
 
 @app.post("/api/shared/{token}/copy")
-async def copy_shared_playlist(token: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def copy_shared_playlist(token: str, request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Signed-in viewer makes an owned, private copy snapshotting only the items
     they were allowed to see. The new playlist is theirs to edit/reorder."""
     pl = db.query(models.Playlist).filter(models.Playlist.share_token == token).first()
@@ -6983,6 +6996,16 @@ async def copy_shared_playlist(token: str, current_user: models.User = Depends(g
             pos += 1
     db.commit()
     db.refresh(copy)
+    _record_usage_event(request, "playlist_copy", user=current_user,
+                        path=f"shared/{token}",
+                        extra={
+                            "source_playlist_id": pl.id,
+                            "source_owner_id": pl.owner_id,
+                            "new_playlist_id": copy.id,
+                            "name": pl.name,
+                            "item_count": pos,
+                            "self_copy": current_user.id == pl.owner_id,
+                        })
     return {"id": copy.id, "item_count": pos}
 
 
@@ -7839,7 +7862,8 @@ _USAGE_KINDS_ALL = ("page", "book_open", "search", "login", "register",
                     "recommend", "unrecommend",
                     "playlist_create", "playlist_delete",
                     "playlist_add_item", "playlist_remove_item",
-                    "playlist_visibility")
+                    "playlist_visibility", "playlist_share", "playlist_copy",
+                    "playlist_link_copy")
 _enabled_kinds: frozenset[str] = frozenset(_USAGE_KINDS_ALL)
 
 

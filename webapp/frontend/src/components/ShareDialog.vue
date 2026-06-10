@@ -9,7 +9,7 @@ import {
   XMarkIcon, LinkIcon, GlobeAltIcon, LockClosedIcon,
   InformationCircleIcon, CheckCircleIcon, ClipboardDocumentIcon,
 } from '@heroicons/vue/24/outline'
-import { sharePlaylist, unsharePlaylist, type PlaylistSummary, type PlaylistItem, type PlaylistVisibility } from '../api'
+import { sharePlaylist, unsharePlaylist, notePlaylistLinkCopied, type PlaylistSummary, type PlaylistItem, type PlaylistVisibility } from '../api'
 
 const props = defineProps<{ playlist: PlaylistSummary; items: PlaylistItem[] }>()
 const emit = defineEmits<{
@@ -71,6 +71,10 @@ const makePrivate = async () => {
 }
 
 const copy = async () => {
+  // Record the click intent (fire-and-forget), independent of the clipboard
+  // write — which can fail on plain-HTTP LANs where navigator.clipboard is
+  // unavailable, so gating telemetry on its success would undercount.
+  notePlaylistLinkCopied(props.playlist.id).catch(() => { /* telemetry best-effort */ })
   try {
     await navigator.clipboard.writeText(shareUrl.value)
     copied.value = true

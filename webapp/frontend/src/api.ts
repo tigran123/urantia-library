@@ -662,6 +662,11 @@ export const sharePlaylist = (id: number) =>
 export const unsharePlaylist = (id: number) =>
   api.delete<{ visibility: PlaylistVisibility }>(`/playlists/${id}/share`)
 
+// Telemetry-only: the owner clicked "Copy link" in the Share dialog. Records a
+// playlist_link_copy usage event; call fire-and-forget (no state change).
+export const notePlaylistLinkCopied = (id: number) =>
+  api.post<{ ok: boolean }>(`/playlists/${id}/share-link-copied`)
+
 export const getSharedPlaylist = (token: string) =>
   api.get<SharedPlaylist>(`/shared/${encodeURIComponent(token)}`)
 
