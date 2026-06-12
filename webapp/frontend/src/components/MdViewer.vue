@@ -78,7 +78,13 @@ const fontFamily = computed(
   () => FONT_OPTIONS.find(o => o.id === fontFamilyId.value)?.stack || FONT_OPTIONS[0].stack
 )
 
-const isTxt = computed(() => sourceFilename(props.source).toLowerCase().endsWith('.txt'))
+const isTxt = computed(() => {
+  // Ignore a trailing .zip wrapper so notes.txt.zip counts as txt, mirroring
+  // the backend's _text_inner_ext. (.md.zip/.markdown.zip stay non-txt.)
+  let name = sourceFilename(props.source).toLowerCase()
+  if (name.endsWith('.zip')) name = name.slice(0, -4)
+  return name.endsWith('.txt')
+})
 
 const scrollEl = ref<HTMLElement | null>(null)
 const contentEl = ref<HTMLElement | null>(null)
@@ -397,7 +403,7 @@ onBeforeUnmount(() => {
         <div
           v-if="!rawMode"
           ref="contentEl"
-          class="md-content w-full max-w-5xl mx-auto px-4 sm:px-5 lg:px-6 py-8 leading-relaxed"
+          class="md-content w-full px-4 sm:px-6 lg:px-8 py-8 leading-relaxed"
           :class="{ 'md-content--txt': isTxt }"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
           v-html="html"
@@ -405,7 +411,7 @@ onBeforeUnmount(() => {
         ></div>
         <pre
           v-else
-          class="md-raw w-full max-w-5xl mx-auto px-4 sm:px-5 lg:px-6 py-8 whitespace-pre-wrap break-words"
+          class="md-raw w-full px-4 sm:px-6 lg:px-8 py-8 whitespace-pre-wrap break-words"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
         >{{ raw }}</pre>
         <AnnotationPopover
