@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useImmersive } from '../composables/useImmersive'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import { Bars3Icon, ChevronDoubleLeftIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
@@ -30,15 +31,11 @@ const authors = ref<string[]>([])
 const notes = ref<Record<string, string>>({})
 const toc = ref<TocEntry[]>([])
 const tocOpen = ref(true)
-const immersive = ref(false)
-
-const toggleImmersive = () => { immersive.value = !immersive.value }
+const { immersive, toggleImmersive } = useImmersive()
 
 watch(immersive, (v) => {
-  document.body.style.overflow = v ? 'hidden' : ''
-  document.documentElement.style.overflow = v ? 'hidden' : ''
   if (v) tocOpen.value = false
-})
+}, { immediate: true })
 
 const onKeyDown = (e: KeyboardEvent) => {
   if (e.key === 'Escape' && immersive.value) {
@@ -312,8 +309,6 @@ watch(() => sourceLoadKey(props.source), () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
-  document.body.style.overflow = ''
-  document.documentElement.style.overflow = ''
   if (saveTimeout) {
     clearTimeout(saveTimeout)
     const a = findTopAnchor()
@@ -421,7 +416,7 @@ onBeforeUnmount(() => {
       >
         <div
           ref="contentEl"
-          class="fb2-content w-full max-w-5xl mx-auto px-4 sm:px-5 lg:px-6 py-8 leading-relaxed"
+          class="fb2-content w-full px-4 sm:px-5 lg:px-6 py-8 leading-relaxed"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
           v-html="html"
           @click="onContentClick"

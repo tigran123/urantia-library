@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useImmersive } from '../composables/useImmersive'
 import ePub, { Book, Rendition, type Location } from 'epubjs'
 import type { NavItem } from 'epubjs/types/navigation'
 import api from '../api'
@@ -40,7 +41,7 @@ const toc = ref<NavItem[]>([])
 const tocOpen = ref(true)
 const bookTitle = ref('')
 const bookAuthors = ref<string[]>([])
-const immersive = ref(false)
+const { immersive, toggleImmersive } = useImmersive()
 
 const annotationsApi = useAnnotations(hashId)
 const annoSidebarOpen = ref(false)
@@ -343,8 +344,6 @@ const onTocNavigate = (href: string) => {
 const prevPage = () => { if (rendition) rendition.prev() }
 const nextPage = () => { if (rendition) rendition.next() }
 
-const toggleImmersive = () => { immersive.value = !immersive.value }
-
 const onKeyDown = (e: KeyboardEvent) => {
   if (!immersive.value) return
   const target = e.target as HTMLElement | null
@@ -354,16 +353,14 @@ const onKeyDown = (e: KeyboardEvent) => {
   else if (e.key === 'PageUp') { e.preventDefault(); prevPage() }
 }
 
-// When entering immersive: lock body scroll so accidental swipes near the
-// page edges don't drift the underlying app. When leaving: restore.
 // The ResizeObserver picks up the dimensional change and handles
 // repagination, so no explicit resize+redisplay is needed here — calling
 // resize() ourselves caused the rendition to drop the current CFI.
+// immediate so a refresh into immersive (immersive=1 in the URL) starts with
+// the TOC closed, matching a live toggle.
 watch(immersive, (v) => {
-  document.body.style.overflow = v ? 'hidden' : ''
-  document.documentElement.style.overflow = v ? 'hidden' : ''
   if (v) tocOpen.value = false
-})
+}, { immediate: true })
 
 const initEpub = async () => {
   if (!viewer.value) return
@@ -507,8 +504,6 @@ onBeforeUnmount(() => {
   clearTimeout(annoReloadTimeout)
   themeObs?.disconnect()
   themeObs = null
-  document.body.style.overflow = ''
-  document.documentElement.style.overflow = ''
   destroyBook()
 })
 </script>

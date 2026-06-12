@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useImmersive } from '../composables/useImmersive'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import {
@@ -43,7 +44,7 @@ const oddOnRight = ref(true)
 // lone cover in odd-right mode, or a lone last page).
 const leftPage = ref<number | null>(null)
 const rightPage = ref<number | null>(null)
-const immersive = ref(false)
+const { immersive, toggleImmersive } = useImmersive()
 const rootEl = ref<HTMLElement | null>(null)
 const container = ref<HTMLElement | null>(null)
 
@@ -109,19 +110,12 @@ const tocOpen = ref(false)
 // Drag-to-pan when the page overflows the scroll container.
 const { isDragging: isPanning, canPan, onMouseDown: onPanMouseDown, updateCanPan } = useScrollPan(container)
 
-const toggleImmersive = () => { immersive.value = !immersive.value }
-
-// Lock body scroll while immersive so accidental swipes near the page edges
-// don't drift the underlying app, and to ensure the floating controls don't
-// sit behind the browser chrome.
 // Native CSS resize (and the content-tracking auto height) writes *inline*
 // width and height on the root, which would override the `h-dvh` class in the
 // fixed immersive branch and pin the fullscreen viewer at the dragged size.
 // Stash the inline size on enter, restore it on exit.
 let stashedInlineSize: { width: string; height: string } | null = null
 watch(immersive, (v) => {
-  document.body.style.overflow = v ? 'hidden' : ''
-  document.documentElement.style.overflow = v ? 'hidden' : ''
   if (v) tocOpen.value = false
   if (!rootEl.value) return
   if (v) {
@@ -182,8 +176,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
-  document.body.style.overflow = ''
-  document.documentElement.style.overflow = ''
   resizeObs?.disconnect()
   resizeObs = null
   if (resizeTimer) clearTimeout(resizeTimer)

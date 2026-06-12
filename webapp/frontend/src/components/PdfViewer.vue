@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useImmersive } from '../composables/useImmersive'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask, PageViewport } from 'pdfjs-dist'
@@ -117,7 +118,7 @@ const customScale = ref(1)
 
 const toc = ref<PdfOutlineNode[]>([])
 const tocOpen = ref(false)
-const immersive = ref(false)
+const { immersive, toggleImmersive } = useImmersive()
 const textSelectEnabled = ref(false)
 
 const annotationsApi = useAnnotations(hashId)
@@ -695,8 +696,6 @@ const onTocNavigate = (page: number) => {
   if (immersive.value) tocOpen.value = false
 }
 
-const toggleImmersive = () => { immersive.value = !immersive.value }
-
 // PgDn/PgUp scroll the viewport within the current page; only when already
 // at the bottom/top does the keypress flip to the next/prev page (which then
 // lands at the top/bottom of the new page via nextPage/prevPage).
@@ -747,8 +746,6 @@ const onKeyDown = (e: KeyboardEvent) => {
 // Stash the inline size on enter, restore it on exit.
 let stashedInlineSize: { width: string; height: string } | null = null
 watch(immersive, (v) => {
-  document.body.style.overflow = v ? 'hidden' : ''
-  document.documentElement.style.overflow = v ? 'hidden' : ''
   if (v) tocOpen.value = false
   if (!rootEl.value) return
   if (v) {
@@ -867,8 +864,6 @@ watch(() => sourceLoadKey(props.source), async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
-  document.body.style.overflow = ''
-  document.documentElement.style.overflow = ''
   destroy()
 })
 </script>

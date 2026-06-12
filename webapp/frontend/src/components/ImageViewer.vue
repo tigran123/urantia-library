@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useImmersive } from '../composables/useImmersive'
 import { useI18n } from 'vue-i18n'
 import { MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon, ArrowPathIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
 
@@ -14,14 +15,7 @@ const zoom = ref(1)
 const tx = ref(0)
 const ty = ref(0)
 const isDragging = ref(false)
-const immersive = ref(false)
-
-const toggleImmersive = () => { immersive.value = !immersive.value }
-
-watch(immersive, (v) => {
-  document.body.style.overflow = v ? 'hidden' : ''
-  document.documentElement.style.overflow = v ? 'hidden' : ''
-})
+const { immersive, toggleImmersive } = useImmersive()
 
 const onKeyDown = (e: KeyboardEvent) => {
   if (e.key === 'Escape' && immersive.value) {
@@ -147,8 +141,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
-  document.body.style.overflow = ''
-  document.documentElement.style.overflow = ''
   window.removeEventListener('mousemove', onWindowMouseMove)
   window.removeEventListener('mouseup', onWindowMouseUp)
 })
