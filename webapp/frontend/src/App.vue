@@ -634,6 +634,8 @@ const handleLogout = async () => {
       </template>
       <span v-else>&nbsp;</span>
       <div class="mt-2 text-xs">
+        <router-link :to="{ name: 'welcome' }" class="hover:underline">{{ t('app.welcome') }}</router-link>
+        <span class="mx-2">·</span>
         <router-link :to="{ name: 'privacy' }" class="hover:underline">{{ t('app.legal.privacy') }}</router-link>
         <span class="mx-2">·</span>
         <router-link :to="{ name: 'terms' }" class="hover:underline">{{ t('app.legal.terms') }}</router-link>

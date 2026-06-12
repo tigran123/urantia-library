@@ -22,6 +22,7 @@ import AdminFeedbackSettingsView from '../views/AdminFeedbackSettingsView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import PrivacyView from '../views/PrivacyView.vue'
 import TermsView from '../views/TermsView.vue'
+import WelcomeView from '../views/WelcomeView.vue'
 import MyActivityView from '../views/MyActivityView.vue'
 import AdminUsageView from '../views/AdminUsageView.vue'
 
@@ -147,6 +148,11 @@ const router = createRouter({
       path: '/admin/audit',
       name: 'admin-audit',
       component: AdminAuditView
+    },
+    {
+      path: '/welcome',
+      name: 'welcome',
+      component: WelcomeView
     },
     {
       path: '/privacy',

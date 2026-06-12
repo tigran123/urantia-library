@@ -1,178 +1,151 @@
 # Urantia Library
 
-Welcome to the _Urantia Library_ — a curated, in-browser reading library for a
-personal collection of books, manuscripts, dictionaries, encyclopedias, and
-other reference material. Everything is read directly in your browser; nothing
-needs to be installed.
+A self-hosted, multi-format reading library that runs entirely in the browser.
+It serves a curated collection of books, manuscripts, dictionaries, and other
+reference material — readable inline (PDF, EPUB, DJVU, FB2, Markdown, HTML, and
+images) with reading-progress, highlights, ratings, comments, playlists, and a
+built-in feedback/contact-admin system.
 
-The library is organised by topic. Use the navigation in the top bar to browse
-the directory tree, search by title or author, or jump to your bookshelf and
-playlists.
+> This README is for developers browsing the repository. The user-facing
+> introduction to the library lives in the app itself (the **Welcome** page,
+> `webapp/frontend/src/welcome/`).
 
-**No account needed to read.** The catalog is open to guests — anyone can
-browse the directory tree, open books, and search without signing in. Signing
-in is what enables the per-reader features below: bookshelf and playlists,
-reading progress, highlights, ratings, comments, and feedback threads.
+## Tech stack
 
-## Reading
+- **Backend** — [FastAPI](https://fastapi.tiangolo.com/) served by Uvicorn. The
+  service is a single ~8400-line `main.py` with a thin supporting shell
+  (`database.py`, `models.py`, `schemas.py`, `security.py`, `email_utils.py`).
+- **Frontend** — Vue 3 + Vite + TypeScript + TailwindCSS single-page app, built
+  to static assets and served by the backend. Hash-based routing.
+- **Storage** — SQLite (via SQLAlchemy) for metadata and all per-user state,
+  plus a content-addressable file vault on disk.
+- **Auth** — JWT in an `access_token` cookie, gated by an in-memory session map.
 
-- **Many formats, one reader.** PDF, EPUB, DJVU, FB2, Markdown, HTML, and image
-  files all open inline in the browser — no separate apps, no downloads.
-- **Tables of contents.** PDF, EPUB, DJVU, FB2, and Markdown documents expose
-  their built-in TOC in a sidebar so you can jump between chapters quickly.
-- **Resume where you left off.** The reader remembers your position in every
-  book (page, chapter, or scroll location, depending on format) and restores
-  it automatically the next time you open the book.
-- **Book covers.** Books display their cover thumbnail in directory listings,
-  search results, and on your bookshelf.
-- **Direct links.** Every page in the library is bookmarkable — share a link
-  to a directory, a book, or a search result and it will open at the same
-  place for the recipient.
+## Architecture: content-addressable storage (CAS)
 
-## Search
+Every book file is hashed with BLAKE2b; the bytes live at `<BOOKS_DIR>/.data/<hash>`,
+and the human-readable paths under the library tree are **symlinks** into that
+vault. SQLite (`<BOOKS_DIR>/.data/db/lib.db`) holds the CAS metadata (`books`,
+`book_locations`) alongside users, playlists, reading progress, annotations,
+ratings, comments, and the feedback system.
 
-- **Full-text metadata search.** Search across title, author, publisher,
-  description, tags, series, and identifiers in a single query.
-- **Unicode-aware.** Case-insensitive search works correctly for Cyrillic and
-  other non-Latin scripts.
-- **Quick filters.** Narrow a search with inline operators in the query:
-  `path:Topic` scopes the search to a directory subtree, `ext:pdf` scopes it
-  to a file format.
-- **Sort and lay out.** Sort results by relevance, file size, or directory;
-  switch between list and grid views, and adjust the thumbnail size of the
-  grid.
-- **Configurable page size.** Choose how many results you want per page from
-  your account settings.
+`BOOKS_DIR` (default `/Books`) is the filesystem root the API serves from; every
+user-supplied path is validated against it before any filesystem access.
 
-## Your bookshelf and playlists
+See [`CLAUDE.md`](./CLAUDE.md) for the full architecture, security model, and
+operational notes.
 
-- **Bookmark anything.** Click the bookmark icon on any book — or any topic
-  directory — to open the **Add to playlist** menu. Tick the playlists the item
-  should belong to, or create a new one on the spot. The icon turns blue once
-  the item is in at least one of your playlists.
-- **Your Bookshelf.** Every reader starts with a **Bookshelf** — the default
-  playlist that is always there and cannot be deleted. It is the natural home
-  for the books and directories you want one click away.
-- **Build your own playlists.** Create named collections — "Summer reading", a
-  research list, a course syllabus — and fill them with both books and whole
-  directories. Each playlist shows a cover collage so you can recognise it at a
-  glance.
-- **Arrange them your way.** Drag items within a playlist to reorder them.
-- **Share by link.** Make any playlist public to get a shareable link — anyone
-  with the link can view it, no account needed. Switch it back to private
-  whenever you like; share it again later and the same link comes back to life.
-  Signed-in visitors can **save a copy** of a shared playlist to their own.
-- **Reading-progress strip.** Books with saved progress show a progress bar
-  wherever they appear — on your Bookshelf and in every playlist — so you can
-  pick up the next session at a glance.
+## Repository layout
 
-## Annotations, ratings, and comments
+```
+webapp/
+  backend/      FastAPI service (main.py + thin module shell), tests, migrations
+  frontend/     Vue 3 + Vite SPA
+  start.sh      launches Uvicorn (used by the systemd unit)
+  *.service     systemd units (app, nightly backup, GeoIP refresh, pruning)
+  *.nginx       reverse-proxy configs
+CLAUDE.md       detailed architecture / ops / conventions
+```
 
-- **Highlights and notes.** Select text in any supported format (PDF, EPUB,
-  HTML, Markdown, FB2) to highlight it or attach a private note. Your
-  highlights and notes are stored on the server, follow you between devices,
-  and survive between sessions.
-- **Private by default, optionally public.** Annotations start private. You
-  can choose to share an annotation publicly so other readers see it — public
-  annotations go through admin review before they appear to others.
-- **Star ratings.** Rate any book from 1 to 5 stars; the book's average
-  rating and total count are visible to every reader.
-- **Threaded comments.** Leave one top-level comment per book, and reply to
-  any other reader's comment. Top-level comments are reviewed by an admin
-  before they become visible to everyone. Replies appear under the comment
-  they answer.
+## Prerequisites
 
-## Account
+- **Python 3.12** — pinned in `webapp/backend/.python-version`; the virtualenv is
+  built with [`uv`](https://github.com/astral-sh/uv), which provisions a
+  standalone CPython 3.12 regardless of the host Python.
+- **Node.js + npm** — for the frontend build / dev server.
+- **OS packages** (not in `requirements.txt`):
+  - Build deps for the `djvulibre-python` C extension: `libdjvulibre-dev`,
+    `pkg-config`, `build-essential`.
+  - CLI tools invoked for metadata / cover / media extraction (degrade
+    gracefully if absent): `poppler-utils`, `djvulibre-bin`, `calibre`,
+    `ffmpeg`.
 
-- **Registration with admin approval.** Anyone can request an account. An
-  admin reviews the request and, when approved, you receive an email with a
-  one-time link to set your password.
-- **Profile.** Upload an avatar, set a display name (used wherever your name
-  appears instead of the email local-part), and adjust search results per
-  page.
-- **Sessions.** Sign in from as many browsers as you like. Each browser shows
-  up as its own session, and signing out only ends the current one.
-- **Email notifications.** Choose what you want to be emailed about: replies
-  to your feedback threads, status changes on issues you opened, and an
-  optional weekly summary. Toggles live in your account settings.
-- **Light and dark themes.** Switch between light and dark mode at any time.
-  The choice is remembered per browser.
-- **Multilingual interface.** The UI is available in multiple languages — use
-  the language switcher in the top bar.
+  ```sh
+  sudo apt install libdjvulibre-dev pkg-config build-essential \
+                   poppler-utils djvulibre-bin calibre ffmpeg
+  ```
 
-## Talking to the librarians
+## Running the app
 
-The _Urantia Library_ has a built-in **Contact admin** system for anything that
-doesn't belong in a public book comment — bug reports, feature suggestions,
-metadata fixes, requests to acquire a particular book, copyright concerns,
-duplicate-file reports, and general questions.
+The backend is launched by **`webapp/start.sh`**, never by invoking Uvicorn
+directly. The script is idempotent: on first run it provisions the backend
+virtualenv (`uv venv && uv pip sync requirements.txt`) and builds the frontend
+(`npm ci && npm run build`) when `frontend/dist` is missing, then `exec`s
+Uvicorn on `127.0.0.1:8000` — adding `--reload` when `APP_ENV=development` and
+the `--root-path` prefix from `APP_ROOT_PATH`.
 
-- **Categorised threads.** Each message is tagged with a category (general,
-  bug, feature, book-related, acquire, other) so the right person sees it
-  first.
-- **Per-book context.** When you open a thread from inside a book viewer, the
-  current book — and the page you were on for PDF / DJVU — is automatically
-  attached so admins know exactly what you mean.
-- **Screenshot attachments.** Drop a screenshot into the form to illustrate
-  what you're seeing.
-- **Choose your audience.** Send to all admins, or pick specific ones from a
-  list. You can include yourself as a recipient as a first-class
-  "self-reminder".
-- **Threaded conversation.** Replies appear in the thread the way an email
-  conversation does, with status changes (new → triage → in progress →
-  waiting → resolved → closed) recorded inline so the history is auditable.
-- **My feedback.** Every thread you have open or have ever opened is listed
-  on your **My feedback** page with its current status and unread-reply
-  indicator.
-- **Resolve threads yourself.** Once your question is answered, you can mark
-  the thread resolved without waiting for an admin to do it.
+In every environment `start.sh` is run under the checked-in
+`webapp/urantia-library.service` systemd unit, which supplies configuration via
+`EnvironmentFile=…/secrets.env`. Running it through the unit is the reliable way
+to start the system. Note that `start.sh` does **not** read `secrets.env`
+itself, so if you launch it by hand you must load the config into the
+environment first — otherwise `JWT_SECRET_KEY`, the secure-cookie flag, and SMTP
+settings fall back to (broken) defaults.
 
-## What admins can do from the UI
+```sh
+# 1. Per-machine config (not committed). Set APP_ENV=development for hot-reload
+#    and point BOOKS_DIR at your library root; see webapp/secrets.env.example.
+cp webapp/secrets.env.example webapp/secrets.env
+$EDITOR webapp/secrets.env
 
-Everything an administrator needs to run the library lives inside the same
-web interface — there is no separate admin tool.
+# 2a. Canonical: run under the systemd unit (sources secrets.env for you).
+#     See CLAUDE.md for the one-time unit setup.
+sudo systemctl start urantia-library.service
 
-- **Books.**
-  - Upload new books in any supported format. The upload flow extracts
-    metadata, generates a cover, lets the admin preview and edit every field,
-    and stages the file for review before committing.
-  - Edit existing book metadata (title, author, publisher, description, tags,
-    series, languages, identifiers) and replace or re-extract the cover image
-    from the book itself.
-  - Move books and entire directories between topic directories. Renames and
-    moves preserve every reader's progress, playlists, ratings, comments,
-    and annotations — those follow the *content*, not the path.
-  - Delete books when appropriate.
-- **Integrity.**
-  - Verify a single book's storage integrity on demand (quick check or full
-    hash recompute).
-  - Launch a library-wide integrity job with live progress and failure
-    summaries; cancel it from the same page if needed.
-- **Users.**
-  - Approve or reject new registration requests.
-  - Manage existing accounts — activate, deactivate, adjust profile fields.
-  - View and terminate any active session for any user.
-- **Moderation.**
-  - Approve or remove pending comments. Recent comments are also listed so
-    you can revisit moderation decisions.
-  - Approve or remove pending public annotations.
-- **Feedback inbox.**
-  - See every feedback thread, filtered by status (new / open / triage / in
-    progress / waiting / resolved / closed / archived) or scoped to threads
-    assigned to you.
-  - Reply publicly (visible to the user who opened the thread) or leave an
-    internal note (admin-only).
-  - Reassign a thread to another admin, change its status, archive it, or
-    delete it outright.
-  - Tune the digest scheduler: digest interval, minimum batch size before a
-    digest is sent, urgent-bypass behaviour, and extra non-admin email
-    addresses to copy. Force-send a digest immediately when needed.
+# 2b. …or run the script directly, loading the config into the environment:
+set -a; . webapp/secrets.env; set +a
+webapp/start.sh
+```
 
-## Privacy and persistence
+The app needs a configured SQLite database to boot — see
+**Database & migrations** below.
 
-Your account, your reading progress, your playlists, your highlights, your
-notes, and your feedback threads all live on the server tied to your account —
-not to a specific browser. Sign in from a different machine and everything is
-exactly where you left it.
+For active frontend work, run the Vite dev server (hot-module reload) against
+the running backend:
 
-Enjoy the library.
+```sh
+cd webapp/frontend
+npm run dev      # proxies /api/* → 127.0.0.1:8000
+npm run build    # vue-tsc -b && vite build → frontend/dist (start.sh does this for you)
+```
+
+## Configuration
+
+Runtime config comes from `webapp/secrets.env` (per-machine, **not** committed);
+see `webapp/secrets.env.example` for the full list. Key variables:
+`JWT_SECRET_KEY`, `COOKIE_SECURE`, `APP_ENV`, `APP_ROOT_PATH`, `APP_URL`,
+`SMTP_USER` / `SMTP_PASSWORD` / `ADMIN_EMAIL`, and `BOOKS_DIR`.
+
+## Database & migrations
+
+The database is plain SQLite. The canonical schema is
+`webapp/backend/lib_schema.sql`; it is versioned via `app_meta.schema_version`
+and upgraded by `webapp/backend/migrate.py` (applies any pending files in
+`migrations/`, taking a snapshot first). A fresh database is created from
+`lib_schema.sql` and then brought up to date with `migrate.py` — the schema file
+stamps a baseline version that may be older than the code expects. The backend
+refuses to start when its expected schema version doesn't match the database, so
+a code update without the matching migration fails loudly rather than serving
+errors. (`webapp/backend/initdb.sh` bootstraps and seeds a fresh DB, but it
+hardcodes the maintainer's paths and admin accounts — adapt it for your own
+setup.)
+
+## Tests
+
+```sh
+cd webapp/backend
+uv venv && uv pip sync requirements.txt   # if you haven't run start.sh yet
+. .venv/bin/activate
+python -m pytest tests/ -q
+```
+
+The suite runs against an in-memory SQLite and stubs outbound email; it needs no
+running server (and no `secrets.env`).
+
+## Production
+
+The same `urantia-library.service` unit runs the app in production, behind
+nginx (see the `webapp/*.nginx` configs). A deploy is `git pull` → run any
+pending migration (`python migrate.py`) → restart the unit. The full runbook —
+backups, restore-from-backup, integrity scans, and the dev/prod unit drift — is
+in [`CLAUDE.md`](./CLAUDE.md).

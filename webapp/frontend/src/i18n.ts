@@ -137,6 +137,7 @@ const messages = {
         privacy_acc: 'Privacy Policy',
         terms_acc: 'Terms of Service',
       },
+      welcome: 'Welcome',
     },
     album: {
       label: 'Album',
@@ -1142,6 +1143,7 @@ const messages = {
         privacy_acc: 'Политику конфиденциальности',
         terms_acc: 'Условия использования',
       },
+      welcome: 'Добро пожаловать',
     },
     album: {
       label: 'Альбом',

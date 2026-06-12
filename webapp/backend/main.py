@@ -313,6 +313,27 @@ def _resolve_vault_hash(symlink_path: str) -> str | None:
     return name or None
 
 
+def _resolves_into_infra(abs_path: str) -> bool:
+    """True if `abs_path`'s realpath lands on a `_TOPDIR_SKIPLIST` first component
+    under BOOKS_DIR — a symlink with a benign lexical path that resolves *into*
+    infra (`.data/db/lib.db`, `.data/covers/<hash>.jpg`, the repo under
+    `urantia-library/`, …). The lone exemption is a flat `.data/<hash>` regular
+    file: exactly what a legitimate book symlink resolves to (mirrors
+    `_resolve_vault_hash`'s flat-only acceptance). Out-of-tree escapes return
+    False here — the realpath *containment* check owns those. Shared by
+    `_safe_under_books` (blocks the read) and `_list_directory` (hides the entry)
+    so the listing and the content endpoints agree on what's reachable."""
+    real_base = os.path.realpath(BOOKS_DIR)
+    real_target = os.path.realpath(abs_path)
+    if real_target != real_base and not real_target.startswith(real_base + os.sep):
+        return False
+    real_data = os.path.realpath(DATA_DIR)
+    if os.path.dirname(real_target) == real_data and os.path.isfile(real_target):
+        return False  # flat .data/<hash> vault file — a legitimate book
+    real_rel = os.path.relpath(real_target, real_base)
+    return real_rel != "." and real_rel.split(os.sep, 1)[0] in _TOPDIR_SKIPLIST
+
+
 # ---------- Integrity verification ----------
 
 _VERIFY_CHUNK = 8 * 1024 * 1024  # match migrate_library.py
@@ -649,6 +670,18 @@ def _record_usage_event(
         norm_path = re.sub(r"/{2,}", "/", raw_path) if raw_path else raw_path
         db = SessionLocal()
         try:
+            # usage_events.hash_id is a FK to books.id. A foreign file that still
+            # resolves to a vault hash (an orphan vault symlink with no books row)
+            # would otherwise insert a dangling hash → IntegrityError → caught by
+            # the outer swallow → the whole event silently dropped. Null it so the
+            # open is still logged, identified by `path` like any other foreign
+            # file. Also covers the race where a book is deleted between the
+            # caller resolving the hash and this insert.
+            safe_hash = hash_id
+            if safe_hash is not None and db.query(models.Book.id).filter(
+                models.Book.id == safe_hash
+            ).first() is None:
+                safe_hash = None
             db.add(models.UsageEvent(
                 ts=_now_iso(),
                 user_id=user.id if user else None,
@@ -659,7 +692,7 @@ def _record_usage_event(
                 geo_city=city,
                 kind=kind,
                 path=norm_path,
-                hash_id=hash_id,
+                hash_id=safe_hash,
                 extra_json=json.dumps(extra, separators=(",", ":")) if extra is not None else None,
             ))
             db.commit()
@@ -772,26 +805,82 @@ def _attach_recommendations(items: list[dict], db: Session) -> None:
 def assert_can_read_path(symlink_fs_path: str, user: models.User | None, db: Session) -> None:
     """Resolve `symlink_fs_path` through the CAS vault, look up the book's
     clearance, and 403 if the user's clearance is below it. Admins bypass.
-    Non-CAS files (symlinks pointing outside .data) are treated as public.
-    A `None` user is an anonymous guest (clearance 0)."""
+    A `None` user is an anonymous guest (clearance 0).
+
+    Foreign / unregistered files (anything with no `books` row — a plain file, a
+    non-vault symlink, or an orphan vault symlink) are readable by ANY signed-in
+    user regardless of clearance, but NEVER by guests. We can't fold this into
+    `_book_clearance` (which returns 0 for both "no book row" and "clearance-0
+    book") because a registered clearance-0 ("public") book must stay
+    guest-readable while a foreign file must not."""
     if _is_admin(user):
         return
     file_hash = _resolve_vault_hash(symlink_fs_path)
-    required = _book_clearance(file_hash, db)
-    if required > _clearance_of(user):
+    book = db.query(models.Book).filter(models.Book.id == file_hash).first() if file_hash else None
+    if book is None:
+        if user is None:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return
+    if (book.clearance or 0) > _clearance_of(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _accessible_locations_query(db: Session, prefix: str, user: models.User | None):
     """Query for `book_locations.symlink_path` values under `prefix` that point
     to books readable by `user`. `prefix` should already end with '/' (or be ''
-    for the library root). Relies on the PK index on symlink_path."""
+    for the library root). Relies on the PK index on symlink_path. LIKE
+    metacharacters in `prefix` (a "_" or "%" in a directory name) are escaped so
+    the prefix can't wildcard-match into sibling directories."""
     return (
         db.query(models.BookLocation.symlink_path)
         .join(models.Book, models.Book.id == models.BookLocation.hash_id)
         .filter(models.Book.clearance <= _clearance_of(user))
-        .filter(models.BookLocation.symlink_path.like(f"{prefix}%"))
+        .filter(models.BookLocation.symlink_path.like(f"{_escape_like(prefix)}%", escape="\\"))
     )
+
+
+def _subtree_is_unmanaged(dir_fs_path: str, db: Session) -> bool:
+    """True if `dir_fs_path` is an UN-IMPORTED area: its subtree holds at least
+    one file but NO registered book (no `book_locations` row anywhere under it) —
+    e.g. /Books/Unsorted, where files sit awaiting import. Such a directory
+    contains only foreign files (readable by any signed-in user regardless of
+    clearance), so it is revealed to logged-in non-admins even though it has no
+    readable registered book.
+
+    A directory that DOES contain registered books — readable OR clearance-gated —
+    is a managed topic whose visibility is governed entirely by the clearance
+    filter, so this returns False and the topic stays hidden. That keeps a gated
+    topic from leaking its name (or a stray, un-imported file's bytes) just
+    because a non-book file was dropped in it, and it bounds the cost: when any
+    registered book exists we skip the filesystem walk entirely, and an unmanaged
+    tree returns on its first file. Guests never reach here (the callers
+    short-circuit on `current_user is None`)."""
+    # Never reveal (or walk) a directory symlink that escapes the tree: its
+    # contents 403 via _safe_under_books anyway, but we must not even surface its
+    # name. Legit book symlinks resolve into .data (under BOOKS_DIR), so real
+    # in-tree directories are unaffected.
+    real_base = os.path.realpath(BOOKS_DIR)
+    real_dir = os.path.realpath(dir_fs_path)
+    if real_dir != real_base and not real_dir.startswith(real_base + os.sep):
+        return False
+    rel_dir = os.path.relpath(dir_fs_path, BOOKS_DIR).replace("\\", "/")
+    prefix = "" if rel_dir in ("", ".") else f"{rel_dir.rstrip('/')}/"
+    # Any registered book anywhere under here → managed topic → not unmanaged;
+    # bail before touching the filesystem. Escape LIKE metacharacters so a
+    # directory named e.g. "Vol_1" doesn't let the "_" wildcard match siblings
+    # (consistent with the other escaped prefix scans in this file).
+    has_registered = (
+        db.query(models.BookLocation.symlink_path)
+        .filter(models.BookLocation.symlink_path.like(f"{_escape_like(prefix)}%", escape="\\"))
+        .first() is not None
+    )
+    if has_registered:
+        return False
+    for root, dirs, files in os.walk(dir_fs_path):
+        dirs[:] = [d for d in dirs if d not in _TOPDIR_SKIPLIST]
+        if files:
+            return True
+    return False
 
 
 @app.post("/api/login")
@@ -1185,22 +1274,40 @@ def _list_directory(path: str, current_user: models.User | None, db: Session):
     reuses it for the subtree_has_audio scan without a second query. Raises
     HTTPException(403/404) exactly like browse. Shared by /api/browse and the
     /api/album-subtree walk so there is one clearance code path."""
-    target_dir = os.path.join(BOOKS_DIR, path)
-    if not os.path.abspath(target_dir).startswith(os.path.abspath(BOOKS_DIR)):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    if not os.path.exists(target_dir) or not os.path.isdir(target_dir):
+    # path="" is the library root; any non-empty path goes through the full
+    # traversal guard — realpath() containment AND _TOPDIR_SKIPLIST rejection —
+    # so a signed-in user can't navigate into infra dirs (.data, urantia-library,
+    # .claude, …) or escape the tree via a symlinked directory component. The
+    # weak lexical startswith() check alone allowed both; the foreign-file reveal
+    # below removed the subtree-gate 403 that used to mask this for non-admins,
+    # so the strong guard is now load-bearing. The entry loop still
+    # skiplist-filters the root's own children.
+    if path:
+        target_dir = _safe_under_books(path)
+    else:
+        target_dir = os.path.abspath(BOOKS_DIR)
+    if not os.path.isdir(target_dir):
         raise HTTPException(status_code=404, detail="Directory not found")
 
     # For non-admins, hide subdirectories whose subtree contains no readable book
     # (and 403 on direct access to such a directory) so the topic structure of
-    # the library isn't leaked via directory names.
+    # the library isn't leaked via directory names. A signed-in user is also let
+    # in if the subtree is an un-imported area (files but no registered book —
+    # /Books/Unsorted), whose contents are foreign files readable by any
+    # logged-in user.
     accessible_subdirs: set[str] = set()
     rows = None
     if not _is_admin(current_user):
         prefix = f"{path.rstrip('/')}/" if path else ""
         rows = _accessible_locations_query(db, prefix, current_user).all()
         if path and not rows:
-            raise HTTPException(status_code=403, detail="Forbidden")
+            # Guests are denied outright; a subtree that holds any registered book
+            # (gated for this user) is a managed topic and stays 403 for everyone
+            # (no-leak invariant) — only a genuinely un-imported area opens up.
+            # _subtree_is_unmanaged only runs here, in the already-cold "no
+            # readable book" branch — never on /api/item's hot path.
+            if current_user is None or not _subtree_is_unmanaged(target_dir, db):
+                raise HTTPException(status_code=403, detail="Forbidden")
         for (sp,) in rows:
             rest = sp[len(prefix):]
             if "/" in rest:
@@ -1220,9 +1327,33 @@ def _list_directory(path: str, current_user: models.User | None, db: Session):
         entry_path = os.path.join(target_dir, entry)
         if not os.path.exists(entry_path):
             continue
+        # A symlink whose realpath resolves into infra (.data subdirs, the repo)
+        # is never surfaced — to anyone, admins included — even though its lexical
+        # path is benign. Mirrors the realpath-target guard in _safe_under_books
+        # so the listing and the content endpoints agree on what's reachable;
+        # flat .data/<hash> vault files (real books) are exempt and list normally.
+        if os.path.islink(entry_path) and _resolves_into_infra(entry_path):
+            continue
         is_dir = os.path.isdir(entry_path)
         if is_dir and not _is_admin(current_user) and entry not in accessible_subdirs:
-            continue
+            # Hidden because no readable registered book lives under it. Reveal it
+            # to signed-in users only when it's an un-imported area (files but no
+            # registered book); keep it hidden from guests and from any subtree
+            # that holds a gated registered book (no-leak invariant).
+            if current_user is None or not _subtree_is_unmanaged(entry_path, db):
+                continue
+
+        # Resolve a file entry's vault hash + book row once. A non-dir entry with
+        # no books row is "foreign" (a plain file, a non-vault symlink, or an
+        # orphan vault symlink): visible to any signed-in user but never to
+        # guests. Registered books keep their per-book clearance gate.
+        file_hash = _resolve_vault_hash(entry_path) if (not is_dir and os.path.islink(entry_path)) else None
+        book = db.query(models.Book).filter(models.Book.id == file_hash).first() if file_hash else None
+        if not is_dir and book is None:
+            if current_user is None:
+                continue  # guests never see foreign files
+        elif book is not None and not _is_admin(current_user) and (book.clearance or 0) > _clearance_of(current_user):
+            continue  # gated registered book this user can't read
 
         try:
             size = os.path.getsize(entry_path) if not is_dir else 0
@@ -1241,48 +1372,45 @@ def _list_directory(path: str, current_user: models.User | None, db: Session):
             "path": os.path.relpath(entry_path, BOOKS_DIR).replace("\\", "/")
         }
 
-        if os.path.islink(entry_path):
-            file_hash = _resolve_vault_hash(entry_path)
-            if file_hash:
-                item_data["hash_id"] = file_hash
-                cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{file_hash}.jpg")
-                if os.path.exists(cover_fs_path):
-                    item_data["cover_url"] = f"/api/covers/{file_hash}"
-                book = db.query(models.Book).filter(models.Book.id == file_hash).first()
-                if book:
-                    if not _is_admin(current_user) and (book.clearance or 0) > _clearance_of(current_user):
-                        continue
-                    if book.title:
-                        item_data["title"] = book.title
-                    if book.author:
-                        item_data["author"] = book.author
-                    if book.description:
-                        item_data["description"] = book.description
-                    if book.publisher:
-                        item_data["publisher"] = book.publisher
-                    if book.published:
-                        item_data["published"] = book.published
-                    if book.tags:
-                        item_data["tags"] = book.tags
-                    if book.series:
-                        item_data["series"] = book.series
-                    if book.languages:
-                        item_data["languages"] = book.languages
-                    if book.identifiers:
-                        item_data["identifiers"] = book.identifiers
-                    item_data["clearance"] = int(book.clearance or 0)
-                    item_data["import_date"] = book.import_date
-                    # Audio/video media facts (NULL for other formats); the Album
-                    # view reads these instead of probing each file client-side.
-                    if book.duration is not None:
-                        item_data["duration"] = book.duration
-                    if book.bitrate is not None:
-                        item_data["bitrate"] = book.bitrate
-                    if _is_admin(current_user):
-                        item_data["last_verified_at"] = book.last_verified_at
-                        item_data["last_verified_ok"] = book.last_verified_ok
-                        item_data["last_verified_mode"] = book.last_verified_mode
-                        item_data["last_verified_error"] = book.last_verified_error
+        # hash_id/cover/metadata only for registered books; a foreign file (book
+        # is None) stays hash-less so the frontend treats it as a plain file and
+        # skips per-hash progress/rating/annotation calls (which would 404).
+        if book is not None:
+            item_data["hash_id"] = file_hash
+            cover_fs_path = os.path.join(BOOKS_DIR, ".data", "covers", f"{file_hash}.jpg")
+            if os.path.exists(cover_fs_path):
+                item_data["cover_url"] = f"/api/covers/{file_hash}"
+            if book.title:
+                item_data["title"] = book.title
+            if book.author:
+                item_data["author"] = book.author
+            if book.description:
+                item_data["description"] = book.description
+            if book.publisher:
+                item_data["publisher"] = book.publisher
+            if book.published:
+                item_data["published"] = book.published
+            if book.tags:
+                item_data["tags"] = book.tags
+            if book.series:
+                item_data["series"] = book.series
+            if book.languages:
+                item_data["languages"] = book.languages
+            if book.identifiers:
+                item_data["identifiers"] = book.identifiers
+            item_data["clearance"] = int(book.clearance or 0)
+            item_data["import_date"] = book.import_date
+            # Audio/video media facts (NULL for other formats); the Album
+            # view reads these instead of probing each file client-side.
+            if book.duration is not None:
+                item_data["duration"] = book.duration
+            if book.bitrate is not None:
+                item_data["bitrate"] = book.bitrate
+            if _is_admin(current_user):
+                item_data["last_verified_at"] = book.last_verified_at
+                item_data["last_verified_ok"] = book.last_verified_ok
+                item_data["last_verified_mode"] = book.last_verified_mode
+                item_data["last_verified_error"] = book.last_verified_error
 
         items.append(item_data)
 
@@ -1341,7 +1469,10 @@ async def browse(request: Request, path: str = "", current_user: models.User | N
     # files are covered by the listing check. Known, deliberate gap: audio that is
     # *only* in un-imported nested subdirectories won't flip this flag (a per-browse
     # os.walk would pay the whole-subtree cost on every non-audio directory just to
-    # return False); it resolves once that subtree is imported.
+    # return False); it resolves once that subtree is imported. This now also covers
+    # all-foreign audio dirs a logged-in user can newly see (e.g. un-imported .mp3s
+    # in /Books/Unsorted): the dir lists, but the Album toggle stays off until those
+    # files are imported — the safe under-offering direction, never a gated-audio leak.
     has_direct_audio = any(
         not it["is_dir"] and "." in it["name"] and it["name"].rsplit(".", 1)[1].lower() in _AUDIO_EXTS
         for it in items
@@ -1357,7 +1488,7 @@ async def browse(request: Request, path: str = "", current_user: models.User | N
     else:
         prefix = f"{path.rstrip('/')}/" if path else ""
         audio_q = db.query(models.BookLocation.symlink_path).filter(
-            models.BookLocation.symlink_path.like(f"{prefix}%"),
+            models.BookLocation.symlink_path.like(f"{_escape_like(prefix)}%", escape="\\"),
             or_(*(func.lower(models.BookLocation.symlink_path).like(f"%.{e}") for e in _AUDIO_EXTS)),
         )
         subtree_has_audio = audio_q.first() is not None
@@ -4332,6 +4463,15 @@ def _safe_under_books(path: str) -> str:
     real_target = os.path.realpath(target)
     if real_target != real_base and not real_target.startswith(real_base + os.sep):
         raise HTTPException(status_code=403, detail="Forbidden")
+    # The lexical skiplist check below only inspects the *user-supplied* first
+    # component, so a symlink with a benign path (e.g. Topic/leak) whose realpath
+    # dives into infra that lives UNDER BOOKS_DIR — .data/db/lib.db,
+    # .data/covers/<hash>.jpg, urantia-library/webapp/secrets.env — would sail
+    # past it (the realpath guard above only blocks escaping *out* of the tree).
+    # Re-apply the skiplist to the *resolved* target (flat .data/<hash> vault
+    # files exempted, so books keep working).
+    if _resolves_into_infra(target):
+        raise HTTPException(status_code=403, detail="Forbidden")
     rel = os.path.relpath(target, base)
     if rel != "." and rel.split(os.sep, 1)[0] in _TOPDIR_SKIPLIST:
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -4850,10 +4990,11 @@ async def get_file(
     current_user: models.User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
-    file_path = os.path.join(BOOKS_DIR, path)
-    if not os.path.abspath(file_path).startswith(os.path.abspath(BOOKS_DIR)):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+    # Full traversal guard (realpath + skiplist), not just the lexical prefix
+    # check: blocks downloading infra files (urantia-library/…, .data/db/lib.db,
+    # secrets.env, …) and symlink-escape, both of which the weak guard allowed.
+    file_path = _safe_under_books(path)
+    if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     assert_can_read_path(file_path, current_user, db)
     # Log the open, but don't let media streaming inflate the count: an <audio>/
@@ -4875,13 +5016,10 @@ async def get_file(
     return FileResponse(file_path)
 
 def sanitize_fb2_path(path: str) -> str:
-    """Ensure path is within BOOKS_DIR, exists, and is an FB2 (or .fb2.zip) file."""
-    if not path:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
-    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
-        raise HTTPException(status_code=403, detail="Directory traversal detected")
-    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+    """Ensure path is within BOOKS_DIR (realpath + skiplist guard via
+    _safe_under_books), exists, and is an FB2 (or .fb2.zip) file."""
+    target_path = _safe_under_books(path)
+    if not os.path.isfile(target_path):
         raise HTTPException(status_code=404, detail="File not found")
     lower = target_path.lower()
     if not (lower.endswith(".fb2") or lower.endswith(".fb2.zip")):
@@ -5256,14 +5394,13 @@ CODE_EXTENSIONS = {
 }
 
 def sanitize_text_path(path: str) -> str:
-    """Ensure path is within BOOKS_DIR, exists, and is a .md/.markdown/.txt
-    (optionally .zip-wrapped) or code file."""
-    if not path:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
-    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
-        raise HTTPException(status_code=403, detail="Directory traversal detected")
-    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+    """Ensure path is within BOOKS_DIR (realpath + skiplist guard via
+    _safe_under_books), exists, and is a .md/.markdown/.txt (optionally
+    .zip-wrapped) or code file. The skiplist rejection matters most here: this
+    viewer renders code/.md, so without it a signed-in user could read repo
+    source under urantia-library/ (e.g. security.py) once the file is reachable."""
+    target_path = _safe_under_books(path)
+    if not os.path.isfile(target_path):
         raise HTTPException(status_code=404, detail="File not found")
     lower = target_path.lower()
     ext = os.path.splitext(lower)[1]
@@ -5664,13 +5801,10 @@ async def text_preview(
 # ---------------- HTML viewer ----------------
 
 def sanitize_html_path(path: str) -> str:
-    """Ensure path is within BOOKS_DIR, exists, and is an .html/.htm/.html.zip file."""
-    if not path:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
-    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
-        raise HTTPException(status_code=403, detail="Directory traversal detected")
-    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+    """Ensure path is within BOOKS_DIR (realpath + skiplist guard via
+    _safe_under_books), exists, and is an .html/.htm/.html.zip file."""
+    target_path = _safe_under_books(path)
+    if not os.path.isfile(target_path):
         raise HTTPException(status_code=404, detail="File not found")
     lower = target_path.lower()
     if not (lower.endswith(".html") or lower.endswith(".htm")
@@ -5958,13 +6092,10 @@ async def html_preview(
 
 
 def sanitize_djvu_path(path: str) -> str:
-    """Ensure path is within BOOKS_DIR and exists."""
-    if not path:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    target_path = os.path.abspath(os.path.join(BOOKS_DIR, path))
-    if not target_path.startswith(os.path.abspath(BOOKS_DIR)):
-        raise HTTPException(status_code=403, detail="Directory traversal detected")
-    if not os.path.exists(target_path) or not os.path.isfile(target_path):
+    """Ensure path is within BOOKS_DIR (realpath + skiplist guard via
+    _safe_under_books), exists, and is a .djvu file."""
+    target_path = _safe_under_books(path)
+    if not os.path.isfile(target_path):
         raise HTTPException(status_code=404, detail="File not found")
     if not target_path.lower().endswith(".djvu"):
         raise HTTPException(status_code=400, detail="Not a DjVu file")
@@ -6168,14 +6299,14 @@ async def remove_favorite(hash_id: str, current_user: models.User = Depends(get_
 
 def _normalize_dir_path(path: str) -> str:
     """Validate a directory path: must be inside BOOKS_DIR, must exist, must
-    actually be a directory. Returns the canonical relative path (forward
-    slashes, no trailing slash)."""
+    actually be a directory, and (via _safe_under_books) must not be an infra
+    entry in _TOPDIR_SKIPLIST or escape the tree through a symlinked component —
+    so an infra path can't be parked in a playlist/favorite. Returns the
+    canonical relative path (forward slashes, no trailing slash); "" is the root."""
     if path is None:
         raise HTTPException(status_code=400, detail="Invalid path")
     rel = path.strip().lstrip("/").rstrip("/")
-    target = os.path.abspath(os.path.join(BOOKS_DIR, rel))
-    if not target.startswith(os.path.abspath(BOOKS_DIR)):
-        raise HTTPException(status_code=403, detail="Directory traversal detected")
+    target = _safe_under_books(rel) if rel else os.path.abspath(BOOKS_DIR)
     if not os.path.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
     return rel
