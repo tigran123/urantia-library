@@ -10,6 +10,7 @@ This file provides guidance to any AI agent when working with code in this repos
 - `/Books/urantia-library/webapp/frontend` — Vue 3 + Vite + TailwindCSS SPA, served as static assets in production. Multi-format reader: PDF (pdfjs-dist), EPUB (epubjs), DJVU, FB2, Markdown (highlight.js), HTML, plain images.
 - `/Books/urantia-library/webapp/generate-thumbnails.py` — one-shot tooling that generates thumbnails for image directories; not run by the webapp.
 - `/Books/urantia-library/webapp/backend/reimport_orphans.py` — recovery tool used after restoring `lib.db` from a backup; see "Restoring from a backup" below.
+- `/Books/urantia-library/webapp/backend/verify_integrity.py` — standalone full integrity scan (CLI equivalent of the Admin → Integrity full scan); read-only. See "Verifying integrity from the CLI" below.
 - `/Books/.data/` — the content-addressable vault (see Architecture). Do not treat the hex-named files there as garbage; they are the canonical book files.
 
 ## Architecture: Hybrid Content-Addressable Storage (CAS)
@@ -122,6 +123,20 @@ sudo systemctl restart urantia-library.service
 ```
 
 `reimport_orphans.py` uses the same metadata/cover helpers as the upload flow (`_extract_upload_metadata`, `_extract_cover_to` in `main.py`). It can only recover what's derivable from the file bytes themselves — hand-edited titles/authors, the original `book_locations.symlink_path`, and per-user state (playlists, annotations, ratings, reading_progress, comments) for the orphan books are gone with the replaced DB. The admin moves each orphan to its proper topic via the existing `POST /api/admin/books/move` UI.
+
+### Verifying integrity from the CLI
+
+`webapp/backend/verify_integrity.py` is the standalone equivalent of the Admin → Integrity **full scan**, for use over SSH or from cron without a browser/admin session. It re-hashes every vault file with BLAKE2b (so any single changed bit surfaces as `hash_mismatch`) and verifies each book's symlinks resolve into the vault, with the same per-book checks and error codes as `main._verify_book_sync(..., mode="full")`. It also runs a reverse sweep for orphan vault files (vault `<128-hex>` files with no `books` row — `reimport_orphans.py`'s territory).
+
+```
+cd /Books/urantia-library/webapp/backend
+. .venv/bin/activate
+python verify_integrity.py                  # full scan + orphan sweep
+python verify_integrity.py --json out.json  # also write a machine-readable report
+python verify_integrity.py --skip-orphans   # per-book checks only
+```
+
+**Strictly read-only**: opens `lib.db` with `mode=ro` and never writes the `last_verified_*` columns, so it can run safely against the live DB but the Admin → Integrity panel does *not* reflect standalone runs. No schema bump, no `systemctl restart` — it ships via `git pull`. Exit codes: `0` clean, `1` failures and/or orphans found, `2` DB missing, `130` interrupted. The scan re-reads every byte in the vault, so on a large library it's I/O-bound and slow — a progress line keeps it observable.
 
 ### Deploying to prod
 
