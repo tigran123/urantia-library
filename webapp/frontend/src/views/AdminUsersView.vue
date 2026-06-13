@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted, inject } from 'vue'
-import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
@@ -8,10 +7,7 @@ import { userInitials } from '../userDisplay'
 
 const { t, locale } = useI18n({ useScope: 'global' })
 
-type CurrentUser = { email: string, is_admin?: boolean } | null
-const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
 const refreshStats = inject<() => void>('refreshStats', () => {})
-const router = useRouter()
 
 type AdminUser = {
   id: number
@@ -146,11 +142,9 @@ const saveUser = async (u: AdminUser) => {
   }
 }
 
+// Admin access is enforced by the router's /admin/* beforeEach guard, so by the
+// time this view mounts the visitor is a confirmed admin — just load.
 onMounted(() => {
-  if (!currentUser?.value?.is_admin) {
-    router.replace('/')
-    return
-  }
   loadUsers()
   loadSessions()
 })

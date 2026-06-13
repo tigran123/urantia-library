@@ -164,7 +164,7 @@ const priorStatusByMsg = computed(() => {
 </script>
 
 <template>
-  <div class="px-4 sm:px-6 lg:px-8 py-6">
+  <div class="space-y-6">
     <AdminNav />
 
     <!-- Sub-tab strip: Inbox / Settings -->

@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { ensureAuthLoaded } from '../auth'
 import BrowseView from '../views/BrowseView.vue'
 import SearchView from '../views/SearchView.vue'
 import PlaylistsView from '../views/PlaylistsView.vue'
@@ -175,6 +176,21 @@ const router = createRouter({
       component: AdminUsageView
     }
   ]
+})
+
+// Single admin guard for the whole /admin/* surface, so individual admin views
+// can't forget it (and the three that historically had no client-side check are
+// now covered too). It awaits ensureAuthLoaded() because currentUser is fetched
+// async — a guard that merely read the ref would race a cold reload and bounce
+// admins. The backend still enforces admin on every /api/admin/* call; this is UX.
+router.beforeEach(async (to) => {
+  if (!(to.path === '/admin' || to.path.startsWith('/admin/'))) return true
+  const user = await ensureAuthLoaded()
+  if (!user) {
+    return { name: 'login', query: to.fullPath !== '/' ? { next: to.fullPath } : undefined }
+  }
+  if (!user.is_admin) return { name: 'browse' }
+  return true
 })
 
 export default router

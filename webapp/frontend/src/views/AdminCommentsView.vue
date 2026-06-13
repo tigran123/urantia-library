@@ -1,15 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, inject, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AdminNav from '../components/AdminNav.vue'
 import { adminListComments, adminApproveComment, adminDeleteComment, type AdminCommentItem } from '../api'
 
 const { t } = useI18n({ useScope: 'global' })
-
-type CurrentUser = { email: string, is_admin?: boolean } | null
-const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
-const router = useRouter()
 
 const PER_PAGE = 50
 
@@ -86,24 +81,8 @@ const remove = async (c: AdminCommentItem) => {
 
 const formatDate = (s: string) => (s ? new Date(s).toLocaleString() : '')
 
-// currentUser is fetched asynchronously by App.vue, so on a cold page load
-// (e.g. opening the moderation link from an email) it is still null when this
-// view mounts. Wait for it to resolve before deciding to redirect.
-const gate = (u: CurrentUser) => {
-  if (!u) return
-  if (u.is_admin) load()
-  else router.replace('/')
-}
-
-onMounted(() => {
-  if (currentUser?.value) {
-    gate(currentUser.value)
-  } else {
-    const stop = watch(() => currentUser?.value, (u) => {
-      if (u) { stop(); gate(u) }
-    })
-  }
-})
+// Admin access is enforced by the router's /admin/* beforeEach guard.
+onMounted(load)
 </script>
 
 <template>

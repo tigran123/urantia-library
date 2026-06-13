@@ -238,7 +238,7 @@ function formatExtra(extra: Record<string, any> | null): string {
 </script>
 
 <template>
-  <div class="px-4 py-4">
+  <div class="space-y-6">
     <AdminNav />
 
     <div class="flex items-center justify-between flex-wrap gap-3 mb-4 mt-3">

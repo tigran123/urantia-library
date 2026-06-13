@@ -13,6 +13,7 @@ import LegalReacceptanceModal from './components/LegalReacceptanceModal.vue'
 import NowPlayingBar from './components/album/NowPlayingBar.vue'
 import { usePlayer } from './composables/usePlayer'
 import type { CurrentUser } from './api'
+import { currentUser, refreshCurrentUser } from './auth'
 
 const { t, n: nFmt } = useI18n({ useScope: 'global' })
 
@@ -28,7 +29,8 @@ const searchInputMobile = ref<HTMLInputElement | null>(null)
 const router = useRouter()
 const route = useRoute()
 
-const currentUser = ref<CurrentUser | null>(null)
+// currentUser lives in ./auth so the router's admin guard can await it; App.vue
+// still provides the same ref object to the tree under the 'currentUser' key.
 provide('currentUser', currentUser)
 
 // Re-acceptance modal fires when LEGAL_VERSION in webapp/backend/database.py
@@ -65,13 +67,7 @@ const isPublicChrome = computed(() => route.meta?.publicChrome === true)
 
 const fetchCurrentUser = async () => {
   if (isAuthRoute.value) return
-  try {
-    const response = await api.get('/me')
-    currentUser.value = response.data
-  } catch (e) {
-    console.error('Failed to fetch user', e)
-    currentUser.value = null
-  }
+  await refreshCurrentUser()
 }
 
 const getFullUrl = (url: string | undefined) => {
@@ -193,6 +189,14 @@ let meHeartbeatTimer: number | null = null
 // before each beat. Matching 300s exactly would leave zero margin.
 const ME_HEARTBEAT_MS = 270_000
 
+// Deliberately hits /me directly rather than going through auth.ts's
+// refreshCurrentUser/loadMe. loadMe collapses *every* error to currentUser=null,
+// but the heartbeat must distinguish a real termination (401 → clear + bounce to
+// login) from a transient blip (network/5xx → keep the session untouched), and
+// loadMe also swallows the 401 the redirect depends on. Routing this through the
+// module would reintroduce both: spurious logouts on flaky networks, and no
+// terminate-redirect. The missing inflight-dedup is moot — this fires every 4.5min
+// and only when a user is already loaded, so it can't race the guard/mount fetch.
 const heartbeatCurrentUser = async () => {
   // Guests get 401 on /me as their normal answer; nothing to watch for.
   if (!currentUser.value || isAuthRoute.value) return

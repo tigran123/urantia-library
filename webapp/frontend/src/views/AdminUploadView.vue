@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, inject, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   ArrowUpTrayIcon,
@@ -26,10 +25,6 @@ import { pendingServerImports } from '../lib/pendingImports'
 
 const { t } = useI18n({ useScope: 'global' })
 
-type CurrentUser = { email: string, is_admin?: boolean } | null
-const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
-const router = useRouter()
-
 const ACCEPTED = ['FB2', 'FB2.ZIP', 'EPUB', 'PDF', 'DJVU', 'MOBI', 'AZW', 'AZW3', 'PRC', 'DOCX', 'ODT', 'RTF', 'HTML', 'TXT', 'TXT.ZIP', 'MD.ZIP', 'MARKDOWN.ZIP', 'JPG', 'JPEG', 'MP3', 'WAV', 'OGG', 'FLAC', 'M4A', 'AAC', 'MP4', 'WebM', 'MKV', 'AVI', 'MOV']
 const ACCEPT_ATTR = '.fb2,.zip,.epub,.pdf,.djvu,.mobi,.azw,.azw3,.prc,.docx,.odt,.rtf,.html,.txt,.jpg,.jpeg,.mp3,.wav,.ogg,.flac,.m4a,.aac,.mp4,.webm,.mkv,.avi,.mov'
 const MAX_UPLOAD_BYTES = 850 * 1024 * 1024
@@ -51,8 +46,9 @@ const aborters = new Map<string, AbortController>()
 let keepalive: number | undefined
 let batchSeq = 0   // monotonic suffix for audit batch ids (no crypto.randomUUID on plain http)
 
+// Admin access is enforced by the router's /admin/* beforeEach guard, so by the
+// time this view mounts the visitor is a confirmed admin — just initialise.
 onMounted(() => {
-  if (!currentUser?.value?.is_admin) { router.replace('/'); return }
   // Pick up files handed over from the Browse "Import to library" action.
   if (pendingServerImports.value.length) {
     const paths = pendingServerImports.value
@@ -475,7 +471,7 @@ const viewLog = (item: UploadItem) => { logModalId.value = item.localId; showLog
 </script>
 
 <template>
-  <div class="space-y-6 px-6 py-6">
+  <div class="space-y-6">
     <AdminNav />
 
     <div>

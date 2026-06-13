@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, inject, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
@@ -14,7 +13,6 @@ const { t } = useI18n({ useScope: 'global' })
 
 type CurrentUser = { email: string, is_admin?: boolean, search_per_page?: number | null } | null
 const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
-const router = useRouter()
 
 // ----- Mode toggle (Timeline vs Leaderboard) -----
 type Mode = 'timeline' | 'leaderboard'
@@ -438,24 +436,9 @@ const prettyDetails = (d: Record<string, unknown> | null): string => {
   try { return JSON.stringify(d, null, 2) } catch { return String(d) }
 }
 
-// ----- Auth gate (same pattern as the other admin views) -----
-const gate = (u: CurrentUser) => {
-  if (!u) return
-  if (u.is_admin) {
-    loadFeed()
-  } else {
-    router.replace('/')
-  }
-}
-
+// Admin access is enforced by the router's /admin/* beforeEach guard.
 onMounted(() => {
-  if (currentUser?.value) {
-    gate(currentUser.value)
-  } else {
-    const stop = watch(() => currentUser?.value, (u) => {
-      if (u) { stop(); gate(u) }
-    })
-  }
+  loadFeed()
 })
 </script>
 

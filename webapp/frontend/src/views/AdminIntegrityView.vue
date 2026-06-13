@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, inject, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AdminNav from '../components/AdminNav.vue'
@@ -18,9 +18,6 @@ import { CheckCircleIcon, XCircleIcon, ArrowPathIcon, NoSymbolIcon } from '@hero
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
 const router = useRouter()
-
-type CurrentUser = { email: string, is_admin?: boolean } | null
-const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
 
 const jobs = ref<IntegrityJobSummary[]>([])
 const error = ref('')
@@ -149,11 +146,8 @@ const itemPathForFailure = (r: IntegrityCheckResult): string | null => {
   return r.hash_id ? `/admin/books?hash=${r.hash_id}` : null
 }
 
+// Admin access is enforced by the router's /admin/* beforeEach guard.
 onMounted(async () => {
-  if (!currentUser?.value?.is_admin) {
-    router.replace('/')
-    return
-  }
   await loadJobs()
   startPolling()
 })

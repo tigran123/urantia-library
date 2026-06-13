@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, inject, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
@@ -9,8 +9,6 @@ import DirectoryTreePicker from '../components/upload/DirectoryTreePicker.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 
-type CurrentUser = { email: string, is_admin?: boolean } | null
-const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
 const router = useRouter()
 const route = useRoute()
 
@@ -223,11 +221,9 @@ const onShortcut = (e: KeyboardEvent) => {
   nextTick(() => searchInput.value?.focus())
 }
 
+// Admin access is enforced by the router's /admin/* beforeEach guard, so by the
+// time this view mounts the visitor is a confirmed admin — just initialise.
 onMounted(() => {
-  if (!currentUser?.value?.is_admin) {
-    router.replace('/')
-    return
-  }
   openFromQuery()
   window.addEventListener('keydown', onShortcut)
 })
