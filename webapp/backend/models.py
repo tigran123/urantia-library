@@ -358,3 +358,30 @@ class UsageEvent(Base):
     path        = Column(String, nullable=True)
     hash_id     = Column(String, ForeignKey("books.id", ondelete="SET NULL"), nullable=True)
     extra_json  = Column(Text, nullable=True)
+
+
+class AuthSession(Base):
+    """Persisted mirror of the in-memory _active_sessions allowlist in main.py.
+
+    The in-memory dict remains the runtime source of truth (revocation gate,
+    Admin → Sessions panel, online counts); this table only exists so the
+    allowlist survives a backend restart. main._load_active_sessions()
+    rehydrates the dict from here on startup, so a deploy/reload no longer
+    bounces every logged-in user to /login. Rows are written on login and
+    removed on logout / admin termination; columns mirror the dict's value
+    shape one-for-one. user_id ON DELETE CASCADE drops a deleted user's
+    sessions (the auth deps reject inactive/missing users regardless)."""
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        Index("ix_auth_sessions_user",    "user_id"),
+        Index("ix_auth_sessions_expires", "expires_at"),
+    )
+
+    jti          = Column(String, primary_key=True)
+    user_id      = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    email        = Column(String, nullable=False)
+    ip_address   = Column(String, nullable=True)
+    user_agent   = Column(String, nullable=True)
+    created_at   = Column(String, nullable=False)   # ISO-8601 UTC
+    last_seen_at = Column(String, nullable=False)   # ISO-8601 UTC
+    expires_at   = Column(String, nullable=False)   # ISO-8601 UTC

@@ -136,10 +136,7 @@ def app_ctx(monkeypatch):
         try:
             u = db.query(models.User).filter(models.User.email == email).first()
             user_id = u.id if u else 0
-        finally:
-            db.close()
-        with main._active_sessions_lock:
-            main._active_sessions[jti] = {
+            sess = {
                 "user_id": user_id,
                 "email": email,
                 "ip_address": "testclient",
@@ -148,6 +145,14 @@ def app_ctx(monkeypatch):
                 "last_seen_at": now,
                 "expires_at": expires_at,
             }
+            with main._active_sessions_lock:
+                main._active_sessions[jti] = sess
+            # Persist the auth_sessions row too, the way /api/login does — any
+            # token-mint path must mirror to the table (see CLAUDE.md). Reuses
+            # production serialization so test rows can't drift from real ones.
+            main._persist_session(db, jti, sess)
+        finally:
+            db.close()
         c.cookies.set("access_token", token)
         return c
 

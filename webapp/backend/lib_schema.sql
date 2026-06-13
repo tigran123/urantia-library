@@ -30,6 +30,23 @@ CREATE TABLE registration_requests (
     legal_version_accepted TEXT         -- LEGAL_VERSION at submit; copied onto users.legal_version_accepted at approval
 );
 
+-- Persisted mirror of main.py's in-memory _active_sessions allowlist, so JWT
+-- sessions survive a backend restart (rehydrated on startup by
+-- _load_active_sessions). The in-memory dict stays the runtime source of truth;
+-- rows are written on login and removed on logout / admin termination.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    jti          TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email        TEXT NOT NULL,
+    ip_address   TEXT,
+    user_agent   TEXT,
+    created_at   TEXT NOT NULL,                                       -- ISO-8601 UTC
+    last_seen_at TEXT NOT NULL,                                       -- ISO-8601 UTC
+    expires_at   TEXT NOT NULL                                        -- ISO-8601 UTC
+);
+CREATE INDEX IF NOT EXISTS ix_auth_sessions_user    ON auth_sessions(user_id);
+CREATE INDEX IF NOT EXISTS ix_auth_sessions_expires ON auth_sessions(expires_at);
+
 -- ==============================================================================
 -- 2. The CAS Metadata Vault
 -- ==============================================================================
@@ -359,4 +376,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '13');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '14');

@@ -124,6 +124,11 @@ async def _lifespan(_app: FastAPI):
         _purge_expired_staging()
     except Exception:
         logging.exception("startup: staging sweep failed; will retry on next upload/commit")
+    try:
+        # Reload persisted JWT sessions so a restart doesn't log everyone out.
+        _load_active_sessions()
+    except Exception:
+        logging.exception("startup: auth session rehydration failed; sessions will re-login")
     yield
 
 app = FastAPI(lifespan=_lifespan)
@@ -256,9 +261,13 @@ ONLINE_WINDOW = timedelta(minutes=5)
 
 # Active JWT sessions, keyed by the token's `jti` claim. A request whose jti
 # is not here is treated as terminated (401), even if the JWT signature and
-# `exp` are still valid. The map is in-process only — a backend restart
-# wipes it and forces every cookie to re-login, which is the agreed
-# semantics.
+# `exp` are still valid. This dict is the runtime source of truth (revocation
+# gate, Admin → Sessions panel, online counts) but is now write-through mirrored
+# to the `auth_sessions` table: login adds a row, logout / admin termination
+# remove it, and `_load_active_sessions()` rehydrates this dict from the table
+# on startup. So a backend restart no longer logs everyone out — to invalidate
+# every session at once, rotate `JWT_SECRET_KEY` (every JWT then fails its
+# signature check).
 _active_sessions: dict[str, dict] = {}
 _active_sessions_lock = threading.Lock()
 
@@ -269,6 +278,118 @@ def _purge_expired_sessions_locked() -> None:
     expired = [k for k, v in _active_sessions.items() if v["expires_at"] <= now]
     for k in expired:
         _active_sessions.pop(k, None)
+
+
+def _persist_session(db: Session, jti: str, sess: dict) -> None:
+    """Write-through one session into `auth_sessions` so it survives a restart.
+    Best-effort: a failure here must never break login — the session still works
+    for this process lifetime via the in-memory map, it just won't be rehydrated
+    after the next restart. Datetimes are stored as ISO-8601 UTC strings."""
+    try:
+        # add(), not merge(): jti is a fresh UUID per mint so the row can't
+        # already exist — merge()'s SELECT-before-INSERT is wasted, and an
+        # accidental duplicate jti should surface as the caught IntegrityError
+        # rather than silently overwriting created_at/ip/ua.
+        db.add(models.AuthSession(
+            jti=jti,
+            user_id=sess["user_id"],
+            email=sess["email"],
+            ip_address=sess.get("ip_address"),
+            user_agent=sess.get("user_agent"),
+            created_at=sess["created_at"].isoformat(),
+            last_seen_at=sess["last_seen_at"].isoformat(),
+            expires_at=sess["expires_at"].isoformat(),
+        ))
+        db.commit()
+    except Exception:
+        logging.exception("auth session persist failed for jti=%s", jti)
+        db.rollback()
+
+
+def _delete_session(db: Session, jti: str) -> None:
+    """Delete a persisted session row and commit, raising on DB failure (after a
+    rollback). Revocation must be durable: a session evicted from
+    `_active_sessions` while its row survives on disk would be resurrected by
+    `_load_active_sessions()` on the next restart, so callers evict from memory
+    only *after* this returns successfully. The commit also flushes any rows the
+    caller staged in the same transaction (e.g. the audit row in admin
+    termination), so the audit and the delete land — or roll back — together."""
+    try:
+        db.query(models.AuthSession).filter(models.AuthSession.jti == jti).delete(
+            synchronize_session=False
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _delete_user_sessions(db: Session, user_id: int) -> None:
+    """Delete every persisted auth_sessions row for a user and commit. Used when
+    a user is deactivated so a restart can't rehydrate their sessions. The commit
+    also flushes anything else staged on `db` in the same transaction (e.g. the
+    is_active change + audit row). Re-raises on DB failure after a rollback, like
+    `_delete_session` — revocation must be durable before the caller evicts the
+    matching entries from `_active_sessions`."""
+    try:
+        db.query(models.AuthSession).filter(
+            models.AuthSession.user_id == user_id
+        ).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _purge_expired_session_rows(db: Session) -> None:
+    """Delete `auth_sessions` rows past their expiry. Called once at startup by
+    `_load_active_sessions` — the only point expired rows are ever read, so the
+    startup sweep is sufficient and the login path needn't purge per-request.
+    Best-effort — pure cleanup, never on a request's critical path."""
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        db.query(models.AuthSession).filter(
+            models.AuthSession.expires_at < now_iso
+        ).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        logging.exception("auth session expiry purge failed")
+        db.rollback()
+
+
+def _load_active_sessions() -> None:
+    """Rehydrate `_active_sessions` from the `auth_sessions` table on startup so
+    a backend restart no longer bounces every logged-in user to /login. Expired
+    rows are swept first (they're also reaped on every login, so they can't grow
+    unbounded between restarts). Best-effort: on any failure we leave the map
+    as-is, degrading to the old behaviour (everyone re-logs-in) rather than
+    blocking boot."""
+    db = SessionLocal()
+    try:
+        _purge_expired_session_rows(db)
+        rows = db.query(models.AuthSession).all()
+        loaded = 0
+        with _active_sessions_lock:
+            for r in rows:
+                try:
+                    _active_sessions[r.jti] = {
+                        "user_id": r.user_id,
+                        "email": r.email,
+                        "ip_address": r.ip_address,
+                        "user_agent": r.user_agent,
+                        "created_at": datetime.fromisoformat(r.created_at),
+                        "last_seen_at": datetime.fromisoformat(r.last_seen_at),
+                        "expires_at": datetime.fromisoformat(r.expires_at),
+                    }
+                    loaded += 1
+                except Exception:
+                    logging.exception("skipping unparseable auth session jti=%s", r.jti)
+        logging.info("rehydrated %d active session(s) from auth_sessions", loaded)
+    except Exception:
+        logging.exception("startup: failed to rehydrate auth sessions; sessions will re-login")
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _seed_admin_feedback_settings() -> None:
@@ -353,18 +474,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _current_jti(access_token: str | None) -> str | None:
+def _decode_claims(access_token: str | None, *, verify_exp: bool = True) -> dict:
+    """Decode an access_token cookie's JWT claims without validating against the
+    session map. Returns the claims dict, or `{}` if the cookie is absent or the
+    signature/format is invalid. `verify_exp=False` still yields the claims of an
+    *expired* token — used by logout, where exp validity is irrelevant when
+    tearing a session down (the signature is always verified regardless)."""
+    if not access_token:
+        return {}
+    try:
+        return jwt.decode(
+            access_token, SECRET_KEY, algorithms=[ALGORITHM],
+            options={"verify_exp": verify_exp},
+        )
+    except jwt.PyJWTError:
+        return {}
+
+
+def _current_jti(access_token: str | None, *, verify_exp: bool = True) -> str | None:
     """Decode `jti` from an access_token cookie without validating against the
     session map. Used by admin handlers that need to know which session is
     the caller's own (to guard against self-termination), and by
     _record_usage_event() to cluster a single login's events."""
-    if not access_token:
-        return None
-    try:
-        payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.PyJWTError:
-        return None
-    return payload.get("jti")
+    return _decode_claims(access_token, verify_exp=verify_exp).get("jti")
 
 
 def _verify_book_sync(hash_id: str, mode: str, db: Session) -> dict:
@@ -907,17 +1039,23 @@ async def login(request: Request, login_data: schemas.UserLogin, db: Session = D
 
     access_token, jti, expires_at = create_access_token(data={"sub": user.email})
     now = datetime.now(timezone.utc)
+    sess = {
+        "user_id": user.id,
+        "email": user.email,
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+        "created_at": now,
+        "last_seen_at": now,
+        "expires_at": expires_at,
+    }
     with _active_sessions_lock:
         _purge_expired_sessions_locked()
-        _active_sessions[jti] = {
-            "user_id": user.id,
-            "email": user.email,
-            "ip_address": request.client.host if request.client else None,
-            "user_agent": request.headers.get("user-agent"),
-            "created_at": now,
-            "last_seen_at": now,
-            "expires_at": expires_at,
-        }
+        _active_sessions[jti] = sess
+    # Mirror to auth_sessions so the session survives a restart. Outside the
+    # lock — never hold the threading lock across DB I/O. No expiry purge here:
+    # expired rows are only ever read at startup, where _load_active_sessions
+    # sweeps them, so purging on the login hot path would be wasted work.
+    _persist_session(db, jti, sess)
     response = JSONResponse(content={"message": "Login successful"})
     response.set_cookie(
         key="access_token",
@@ -944,20 +1082,31 @@ async def logout(access_token: str = Cookie(None)):
         secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
         samesite="lax",
     )
-    # Decode the cookie inline rather than going through get_optional_user —
-    # an already-terminated session must still be able to clear its own row,
-    # and the dep would refuse it.
+    # Decode the cookie rather than going through get_optional_user — an
+    # already-terminated session must still be able to clear its own row, and the
+    # dep would refuse it. verify_exp=False so an *expired* cookie still yields
+    # its jti (exp validity is irrelevant when tearing a session down); the
+    # signature is still verified, so a tampered token decodes to {}.
     if access_token:
-        try:
-            payload = jwt.decode(access_token, SECRET_KEY, algorithms=[ALGORITHM])
-            jti = payload.get("jti")
-            email = payload.get("sub")
-        except jwt.PyJWTError:
-            jti = None
-            email = None
+        claims = _decode_claims(access_token, verify_exp=False)
+        jti = claims.get("jti")
+        email = claims.get("sub")
         if jti:
-            with _active_sessions_lock:
-                _active_sessions.pop(jti, None)
+            # Delete the persisted row first, then evict from memory — and only
+            # if the delete succeeded. A session gone from memory but still on
+            # disk would be resurrected by _load_active_sessions on the next
+            # restart. If the delete fails we leave both in place (a consistent,
+            # still-live state); the cleared cookie has already logged out this
+            # browser, and the row is reaped later by the expiry purge.
+            db_sess = SessionLocal()
+            try:
+                _delete_session(db_sess, jti)
+                with _active_sessions_lock:
+                    _active_sessions.pop(jti, None)
+            except Exception:
+                logging.exception("logout: failed to delete persisted session jti=%s", jti)
+            finally:
+                db_sess.close()
         if email:
             db_local = SessionLocal()
             try:
@@ -1161,13 +1310,20 @@ async def library_stats(
                 if ts < cutoff:
                     del _last_seen[uid]
             online_users = len(_last_seen)
+            live_uids = set(_last_seen)
         # Distinct active sessions within the same window. The footer suffix
         # ("(N online in M sessions)") only renders when M > N, but the value
         # is always returned so the frontend doesn't have to special-case it.
+        # Only count sessions of users who are actually live (in _last_seen):
+        # after a restart, rehydrated sessions carry a login-time last_seen_at
+        # that can fall inside the window even though their owner hasn't made a
+        # request since the restart — counting those would inflate M above N and
+        # render a contradictory footer that conflates distinct users as tabs.
         with _active_sessions_lock:
             online_sessions = sum(
                 1 for s in _active_sessions.values()
-                if s.get("last_seen_at") and s["last_seen_at"] >= cutoff
+                if s["user_id"] in live_uids
+                and s.get("last_seen_at") and s["last_seen_at"] >= cutoff
             )
         response["total_users"] = int(total_users)
         response["online_users"] = int(online_users)
@@ -2533,10 +2689,14 @@ async def admin_terminate_session(
 ):
     if jti == _current_jti(access_token):
         raise HTTPException(status_code=400, detail="Refusing to terminate own session")
-    # Peek at the session row first so we have something to audit; only after
-    # the audit row has actually committed do we evict from memory. If commit
-    # fails, the target still has their session and the admin sees a 5xx — no
-    # torn-write window where the user is logged out but the log says nothing.
+    # Peek at the session row first so we have something to audit; only after the
+    # audit row AND the persisted-session delete have committed do we evict from
+    # memory. _delete_session commits both (the audit row is staged in the same
+    # transaction) and re-raises on failure — so if it fails the admin sees a
+    # 5xx and the target keeps a fully-live session on both memory and disk: no
+    # torn-write window where the user is "terminated" in memory but the row
+    # survives on disk to be rehydrated on the next restart (nor one where the
+    # log claims a termination that didn't happen).
     with _active_sessions_lock:
         target = _active_sessions.get(jti)
     if target is None:
@@ -2545,7 +2705,7 @@ async def admin_terminate_session(
            target_kind="user", target_id=target["user_id"],
            summary=f'Terminated session of {target["email"]}',
            details={"email": target["email"], "jti": jti, "ip_address": target.get("ip_address")})
-    db.commit()
+    _delete_session(db, jti)
     with _active_sessions_lock:
         _active_sessions.pop(jti, None)   # idempotent — another request might have evicted concurrently
     return {"jti": jti, "terminated": True}
@@ -2587,7 +2747,19 @@ async def admin_set_user_clearance(
                target_kind="user", target_id=user.id,
                summary=f'Updated {user.email}: {", ".join(diff.keys())}',
                details={"email": user.email, "changed": diff})
-    db.commit()
+    if diff.get("is_active") == [True, False]:
+        # Deactivation durably revokes the user's sessions: delete their
+        # auth_sessions rows (so a restart can't rehydrate them) and evict the
+        # in-memory entries (so the next request 401s immediately and they must
+        # re-login even if reactivated). Delete-then-evict, same ordering as
+        # logout / admin_terminate_session; the commit also flushes the
+        # is_active change + audit row staged above in the same transaction.
+        _delete_user_sessions(db, user.id)
+        with _active_sessions_lock:
+            for j in [k for k, v in _active_sessions.items() if v["user_id"] == user.id]:
+                _active_sessions.pop(j, None)
+    else:
+        db.commit()
     db.refresh(user)
     return user
 
