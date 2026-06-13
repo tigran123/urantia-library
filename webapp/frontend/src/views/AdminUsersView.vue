@@ -6,7 +6,7 @@ import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
 import { userInitials } from '../userDisplay'
 
-const { t } = useI18n({ useScope: 'global' })
+const { t, locale } = useI18n({ useScope: 'global' })
 
 type CurrentUser = { email: string, is_admin?: boolean } | null
 const currentUser = inject<{ value: CurrentUser } | null>('currentUser', null)
@@ -104,12 +104,22 @@ const getFullUrl = (url: string | null | undefined): string => {
   return (api.defaults.baseURL?.replace('/api', '') || '') + url
 }
 
+// Session timestamps arrive from the server as ISO-8601 UTC (…+00:00). Render
+// them *in UTC* (not the viewer's local zone) with a 24h clock and a trailing
+// "Z", so an admin reading the panel — possibly from another machine/timezone —
+// sees an unambiguous, timezone-stable value. Date part keeps the app's
+// "D MMM YYYY" convention (Russian " г." suffix stripped).
 const fmtTime = (iso: string): string => {
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const intlLocale = locale.value === 'ru' ? 'ru-RU' : 'en-GB'
+  const date = new Intl.DateTimeFormat(intlLocale, {
+    timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric',
+  }).format(d).replace(/\s*г\.?$/u, '')
+  const time = new Intl.DateTimeFormat(intlLocale, {
+    timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(d)
+  return `${date}, ${time}Z`
 }
 
 const saveUser = async (u: AdminUser) => {
