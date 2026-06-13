@@ -931,6 +931,9 @@ const messages = {
           annotation_moderate:     'Annotation',
           usage_kinds_update:      'Usage recording',
           legal_accept:            'Legal acceptance',
+          registration_request:    'Registration request',
+          registration_approve:    'Registration approved',
+          registration_reject:     'Registration rejected',
         },
         summary: {
           book_upload:             'Uploaded "{title}" to /{path}',
@@ -955,6 +958,9 @@ const messages = {
           usage_kinds_update:      'Usage recording set to: {kinds}',
           usage_kinds_none:        '(none)',
           legal_accept:            'Accepted legal version {version}',
+          registration_request:    'Registration requested by {email}',
+          registration_approve:    'Approved registration for {email}',
+          registration_reject:     'Rejected registration for {email}',
         },
         field: {
           title:           'title',
@@ -1937,6 +1943,9 @@ const messages = {
           annotation_moderate:     'Аннотация',
           usage_kinds_update:      'Запись активности',
           legal_accept:            'Согласие с документами',
+          registration_request:    'Запрос регистрации',
+          registration_approve:    'Регистрация одобрена',
+          registration_reject:     'Регистрация отклонена',
         },
         summary: {
           book_upload:             'Загружено «{title}» в /{path}',
@@ -1961,6 +1970,9 @@ const messages = {
           usage_kinds_update:      'Запись активности: {kinds}',
           usage_kinds_none:        '(нет)',
           legal_accept:            'Принята версия документов: {version}',
+          registration_request:    'Запрос регистрации от {email}',
+          registration_approve:    'Одобрена регистрация для {email}',
+          registration_reject:     'Отклонена регистрация для {email}',
         },
         field: {
           title:           'название',

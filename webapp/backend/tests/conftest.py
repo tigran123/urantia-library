@@ -91,6 +91,13 @@ def app_ctx(monkeypatch):
         captured.append({"to": to, "subj": subj, "html": html, "plain": plain})
     import email_utils
     monkeypatch.setattr(email_utils, "_send_email_multipart", fake_multipart)
+    # The single-part path (registration notify/approval/rejection mail) also
+    # needs intercepting — otherwise those flows attempt a real SMTP_SSL connect.
+    # Match the new (ok, error) return contract so callers record sent=True.
+    def fake_send_email(to, subj, html):
+        captured.append({"to": to, "subj": subj, "html": html, "plain": None})
+        return True, None
+    monkeypatch.setattr(email_utils, "_send_email", fake_send_email)
 
     from fastapi.testclient import TestClient
 

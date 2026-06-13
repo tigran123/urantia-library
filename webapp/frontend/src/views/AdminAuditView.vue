@@ -47,6 +47,9 @@ const ACTION_OPTIONS: { value: string, key: string }[] = [
   { value: 'annotation.moderate',  key: 'admin.audit.action.annotation_moderate' },
   { value: 'usage.kinds_update',   key: 'admin.audit.action.usage_kinds_update' },
   { value: 'legal.accept',         key: 'admin.audit.action.legal_accept' },
+  { value: 'registration.request', key: 'admin.audit.action.registration_request' },
+  { value: 'registration.approve', key: 'admin.audit.action.registration_approve' },
+  { value: 'registration.reject',  key: 'admin.audit.action.registration_reject' },
 ]
 
 const actionFilter = ref('')
@@ -69,6 +72,9 @@ const ACTION_CHIP_CLASSES: Record<string, string> = {
   'annotation.moderate':    'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
   'usage.kinds_update':     'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
   'legal.accept':           'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
+  'registration.request':   'bg-lime-100 text-lime-700 dark:bg-lime-900/40 dark:text-lime-300',
+  'registration.approve':   'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+  'registration.reject':    'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
 }
 const chipClass = (action: string) =>
   ACTION_CHIP_CLASSES[action] || 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
@@ -90,6 +96,9 @@ const ACTION_SEGMENT_CLASSES: Record<string, string> = {
   'annotation.moderate':    'bg-cyan-500 dark:bg-cyan-400',
   'usage.kinds_update':     'bg-slate-500 dark:bg-slate-400',
   'legal.accept':           'bg-sky-500 dark:bg-sky-400',
+  'registration.request':   'bg-lime-500 dark:bg-lime-400',
+  'registration.approve':   'bg-green-500 dark:bg-green-400',
+  'registration.reject':    'bg-red-500 dark:bg-red-400',
 }
 const segmentClass = (action: string) =>
   ACTION_SEGMENT_CLASSES[action] || 'bg-gray-400 dark:bg-gray-500'
@@ -394,6 +403,30 @@ const summaryParts = (e: AuditLogEntry): SummaryParts | null => {
       if (version) return {
         keypath: 'admin.audit.summary.legal_accept',
         params: { version },
+      }
+      break
+    }
+    case 'registration.request': {
+      const email = get('email')
+      if (email) return {
+        keypath: 'admin.audit.summary.registration_request',
+        params: { email },
+      }
+      break
+    }
+    case 'registration.approve': {
+      const email = get('email')
+      if (email) return {
+        keypath: 'admin.audit.summary.registration_approve',
+        params: { email },
+      }
+      break
+    }
+    case 'registration.reject': {
+      const email = get('email')
+      if (email) return {
+        keypath: 'admin.audit.summary.registration_reject',
+        params: { email },
       }
       break
     }

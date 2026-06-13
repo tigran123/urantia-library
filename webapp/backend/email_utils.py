@@ -17,7 +17,11 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "password")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@sigmaai.ai")
 APP_URL = os.environ.get("APP_URL", "https://sigmaai.ai/library")
 
-def _send_email(to_email: str, subject: str, html_content: str):
+def _send_email(to_email: str, subject: str, html_content: str) -> tuple[bool, str | None]:
+    """Send a single-part HTML email. Returns (ok, error): (True, None) when SMTP
+    accepted the message, (False, "<exception text>") when the send raised. We
+    still swallow the exception (never propagate to the request) — the return
+    value is what lets callers record send success/failure in the audit log."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = SMTP_USER
@@ -32,12 +36,14 @@ def _send_email(to_email: str, subject: str, html_content: str):
             server.ehlo()
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.sendmail(SMTP_USER, to_email, msg.as_string())
+        return True, None
     except Exception as e:
         print(f"Failed to send email to {to_email}. Error: {e}")
         # In a production app you might want to log this to a proper logger
         # and possibly raise an error depending on strictness.
+        return False, str(e)
 
-def send_admin_notification(user_email: str, token: str, source: str = None, purpose: str = None):
+def send_admin_notification(user_email: str, token: str, source: str = None, purpose: str = None) -> dict:
     approve_link = f"{APP_URL}/api/admin/approve?token={token}"
     reject_link = f"{APP_URL}/api/admin/reject?token={token}"
 
@@ -57,9 +63,11 @@ def send_admin_notification(user_email: str, token: str, source: str = None, pur
       </body>
     </html>
     """
-    _send_email(ADMIN_EMAIL, "New Registration Request", html)
+    subject = "New Registration Request"
+    ok, error = _send_email(ADMIN_EMAIL, subject, html)
+    return {"to": ADMIN_EMAIL, "subject": subject, "ok": ok, "error": error}
 
-def send_user_approval(user_email: str, token: str, language: str = "en"):
+def send_user_approval(user_email: str, token: str, language: str = "en") -> dict:
     setup_link = f"{APP_URL}/#/set-password?token={token}"
     bodies = {
         "en": (
@@ -88,7 +96,8 @@ def send_user_approval(user_email: str, token: str, language: str = "en"):
         ),
     }
     subject, html = bodies.get(language, bodies["en"])
-    _send_email(user_email, subject, html)
+    ok, error = _send_email(user_email, subject, html)
+    return {"to": user_email, "subject": subject, "ok": ok, "error": error}
 
 def send_moderation_digest(pending_count: int):
     """Throttled digest sent to the admin when book comments await moderation."""
@@ -149,7 +158,7 @@ def send_legal_update(user_email: str) -> None:
     _send_email_multipart(user_email, subject, html, plain)
 
 
-def send_user_rejection(user_email: str, language: str = "en"):
+def send_user_rejection(user_email: str, language: str = "en") -> dict:
     bodies = {
         "en": (
             "Registration Update",
@@ -175,7 +184,8 @@ def send_user_rejection(user_email: str, language: str = "en"):
         ),
     }
     subject, html = bodies.get(language, bodies["en"])
-    _send_email(user_email, subject, html)
+    ok, error = _send_email(user_email, subject, html)
+    return {"to": user_email, "subject": subject, "ok": ok, "error": error}
 
 
 # ==============================================================================

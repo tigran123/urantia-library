@@ -550,7 +550,7 @@ def _is_admin(user: models.User | None) -> bool:
 
 def _audit(
     db: Session,
-    actor: models.User,
+    actor: models.User | None,
     action: str,
     *,
     target_kind: str | None = None,
@@ -570,10 +570,16 @@ def _audit(
     `action` is a dotted controlled vocabulary; see admin_audit_log.action in
     lib_schema.sql for the canonical list. `target_id` accepts int (user id,
     comment id) or str (book hash) and is stored as text either way.
+
+    `actor` is None for system/automated events with no authenticated user —
+    e.g. the registration lifecycle (self-service register, plus approve/reject
+    triggered via the tokenized email links, which carry no session). Such rows
+    store actor_user_id NULL; the feed renders them as a "System" actor and the
+    leaderboard omits them (they aren't attributable to any admin).
     """
     db.add(models.AdminAuditLog(
         created_at=_now_iso(),
-        actor_user_id=actor.id,
+        actor_user_id=actor.id if actor is not None else None,
         action=action,
         target_kind=target_kind,
         target_id=str(target_id) if target_id is not None else None,
@@ -2310,13 +2316,23 @@ async def register_user(request: Request, user: schemas.UserCreate, db: Session 
     db.commit()
     db.refresh(db_req)
 
-    # Notify admin
-    email_utils.send_admin_notification(
+    # Notify admin. Inline send (pre-existing) so we can record the outcome —
+    # recipient, subject, whether SMTP accepted it — in the audit log, letting
+    # the operator answer "did the request notification actually go out?" later.
+    mail = email_utils.send_admin_notification(
         user_email=db_req.email,
         token=db_req.token,
         source=db_req.source,
         purpose=db_req.purpose
     )
+    _audit(db, None, "registration.request",
+           target_kind="registration_request", target_id=db_req.id,
+           summary=f"Registration requested by {db_req.email}",
+           details={"email": db_req.email, "source": db_req.source,
+                    "purpose": db_req.purpose, "language": db_req.language,
+                    "notify_email_to": mail["to"], "notify_email_subject": mail["subject"],
+                    "notify_email_sent": mail["ok"], "notify_email_error": mail["error"]})
+    db.commit()
 
     _record_usage_event(
         request, "register", user=None,
@@ -2333,11 +2349,24 @@ async def approve_user(token: str, db: Session = Depends(get_db)):
     if db_req.status == "approved":
         return JSONResponse(status_code=200, content={"message": "User already approved, waiting for password setup."})
 
+    req_id = db_req.id
+    email = db_req.email
+    req_token = db_req.token
+    lang = db_req.language or "en"
     db_req.status = "approved"
     db.commit()
 
-    # Notify user to set password — in the locale they registered in.
-    email_utils.send_user_approval(db_req.email, db_req.token, language=db_req.language or "en")
+    # Notify user to set password — in the locale they registered in. Inline so
+    # the audit row can record whether the approval mail was actually sent: when
+    # the user says "I never got it", the operator checks sent=true → spam folder.
+    mail = email_utils.send_user_approval(email, req_token, language=lang)
+    _audit(db, None, "registration.approve",
+           target_kind="registration_request", target_id=req_id,
+           summary=f"Registration approved for {email}",
+           details={"email": email, "language": lang,
+                    "approval_email_to": mail["to"], "approval_email_subject": mail["subject"],
+                    "approval_email_sent": mail["ok"], "approval_email_error": mail["error"]})
+    db.commit()
 
     return JSONResponse(status_code=200, content={"message": "User approved successfully. Email sent to set password."})
 
@@ -2440,13 +2469,22 @@ async def reject_user(token: str, db: Session = Depends(get_db)):
     if not db_req:
         return JSONResponse(status_code=404, content={"message": "Invalid or expired token."})
 
+    req_id = db_req.id   # snapshot before delete — target_id is a plain string, not a FK
     user_email = db_req.email
     lang = db_req.language or "en"
     db.delete(db_req)
     db.commit()
 
-    # Notify user — in the locale they registered in.
-    email_utils.send_user_rejection(user_email, language=lang)
+    # Notify user — in the locale they registered in. Inline so the audit row
+    # can record whether the rejection mail was actually sent.
+    mail = email_utils.send_user_rejection(user_email, language=lang)
+    _audit(db, None, "registration.reject",
+           target_kind="registration_request", target_id=req_id,
+           summary=f"Registration rejected for {user_email}",
+           details={"email": user_email, "language": lang,
+                    "rejection_email_to": mail["to"], "rejection_email_subject": mail["subject"],
+                    "rejection_email_sent": mail["ok"], "rejection_email_error": mail["error"]})
+    db.commit()
 
     return JSONResponse(status_code=200, content={"message": "User rejected successfully."})
 
@@ -7893,7 +7931,18 @@ async def admin_audit_feed(
                 details = json.loads(entry.details_json)
             except json.JSONDecodeError:
                 details = {"_raw": entry.details_json}  # don't crash the feed over a malformed row
-        if user is None:
+        if entry.actor_user_id is None:
+            # System/automated event with no authenticated actor (the
+            # registration lifecycle: self-service register, plus approve/reject
+            # via the tokenized email links). id 0 is a sentinel — autoincrement
+            # never assigns it, so it can't collide with a real user.
+            actor = {
+                "id": 0,
+                "email": "",
+                "real_name": "System",
+                "avatar_url": None,
+            }
+        elif user is None:
             # Actor was hard-deleted. Synthesize a placeholder so the row
             # stays visible — the audit log's append-only contract takes
             # precedence over hiding orphans.

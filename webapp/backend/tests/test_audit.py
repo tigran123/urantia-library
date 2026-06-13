@@ -263,3 +263,158 @@ def test_comment_moderate_records_decision(app_ctx):
         assert "bob@example.com" in rows[1].summary
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Registration lifecycle audit rows (request / approve / reject). All three are
+# actorless (no logged-in user — register is anonymous, approve/reject ride the
+# tokenized email links), so actor_user_id is NULL and the details carry the
+# sent-mail metadata the operator checks when a user reports a missing email.
+# ---------------------------------------------------------------------------
+import json
+
+from fastapi.testclient import TestClient
+
+
+def test_register_writes_actorless_request_audit(app_ctx):
+    helpers, emails, TestSession = app_ctx
+    models = helpers["models"]
+    main   = helpers["main"]
+
+    anon = TestClient(main.app)
+    r = anon.post("/api/register", json={
+        "email": "newbie@example.com", "source": "a friend",
+        "purpose": "study", "accepted_legal": True, "language": "ru",
+    })
+    assert r.status_code == 200, r.text
+
+    db = TestSession()
+    try:
+        rows = db.query(models.AdminAuditLog).all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.action == "registration.request"
+        assert row.actor_user_id is None          # system event, no actor
+        assert row.target_kind == "registration_request"
+        assert "newbie@example.com" in row.summary
+        d = json.loads(row.details_json)
+        assert d["email"] == "newbie@example.com"
+        assert d["source"] == "a friend"
+        assert d["language"] == "ru"
+        # Sent-mail metadata: went to the admin address, captured as sent.
+        assert d["notify_email_to"] == "admin@example.com"
+        assert d["notify_email_subject"] == "New Registration Request"
+        assert d["notify_email_sent"] is True
+        assert d["notify_email_error"] is None
+    finally:
+        db.close()
+    # The admin notification was actually attempted (captured by conftest).
+    assert any(e["to"] == "admin@example.com" for e in emails)
+
+
+def test_approve_writes_actorless_approve_audit(app_ctx):
+    helpers, emails, TestSession = app_ctx
+    models = helpers["models"]
+    main   = helpers["main"]
+
+    # Seed a pending request directly; grab its auto-generated token.
+    db = TestSession()
+    try:
+        req = models.RegistrationRequest(
+            email="pending@example.com", status="pending", language="en",
+        )
+        db.add(req); db.commit(); db.refresh(req)
+        token = req.token
+    finally:
+        db.close()
+
+    anon = TestClient(main.app)
+    r = anon.get(f"/api/admin/approve?token={token}")
+    assert r.status_code == 200, r.text
+
+    db = TestSession()
+    try:
+        rows = db.query(models.AdminAuditLog).filter(
+            models.AdminAuditLog.action == "registration.approve").all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.actor_user_id is None
+        assert row.target_kind == "registration_request"
+        assert "pending@example.com" in row.summary
+        d = json.loads(row.details_json)
+        assert d["approval_email_to"] == "pending@example.com"
+        assert d["approval_email_sent"] is True
+        assert d["approval_email_error"] is None
+    finally:
+        db.close()
+
+
+def test_reject_writes_actorless_reject_audit(app_ctx):
+    helpers, _emails, TestSession = app_ctx
+    models = helpers["models"]
+    main   = helpers["main"]
+
+    db = TestSession()
+    try:
+        req = models.RegistrationRequest(
+            email="denied@example.com", status="pending", language="en",
+        )
+        db.add(req); db.commit(); db.refresh(req)
+        token = req.token
+        req_id = req.id
+    finally:
+        db.close()
+
+    anon = TestClient(main.app)
+    r = anon.get(f"/api/admin/reject?token={token}")
+    assert r.status_code == 200, r.text
+
+    db = TestSession()
+    try:
+        # The registration_request row is gone, but its audit row survives.
+        assert db.query(models.RegistrationRequest).filter(
+            models.RegistrationRequest.id == req_id).first() is None
+        rows = db.query(models.AdminAuditLog).filter(
+            models.AdminAuditLog.action == "registration.reject").all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.actor_user_id is None
+        assert row.target_id == str(req_id)
+        assert "denied@example.com" in row.summary
+        d = json.loads(row.details_json)
+        assert d["rejection_email_to"] == "denied@example.com"
+        assert d["rejection_email_sent"] is True
+    finally:
+        db.close()
+
+
+def test_feed_renders_actorless_rows_as_system(app_ctx):
+    """An actorless row (NULL actor_user_id) must render as a 'System' actor —
+    not 500 on the non-optional AuditActor.id, and not be mislabelled as a
+    hard-deleted user."""
+    helpers, _emails, TestSession = app_ctx
+    models = helpers["models"]
+
+    helpers["make_user"]("admin@example.com", admin=True)
+    db = TestSession()
+    try:
+        db.add(models.AdminAuditLog(
+            created_at="2026-06-13T00:00:00Z",
+            actor_user_id=None,
+            action="registration.request",
+            target_kind="registration_request", target_id="1",
+            summary="Registration requested by ghost@example.com",
+            details_json=json.dumps({"email": "ghost@example.com"}),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    c = helpers["client_for"]("admin@example.com")
+    r = c.get("/api/admin/audit?action=registration.request")
+    assert r.status_code == 200, r.text
+    entries = r.json()["entries"]
+    assert len(entries) == 1
+    actor = entries[0]["actor"]
+    assert actor["id"] == 0
+    assert actor["real_name"] == "System"
