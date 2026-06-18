@@ -15,7 +15,8 @@ CREATE TABLE users (
     real_name VARCHAR,                  -- Optional display name shown on comments instead of the email local-part
     search_per_page INTEGER DEFAULT 50,
     accepted_legal_at TEXT,             -- ISO-8601 UTC; timestamp of the user's most-recent acceptance (any LEGAL_VERSION)
-    legal_version_accepted TEXT         -- LEGAL_VERSION at the time of accepted_legal_at; NULL or != current → re-prompt
+    legal_version_accepted TEXT,        -- LEGAL_VERSION at the time of accepted_legal_at; NULL or != current → re-prompt
+    last_seen_at TEXT                   -- ISO-8601 UTC; last request time, flushed periodically from main._last_seen (NULL = never seen)
 );
 
 CREATE TABLE registration_requests (
@@ -376,4 +377,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '14');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '15');

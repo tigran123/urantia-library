@@ -39,6 +39,8 @@ class AdminUserSummary(BaseModel):
     is_active: bool
     avatar_url: Optional[str] = None
     real_name: Optional[str] = None
+    last_seen_at: Optional[str] = None   # ISO-8601 UTC; effective last activity, None = never seen
+    is_online: bool = False              # active within ONLINE_WINDOW
 
     model_config = ConfigDict(from_attributes=True)
 

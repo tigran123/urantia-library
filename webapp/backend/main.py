@@ -32,7 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import models
 import schemas
 from database import engine, get_db, SessionLocal, verify_schema_version, LEGAL_VERSION
-from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
+from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 import email_utils
 import jwt
 import geoip2.database
@@ -129,7 +129,26 @@ async def _lifespan(_app: FastAPI):
         _load_active_sessions()
     except Exception:
         logging.exception("startup: auth session rehydration failed; sessions will re-login")
-    yield
+
+    # Periodically mirror the in-memory _last_seen presence map into
+    # users.last_seen_at so Admin → Users shows a last-seen time for every user
+    # (the hot auth deps stay write-free; see _flush_last_seen). Lost on a hard
+    # crash like every other in-process job, but flushed on a clean shutdown.
+    flush_task = asyncio.create_task(_last_seen_flush_loop())
+    try:
+        yield
+    finally:
+        flush_task.cancel()
+        try:
+            await flush_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logging.exception("shutdown: last_seen flush loop raised on cancel")
+        try:
+            _flush_last_seen_once()
+        except Exception:
+            logging.exception("shutdown: final last_seen flush failed")
 
 app = FastAPI(lifespan=_lifespan)
 
@@ -258,6 +277,11 @@ def _geo_lookup(ip: str) -> tuple[Optional[str], Optional[str]]:
 _last_seen: dict[int, datetime] = {}
 _last_seen_lock = threading.Lock()
 ONLINE_WINDOW = timedelta(minutes=5)
+# How often the _lifespan loop mirrors _last_seen into users.last_seen_at.
+# MUST stay well under ONLINE_WINDOW: the online-count path prunes _last_seen
+# entries older than ONLINE_WINDOW, so a shorter flush interval guarantees a
+# user's final activity timestamp is persisted before it's pruned away.
+_LAST_SEEN_FLUSH_INTERVAL_SECONDS = 60
 
 # Active JWT sessions, keyed by the token's `jti` claim. A request whose jti
 # is not here is treated as terminated (401), even if the JWT signature and
@@ -390,6 +414,62 @@ def _load_active_sessions() -> None:
         db.rollback()
     finally:
         db.close()
+
+
+def _flush_last_seen(db: Session) -> None:
+    """Mirror the in-memory _last_seen presence map into users.last_seen_at.
+
+    The hot auth deps (get_current_user / get_optional_user) deliberately do no
+    per-request DB writes — they only stamp the in-memory _last_seen map. This
+    flush persists that map so Admin → Users can show a last-seen time for
+    *every* user, not just those with a live session. Run periodically by the
+    _lifespan flush loop and once more on clean shutdown.
+
+    Forward-only: the per-user UPDATE never moves a timestamp backwards, so it
+    can't undo the 0015 backfill (or a newer flush) and racing flushes are
+    idempotent. We snapshot the map under the lock, then do all DB I/O outside
+    it (same discipline as _persist_session — never hold the threading lock
+    across SQLite I/O). Best-effort: a failure is logged and retried next tick."""
+    with _last_seen_lock:
+        snapshot = [(uid, ts.isoformat()) for uid, ts in _last_seen.items()]
+    if not snapshot:
+        return
+    try:
+        for uid, ts_iso in snapshot:
+            db.execute(
+                sa_text(
+                    "UPDATE users SET last_seen_at = :ts "
+                    "WHERE id = :id AND (last_seen_at IS NULL OR last_seen_at < :ts)"
+                ),
+                {"ts": ts_iso, "id": uid},
+            )
+        db.commit()
+    except Exception:
+        logging.exception("last_seen flush failed")
+        db.rollback()
+
+
+def _flush_last_seen_once() -> None:
+    """Open a short-lived session, flush, close. Wrapper so the flush loop can
+    offload to a worker thread (`asyncio.to_thread`) and the shutdown path can
+    call it directly."""
+    db = SessionLocal()
+    try:
+        _flush_last_seen(db)
+    finally:
+        db.close()
+
+
+async def _last_seen_flush_loop() -> None:
+    """Periodically persist the presence map (see _flush_last_seen). The DB work
+    runs in a worker thread so the blocking SQLite I/O never stalls the event
+    loop. Cancelled on shutdown by _lifespan, which then does one final flush."""
+    while True:
+        await asyncio.sleep(_LAST_SEEN_FLUSH_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(_flush_last_seen_once)
+        except Exception:
+            logging.exception("last_seen flush loop tick failed")
 
 
 def _seed_admin_feedback_settings() -> None:
@@ -607,7 +687,7 @@ def _verify_book_sync(hash_id: str, mode: str, db: Session) -> dict:
         "db_update_failed": db_update_failed,
     }
 
-async def get_current_user(access_token: str = Cookie(None), db: Session = Depends(get_db)):
+async def get_current_user(access_token: str | None = Cookie(None), db: Session = Depends(get_db)):
     if not access_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
@@ -640,7 +720,7 @@ def require_admin(current_user: models.User = Depends(get_current_user)):
 
 
 async def get_optional_user(
-    access_token: str = Cookie(None), db: Session = Depends(get_db)
+    access_token: str | None = Cookie(None), db: Session = Depends(get_db)
 ) -> models.User | None:
     """Like `get_current_user`, but returns `None` instead of raising 401 when
     there is no valid session. Used by guest-reachable endpoints: a `None` user
@@ -1063,13 +1143,13 @@ async def login(request: Request, login_data: schemas.UserLogin, db: Session = D
         httponly=True,
         secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
         samesite="lax",
-        max_age=7*24*60*60
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
     _record_usage_event(request, "login", user=user, extra={"success": True})
     return response
 
 @app.post("/api/logout")
-async def logout(access_token: str = Cookie(None)):
+async def logout(access_token: str | None = Cookie(None)):
     response = JSONResponse(content={"message": "Logout successful"})
     # Cookie attributes must match those used in /api/login, otherwise the
     # browser ignores the Set-Cookie that's meant to clear it and the JWT
@@ -1134,8 +1214,70 @@ def _user_response_dict(u: models.User) -> dict:
     }
 
 
+_ACCESS_TOKEN_LIFETIME = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+# Slide an active session forward at most this often. The first /api/me
+# heartbeat after the token crosses this age re-issues it for a fresh full
+# lifetime, so an actively-used login never reaches the absolute expiry — while
+# a session left idle for ACCESS_TOKEN_EXPIRE_MINUTES still lapses and forces a
+# re-login. Bounds the re-issue + DB write to ~once/day per active session.
+SESSION_REFRESH_INTERVAL = timedelta(days=1)
+
+
+def _maybe_refresh_session(
+    response: Response, access_token: str | None, current_user: models.User, db: Session
+) -> None:
+    """Sliding-session refresh, called from the /api/me heartbeat. If the
+    caller's token is more than SESSION_REFRESH_INTERVAL into its lifetime,
+    re-issue it (same jti, new exp) and set a fresh cookie so an actively-used
+    login never hits the absolute expiry. Best-effort: any failure leaves the
+    current, still-valid cookie in place."""
+    jti = _current_jti(access_token)
+    if not jti:
+        return
+    now = datetime.now(timezone.utc)
+    with _active_sessions_lock:
+        sess = _active_sessions.get(jti)
+        if sess is None:
+            return
+        # Renew only once we're SESSION_REFRESH_INTERVAL past the last issue —
+        # derive "time since issue" from the stored expiry and the fixed lifetime.
+        if sess["expires_at"] - now > _ACCESS_TOKEN_LIFETIME - SESSION_REFRESH_INTERVAL:
+            return
+    new_token, _jti, new_expires = create_access_token({"sub": current_user.email}, jti=jti)
+    with _active_sessions_lock:
+        sess = _active_sessions.get(jti)
+        if sess is None:
+            return  # terminated between the checks; don't resurrect it via cookie
+        sess["expires_at"] = new_expires
+    # Persist the slid expiry so a restart rehydrates the extended window and the
+    # startup purge doesn't drop a still-active session early. Outside the lock —
+    # never hold the threading lock across DB I/O (same discipline as login).
+    try:
+        db.query(models.AuthSession).filter(models.AuthSession.jti == jti).update(
+            {"expires_at": new_expires.isoformat()}, synchronize_session=False
+        )
+        db.commit()
+    except Exception:
+        logging.exception("session refresh: failed to persist new expiry jti=%s", jti)
+        db.rollback()
+    response.set_cookie(
+        key="access_token",
+        value=new_token,
+        httponly=True,
+        secure=os.getenv("COOKIE_SECURE", "true").lower() != "false",
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
 @app.get("/api/me", response_model=schemas.UserResponse)
-async def get_me(current_user: models.User = Depends(get_current_user)):
+async def get_me(
+    response: Response,
+    access_token: str | None = Cookie(None),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _maybe_refresh_session(response, access_token, current_user, db)
     return _user_response_dict(current_user)
 
 
@@ -2647,17 +2789,53 @@ async def reject_user(token: str, db: Session = Depends(get_db)):
 
 # ---------------- Admin: clearance management ----------------
 
+def _admin_user_row(u: models.User, live: dict[int, datetime], cutoff: datetime) -> dict:
+    """Shape a User row for the Admin → Users panel. The displayed last_seen_at
+    is the best of the durable users.last_seen_at column and the live _last_seen
+    map (the flush lags by up to _LAST_SEEN_FLUSH_INTERVAL_SECONDS, so an active
+    user's most-recent activity may live only in the map). is_online, however, is
+    derived from the live map alone — the same notion as the footer online count
+    and the Sessions panel; a recent *persisted* value (e.g. right after a
+    restart, before the next heartbeat) doesn't by itself count as online."""
+    live_ts = live.get(u.id)
+    effective = live_ts
+    if u.last_seen_at:
+        try:
+            persisted = datetime.fromisoformat(u.last_seen_at)
+            if persisted.tzinfo is None:
+                persisted = persisted.replace(tzinfo=timezone.utc)
+        except ValueError:
+            persisted = None
+        if persisted is not None and (effective is None or persisted > effective):
+            effective = persisted
+    return {
+        "id": u.id,
+        "email": u.email,
+        "is_admin": u.is_admin,
+        "clearance": u.clearance,
+        "is_active": u.is_active,
+        "avatar_url": u.avatar_url,
+        "real_name": u.real_name,
+        "last_seen_at": effective.isoformat() if effective else None,
+        "is_online": live_ts is not None and live_ts >= cutoff,
+    }
+
+
 @app.get("/api/admin/users", response_model=List[schemas.AdminUserSummary])
 async def admin_list_users(
     _admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    return db.query(models.User).order_by(models.User.email).all()
+    users = db.query(models.User).order_by(models.User.email).all()
+    cutoff = datetime.now(timezone.utc) - ONLINE_WINDOW
+    with _last_seen_lock:
+        live = dict(_last_seen)
+    return [_admin_user_row(u, live, cutoff) for u in users]
 
 
 @app.get("/api/admin/sessions", response_model=List[schemas.AdminSessionSummary])
 async def admin_list_sessions(
-    access_token: str = Cookie(None),
+    access_token: str | None = Cookie(None),
     _admin: models.User = Depends(require_admin),
 ):
     self_jti = _current_jti(access_token)
@@ -2683,7 +2861,7 @@ async def admin_list_sessions(
 @app.delete("/api/admin/sessions/{jti}")
 async def admin_terminate_session(
     jti: str,
-    access_token: str = Cookie(None),
+    access_token: str | None = Cookie(None),
     admin: models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -2761,7 +2939,9 @@ async def admin_set_user_clearance(
     else:
         db.commit()
     db.refresh(user)
-    return user
+    with _last_seen_lock:
+        live = dict(_last_seen)
+    return _admin_user_row(user, live, datetime.now(timezone.utc) - ONLINE_WINDOW)
 
 
 @app.put("/api/admin/books/{hash_id}/clearance")

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, inject } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api'
 import AdminNav from '../components/AdminNav.vue'
@@ -17,6 +17,8 @@ type AdminUser = {
   is_active: boolean
   avatar_url?: string | null
   real_name?: string | null
+  last_seen_at?: string | null
+  is_online?: boolean
 }
 
 type AdminSession = {
@@ -38,6 +40,41 @@ const flash = ref<{ id: number; text: string } | null>(null)
 // Server-side is_active per user, so a save can tell an enable/disable from
 // an unrelated change (clearance, admin) and word the confirmation accordingly.
 const origActive = new Map<number, boolean>()
+
+// Client-side sort of the already-loaded user list. Defaults to email A→Z
+// (matching the server's order); clicking a sortable header toggles direction.
+type SortKey = 'email' | 'last_seen'
+const sortKey = ref<SortKey>('email')
+const sortDir = ref<'asc' | 'desc'>('asc')
+
+const setSort = (key: SortKey) => {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    // Sensible per-column default: emails A→Z, last-seen most-recent first.
+    sortDir.value = key === 'last_seen' ? 'desc' : 'asc'
+  }
+}
+
+const sortArrow = (key: SortKey): string =>
+  sortKey.value !== key ? '' : (sortDir.value === 'asc' ? '▲' : '▼')
+
+const sortedUsers = computed<AdminUser[]>(() => {
+  const dir = sortDir.value === 'asc' ? 1 : -1
+  return [...users.value].sort((a, b) => {
+    if (sortKey.value === 'email') return a.email.localeCompare(b.email) * dir
+    // last_seen: parse to epoch ms; "Never" (null) always sorts last, then
+    // fall back to email so the order is stable within equal timestamps.
+    const ta = a.last_seen_at ? Date.parse(a.last_seen_at) : null
+    const tb = b.last_seen_at ? Date.parse(b.last_seen_at) : null
+    if (ta === null && tb === null) return a.email.localeCompare(b.email)
+    if (ta === null) return 1
+    if (tb === null) return -1
+    if (ta === tb) return a.email.localeCompare(b.email)
+    return (ta - tb) * dir
+  })
+})
 
 const sessions = ref<AdminSession[]>([])
 const sessionsLoading = ref(true)
@@ -162,15 +199,20 @@ onMounted(() => {
       <table v-else class="w-full text-sm">
         <thead>
           <tr class="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-            <th class="py-2 pr-2">{{ t('admin.user_email') }}</th>
+            <th class="py-2 pr-2 cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200" @click="setSort('email')">
+              {{ t('admin.user_email') }}<span class="ml-1 text-xs">{{ sortArrow('email') }}</span>
+            </th>
             <th class="py-2 pr-2 w-24">{{ t('admin.user_admin') }}</th>
             <th class="py-2 pr-2 w-32">{{ t('admin.user_clearance') }}</th>
             <th class="py-2 pr-2 w-20">{{ t('admin.user_active') }}</th>
+            <th class="py-2 pr-2 w-44 cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200" @click="setSort('last_seen')">
+              {{ t('admin.user_last_seen') }}<span class="ml-1 text-xs">{{ sortArrow('last_seen') }}</span>
+            </th>
             <th class="py-2"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="u in users" :key="u.id" class="border-b border-gray-100 dark:border-gray-700/60">
+          <tr v-for="u in sortedUsers" :key="u.id" class="border-b border-gray-100 dark:border-gray-700/60">
             <td class="py-2 pr-2 text-gray-900 dark:text-gray-100">
               <div class="flex items-center gap-3">
                 <img
@@ -202,6 +244,14 @@ onMounted(() => {
             </td>
             <td class="py-2 pr-2">
               <input type="checkbox" v-model="u.is_active" />
+            </td>
+            <td class="py-2 pr-2 text-gray-700 dark:text-gray-300">
+              <span v-if="u.is_online" class="inline-flex items-center gap-1.5">
+                <span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
+                {{ t('admin.user_online') }}
+              </span>
+              <span v-else-if="u.last_seen_at">{{ fmtTime(u.last_seen_at) }}</span>
+              <span v-else class="text-gray-400 dark:text-gray-500">{{ t('admin.user_never_seen') }}</span>
             </td>
             <td class="py-2">
               <div class="flex items-center gap-3">

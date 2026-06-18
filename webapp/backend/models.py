@@ -17,6 +17,7 @@ class User(Base):
     search_per_page = Column(Integer, nullable=True)
     accepted_legal_at = Column(String, nullable=True)   # ISO-8601 UTC; timestamp of the user's most-recent acceptance (any version)
     legal_version_accepted = Column(String, nullable=True)   # which LEGAL_VERSION the user accepted at accepted_legal_at; NULL or != current → re-prompt
+    last_seen_at = Column(String, nullable=True)   # ISO-8601 UTC; last request time, flushed periodically from main._last_seen (NULL = never seen)
 
 class RegistrationRequest(Base):
     __tablename__ = "registration_requests"
