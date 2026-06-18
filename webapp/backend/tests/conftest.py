@@ -6,6 +6,11 @@ BEFORE importing main, override the get_db dependency, and patch
 email_utils._send_email_multipart so digests/updates are captured into a list
 instead of going through SMTP.
 
+main.py's foundation submodules (config, state, deps, paths, cas, background,
+serialize) are purged from sys.modules alongside `main` on each test so their
+per-test in-memory state resets and their module-level `from database import ...`
+bindings re-bind to the patched in-memory DB.
+
 The three privacy/leak tests and the two race tests live in test_feedback.py.
 """
 from __future__ import annotations
@@ -80,9 +85,16 @@ def app_ctx(monkeypatch):
 
     # Re-import main fresh so its _seed_admin_feedback_settings runs against
     # the in-memory DB. If already imported in the process we still need to
-    # re-bind its get_db dep target and re-seed.
-    if "main" in sys.modules:
-        del sys.modules["main"]
+    # re-bind its get_db dep target and re-seed. The foundation submodules
+    # (config/state/deps/paths/cas/background/serialize) are purged alongside
+    # main so their module-level `from database import SessionLocal, engine`
+    # bindings and per-test in-memory state (_active_sessions, _STAGING, ...)
+    # reset and re-bind to the patched DB — otherwise a cached submodule would
+    # keep the previous test's engine/state.
+    _SPLIT_MODULES = {"config", "state", "deps", "paths", "cas", "background", "serialize"}
+    for _m in list(sys.modules):
+        if _m == "main" or _m.split(".")[0] in _SPLIT_MODULES or _m.startswith("routers"):
+            del sys.modules[_m]
     import main  # noqa: E402
 
     # Capture emails.
