@@ -26,6 +26,7 @@ const hashId = computed(() => sourceHashId(props.source))
 const loading = ref(true)
 const error = ref('')
 const html = ref('')
+const lang = ref('')
 const title = ref('')
 const authors = ref<string[]>([])
 const notes = ref<Record<string, string>>({})
@@ -268,6 +269,7 @@ const initFb2 = async () => {
   loading.value = true
   error.value = ''
   html.value = ''
+  lang.value = ''
   notes.value = {}
   tooltip.value.show = false
   lastSavedAnchor = -1
@@ -277,6 +279,7 @@ const initFb2 = async () => {
     title.value = res.data.title || ''
     authors.value = res.data.authors || []
     html.value = res.data.html || ''
+    lang.value = res.data.lang || ''
     notes.value = res.data.notes || {}
     toc.value = res.data.toc || []
     const saved = await loadProgress()
@@ -417,6 +420,7 @@ onBeforeUnmount(() => {
         <div
           ref="contentEl"
           class="fb2-content w-full px-4 sm:px-5 lg:px-6 py-8 leading-relaxed"
+          :lang="lang || undefined"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
           v-html="html"
           @click="onContentClick"
@@ -507,6 +511,13 @@ onBeforeUnmount(() => {
   user-select: text;
   cursor: text;
   -webkit-touch-callout: default;
+  -webkit-hyphens: auto;
+  hyphens: auto;
+  overflow-wrap: break-word;
+  text-rendering: optimizeLegibility;
+  font-kerning: normal;
+  widows: 2;
+  orphans: 2;
 }
 .fb2-content a {
   cursor: pointer;

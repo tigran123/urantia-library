@@ -302,6 +302,7 @@ def _extract_metadata(root) -> Dict[str, Any]:
     desc = root.find(_FB2_NS + "description")
     title = ""
     authors: List[str] = []
+    lang = ""
     if desc is not None:
         ti = desc.find(_FB2_NS + "title-info")
         if ti is not None:
@@ -316,7 +317,10 @@ def _extract_metadata(root) -> Dict[str, Any]:
                 full = " ".join(p for p in (first, middle, last) if p) or nick
                 if full:
                     authors.append(full)
-    return {"title": title, "authors": authors}
+            lang_el = ti.find(_FB2_NS + "lang")
+            if lang_el is not None and lang_el.text:
+                lang = lang_el.text.strip()
+    return {"title": title, "authors": authors, "lang": lang}
 
 
 def _render_note_section(section, binaries: Dict[str, str]) -> str:
@@ -374,6 +378,7 @@ def _convert_fb2(xml_bytes: bytes) -> Dict[str, Any]:
     return {
         "title": meta["title"],
         "authors": meta["authors"],
+        "lang": meta["lang"],
         "html": "".join(bodies_html),
         "anchor_count": renderer.anchor,
         "notes": notes,

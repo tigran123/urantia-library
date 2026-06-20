@@ -311,6 +311,19 @@ const themeRules = (isDark: boolean) => ({
   body: {
     background: isDark ? '#111827' : '#ffffff',
     color: isDark ? '#f3f4f6' : '#111827',
+    '-webkit-hyphens': 'auto !important',
+    hyphens: 'auto !important',
+    'overflow-wrap': 'break-word',
+    'text-rendering': 'optimizeLegibility',
+    'font-kerning': 'normal',
+    widows: '2',
+    orphans: '2',
+  },
+  'p, li, dd, dt, blockquote': {
+    '-webkit-hyphens': 'auto !important',
+    hyphens: 'auto !important',
+    'text-align': 'justify !important',
+    'overflow-wrap': 'break-word !important',
   },
   a: { color: isDark ? '#60a5fa' : '#2563eb' },
   img: {
