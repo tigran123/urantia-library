@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useImmersive } from '../composables/useImmersive'
+import { useLineHeight, LINE_HEIGHT_OPTIONS } from '../composables/useLineHeight'
 import ePub, { Book, Rendition, type Location } from 'epubjs'
 import type { NavItem } from 'epubjs/types/navigation'
 import api from '../api'
@@ -218,10 +219,15 @@ const fontFamily = computed(
 watch(fontScale, (v) => { try { localStorage.setItem(FONT_SCALE_KEY, String(v)) } catch {} })
 watch(fontFamilyId, (v) => { try { localStorage.setItem(FONT_FAMILY_KEY, v) } catch {} })
 
+const { lineHeight, onLineHeightChange } = useLineHeight(
+  (mutate) => reflowAtCurrentLocation(mutate)
+)
+
 const applyTypography = () => {
   if (!rendition) return
   rendition.themes.fontSize(`${Math.round(fontScale.value * 100)}%`)
   rendition.themes.font(fontFamily.value)
+  rendition.themes.override('line-height', lineHeight.value)
 }
 
 // epub.js's `currentLocation()` actually returns the same `Location` shape
@@ -559,6 +565,14 @@ onBeforeUnmount(() => {
           class="px-1 sm:px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option v-for="o in FONT_OPTIONS" :key="o.id" :value="o.id" :style="{ fontFamily: o.stack }">{{ o.label }}</option>
+        </select>
+        <select
+          :value="lineHeight"
+          @change="onLineHeightChange"
+          :title="t('app.line_spacing')"
+          class="px-1 sm:px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option v-for="o in LINE_HEIGHT_OPTIONS" :key="o.id" :value="o.id">{{ t(o.labelKey) }}</option>
         </select>
         <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A−</button>
         <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm">A</button>

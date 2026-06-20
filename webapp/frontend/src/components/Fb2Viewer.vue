@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useImmersive } from '../composables/useImmersive'
+import { useLineHeight, LINE_HEIGHT_OPTIONS } from '../composables/useLineHeight'
 import api from '../api'
 import { useI18n } from 'vue-i18n'
 import { Bars3Icon, ChevronDoubleLeftIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon } from '@heroicons/vue/24/outline'
@@ -72,6 +73,10 @@ watch(fontFamilyId, (v) => {
 })
 const fontFamily = computed(
   () => FONT_OPTIONS.find(o => o.id === fontFamilyId.value)?.stack || FONT_OPTIONS[0].stack
+)
+
+const { lineHeight, onLineHeightChange } = useLineHeight(
+  (mutate) => adjustFont(mutate)
 )
 
 const scrollEl = ref<HTMLElement | null>(null)
@@ -352,6 +357,14 @@ onBeforeUnmount(() => {
         >
           <option v-for="o in FONT_OPTIONS" :key="o.id" :value="o.id" :style="{ fontFamily: o.stack }">{{ o.label }}</option>
         </select>
+        <select
+          :value="lineHeight"
+          @change="onLineHeightChange"
+          :title="t('app.line_spacing')"
+          class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded text-sm cursor-pointer border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option v-for="o in LINE_HEIGHT_OPTIONS" :key="o.id" :value="o.id">{{ t(o.labelKey) }}</option>
+        </select>
         <button @click="decFont" :title="t('app.font_smaller')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A−</button>
         <button @click="resetFont" :title="t('app.font_reset')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A</button>
         <button @click="incFont" :title="t('app.font_larger')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded">A+</button>
@@ -419,9 +432,9 @@ onBeforeUnmount(() => {
       >
         <div
           ref="contentEl"
-          class="fb2-content w-full px-4 sm:px-5 lg:px-6 py-8 leading-relaxed"
+          class="fb2-content w-full px-4 sm:px-5 lg:px-6 py-8"
           :lang="lang || undefined"
-          :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily }"
+          :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily, lineHeight }"
           v-html="html"
           @click="onContentClick"
           @pointerover="onContentPointerEnter"
