@@ -31,7 +31,7 @@ const html = ref('')
 const raw = ref('')
 const title = ref('')
 const toc = ref<TocEntry[]>([])
-const tocOpen = ref(true)
+const tocOpen = ref(false)
 const rawMode = ref(false)
 const { immersive, toggleImmersive } = useImmersive()
 

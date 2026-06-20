@@ -30,7 +30,7 @@ const title = ref('')
 const authors = ref<string[]>([])
 const notes = ref<Record<string, string>>({})
 const toc = ref<TocEntry[]>([])
-const tocOpen = ref(true)
+const tocOpen = ref(false)
 const { immersive, toggleImmersive } = useImmersive()
 
 watch(immersive, (v) => {
