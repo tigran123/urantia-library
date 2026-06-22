@@ -50,6 +50,22 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Password-reset endpoints: same rate-limit as the credential block above, but
+    # PUBLICLY reachable (no allow/deny) — a user who forgot their password is by
+    # definition not coming from the admin IP. Kept as a SEPARATE block so the
+    # login/register IP-lock stays intact. The backend also enforces an in-process
+    # per-IP backstop (config.RESET_RL_*).
+    location ~ ^/api/(forgot-password|reset-password)$ {
+        limit_req zone=urantia_auth burst=5 nodelay;
+        limit_req_status 429;
+
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # Long-lived caching for Vite's content-hashed chunks under /assets/.
     # The filename embeds a hash of the file's bytes, so the URL→bytes
     # mapping is invariant for the lifetime of the build — a new build

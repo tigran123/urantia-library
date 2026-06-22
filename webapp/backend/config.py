@@ -83,6 +83,21 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Minimum password length enforced server-side at the password-setting steps
+# (/api/set-password and /api/reset-password). The frontend mirrors this for
+# inline validation, but the server is the authority.
+MIN_PASSWORD_LENGTH = 8
+
+# Per-IP rate limit for the unauthenticated password-reset endpoints
+# (/api/forgot-password and /api/reset-password). An in-process sliding-window
+# backstop (see routers/auth._reset_rate_limited) — the front-line cap is the
+# nginx `limit_req` on those routes, but the in-process limiter still protects
+# dev / manual-uvicorn runs where nginx isn't in front. Generous enough that no
+# legitimate human (or a shared NAT) trips it; tight enough to blunt bursts.
+RESET_RL_MAX = 10          # max requests per window, per client IP
+RESET_RL_WINDOW_S = 60     # rolling window, seconds
+
+
 def _escape_like(text: str) -> str:
     """Escape SQL LIKE metacharacters in user text (used with ESCAPE '\\')."""
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

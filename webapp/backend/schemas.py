@@ -208,6 +208,19 @@ class UserSetPassword(BaseModel):
     # 400 instead of silently completing without consent.
     accepted_legal: bool = False
 
+class ForgotPassword(BaseModel):
+    """Request a password-reset link. The response is the same generic message
+    whether or not the email is registered (anti-enumeration)."""
+    email: EmailStr
+    # ISO-639-1 of the UI locale, so the reset email matches the user's language.
+    # Unknown/None falls back to English in the email helper.
+    language: Optional[str] = None
+
+class ResetPassword(BaseModel):
+    """Consume a reset token and set a new password."""
+    token: str
+    password: str
+
 class FavoriteCreate(BaseModel):
     hash_id: str
 

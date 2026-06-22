@@ -32,7 +32,7 @@ os.environ.setdefault("ADMIN_EMAIL", "admin@example.com")
 
 @pytest.fixture
 def app_ctx(monkeypatch):
-    """Yield (TestClient, helpers, captured_emails, TestSession).
+    """Yield (helpers, captured_emails, TestSession).
 
     Each call gives a fresh in-memory DB and a fresh email list — tests don't
     bleed into each other.

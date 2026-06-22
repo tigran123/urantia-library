@@ -63,7 +63,7 @@ def send_admin_notification(user_email: str, token: str, source: str = None, pur
       </body>
     </html>
     """
-    subject = "New Registration Request"
+    subject = "New Registration Request — Urantia Library"
     ok, error = _send_email(ADMIN_EMAIL, subject, html)
     return {"to": ADMIN_EMAIL, "subject": subject, "ok": ok, "error": error}
 
@@ -71,7 +71,7 @@ def send_user_approval(user_email: str, token: str, language: str = "en") -> dic
     setup_link = f"{APP_URL}/#/set-password?token={token}"
     bodies = {
         "en": (
-            "Registration Approved - Action Required",
+            "Urantia Library — Registration Approved (Action Required)",
             f"""
             <html>
               <body>
@@ -83,13 +83,55 @@ def send_user_approval(user_email: str, token: str, language: str = "en") -> dic
             """,
         ),
         "ru": (
-            "Регистрация одобрена — требуется действие",
+            "Регистрация в Библиотеке Урантии одобрена — требуется действие",
             f"""
             <html>
               <body>
-                <h3>Ваш запрос в Урантийскую библиотеку одобрен!</h3>
+                <h3>Ваш запрос в Библиотеку Урантии одобрен!</h3>
                 <p>Добро пожаловать! Чтобы завершить регистрацию, задайте пароль.</p>
                 <p><a href="{setup_link}">Нажмите здесь, чтобы задать пароль и войти</a></p>
+              </body>
+            </html>
+            """,
+        ),
+    }
+    subject, html = bodies.get(language, bodies["en"])
+    ok, error = _send_email(user_email, subject, html)
+    return {"to": user_email, "subject": subject, "ok": ok, "error": error}
+
+def send_password_reset_email(user_email: str, token: str, language: str = "en") -> dict:
+    """Email a one-time password-reset link. Mirrors send_user_approval: same
+    bilingual bodies dict, same single-part _send_email, same return shape.
+    Called from the off-request-path worker (background._process_reset_request,
+    launched via _dispatch_reset_request) so SMTP never runs on the request path.
+    The token is already URL-safe (secrets.token_urlsafe), so it's interpolated
+    raw, like the uuid token in send_user_approval."""
+    reset_link = f"{APP_URL}/#/reset-password?token={token}"
+    bodies = {
+        "en": (
+            "Reset your Urantia Library password",
+            f"""
+            <html>
+              <body>
+                <h3>Password reset requested</h3>
+                <p>We received a request to reset the password for your Urantia Library account.</p>
+                <p><a href="{reset_link}">Click here to choose a new password</a></p>
+                <p>This link expires in 1 hour and can be used only once. If you didn't
+                   request this, you can safely ignore this email — your password won't change.</p>
+              </body>
+            </html>
+            """,
+        ),
+        "ru": (
+            "Сброс пароля в Библиотеке Урантии",
+            f"""
+            <html>
+              <body>
+                <h3>Запрошен сброс пароля</h3>
+                <p>Мы получили запрос на сброс пароля для вашей учётной записи в Библиотеке Урантии.</p>
+                <p><a href="{reset_link}">Нажмите здесь, чтобы задать новый пароль</a></p>
+                <p>Ссылка действительна 1 час и может быть использована только один раз. Если вы
+                   не запрашивали сброс, просто проигнорируйте это письмо — пароль не изменится.</p>
               </body>
             </html>
             """,
@@ -138,7 +180,7 @@ def send_legal_update(user_email: str) -> None:
         <hr style="margin: 24px 0; border: none; border-top: 1px solid #e5e7eb;" />
         <h3>Обновлены Политика конфиденциальности и Условия</h3>
         <p>Мы обновили <a href="{privacy_link}">Политику конфиденциальности</a> и
-        <a href="{terms_link}">Условия использования</a> Урантийской библиотеки.</p>
+        <a href="{terms_link}">Условия использования</a> Библиотеки Урантии.</p>
         <p>При следующем входе вам будет предложено ознакомиться с обновлёнными
         документами и подтвердить согласие.</p>
         <p><a href="{library_link}" style="padding: 10px 16px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 5px; font-weight: 600;">Открыть библиотеку</a></p>
@@ -161,7 +203,7 @@ def send_legal_update(user_email: str) -> None:
 def send_user_rejection(user_email: str, language: str = "en") -> dict:
     bodies = {
         "en": (
-            "Registration Update",
+            "Urantia Library — Registration Update",
             """
             <html>
               <body>
@@ -172,11 +214,11 @@ def send_user_rejection(user_email: str, language: str = "en") -> dict:
             """,
         ),
         "ru": (
-            "Обновление по вашей регистрации",
+            "Обновление по вашей регистрации в Библиотеке Урантии",
             """
             <html>
               <body>
-                <h3>Обновление по вашей регистрации в Урантийской библиотеке</h3>
+                <h3>Обновление по вашей регистрации в Библиотеке Урантии</h3>
                 <p>Спасибо за интерес к проекту. К сожалению, мы не можем предоставить вам доступ в данный момент.</p>
               </body>
             </html>

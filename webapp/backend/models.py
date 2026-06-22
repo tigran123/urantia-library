@@ -386,3 +386,28 @@ class AuthSession(Base):
     created_at   = Column(String, nullable=False)   # ISO-8601 UTC
     last_seen_at = Column(String, nullable=False)   # ISO-8601 UTC
     expires_at   = Column(String, nullable=False)   # ISO-8601 UTC
+
+
+class PasswordResetToken(Base):
+    """One-time, expiring password-reset token.
+
+    Issued by POST /api/forgot-password (a server-side high-entropy token) and
+    consumed once by POST /api/reset-password (which stamps used_at and never
+    accepts the token again). Only sha256(token) is stored — the plaintext lives
+    only in the emailed link, so a DB read can't reconstruct a live reset link.
+    user_id ON DELETE CASCADE drops a deleted user's tokens;
+    main._purge_expired_reset_tokens() sweeps expired/used rows at startup, the
+    same way _purge_expired_session_rows() sweeps auth_sessions."""
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        Index("ix_password_reset_tokens_hash", "token_hash", unique=True),
+        Index("ix_password_reset_tokens_user", "user_id"),
+        Index("ix_password_reset_tokens_expires", "expires_at"),
+    )
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String, nullable=False)   # sha256(token) hex, 64 chars
+    created_at = Column(String, nullable=False)   # ISO-8601 UTC
+    expires_at = Column(String, nullable=False)   # ISO-8601 UTC
+    used_at    = Column(String, nullable=True)    # ISO-8601 UTC; NULL = unused

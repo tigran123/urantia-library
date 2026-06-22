@@ -15,7 +15,9 @@ import logging
 import re
 import json
 import shutil
-from datetime import datetime, timezone
+import hashlib
+import secrets
+from datetime import datetime, timezone, timedelta
 import jwt
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
@@ -182,6 +184,115 @@ def _purge_expired_session_rows(db: Session) -> None:
     except Exception:
         logging.exception("auth session expiry purge failed")
         db.rollback()
+
+def _purge_expired_reset_tokens(db: Session) -> None:
+    """Delete `password_reset_tokens` rows that are expired OR already used.
+    Called once at startup (from _lifespan) — the reset endpoint already rejects
+    expired/used rows, so this is pure housekeeping to keep the table from
+    growing, not a correctness gate. Best-effort, never on a request's critical
+    path; mirrors `_purge_expired_session_rows`."""
+    try:
+        now_iso = _now_iso()
+        db.query(models.PasswordResetToken).filter(
+            (models.PasswordResetToken.expires_at < now_iso)
+            | (models.PasswordResetToken.used_at.isnot(None))
+        ).delete(synchronize_session=False)
+        db.commit()
+    except Exception:
+        logging.exception("password reset token purge failed")
+        db.rollback()
+
+# How long a reset link is valid, and how often a user can trigger a new email.
+RESET_TOKEN_TTL = timedelta(hours=1)
+RESET_RESEND_WINDOW = timedelta(minutes=2)
+
+# Cap on concurrent reset workers, so a flood (across many IPs, past the per-IP
+# limiter) can't spawn unbounded daemon threads + SMTP connections. The per-IP
+# rate limit is the primary control; this is a global backstop.
+_RESET_MAX_WORKERS = 32
+_reset_worker_sem = threading.BoundedSemaphore(_RESET_MAX_WORKERS)
+
+def _process_reset_request(email: str, language: str) -> None:
+    """Do ALL the work of a password-reset request — user lookup, resend-window
+    check, token issue, audit, commit, and the SMTP send — on its OWN short-lived
+    session (the `_record_usage_event` pattern), entirely off the request path.
+
+    This placement is load-bearing for anti-enumeration: POST /api/forgot-password
+    does only a rate-limit check + a constant-time hand-off to this worker and
+    returns the same generic response for every email, so neither the SMTP
+    round-trip NOR the DB write+commit (which happens only for a real, active
+    account) can leak existence via response timing. Only the sha256 hash is
+    persisted; the plaintext token lives only in the email. Best-effort: any
+    failure is swallowed/logged so it can never surface to the (already-returned)
+    caller. Tests run this synchronously via the _dispatch_reset_request stub."""
+    db = SessionLocal()
+    try:
+        user = db.query(models.User).filter(models.User.email == email).first()
+        if user is None or not user.is_active:
+            return
+
+        now = datetime.now(timezone.utc)
+        now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        resend_cutoff = (now - RESET_RESEND_WINDOW).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        recent = db.query(models.PasswordResetToken).filter(
+            models.PasswordResetToken.user_id == user.id,
+            models.PasswordResetToken.used_at.is_(None),
+            models.PasswordResetToken.created_at >= resend_cutoff,
+        ).first()
+        if recent is not None:
+            # A live link was just sent; don't spam another.
+            return
+
+        # One active token per user: drop any prior rows before issuing a new one,
+        # so an older link silently stops working once a new one is requested.
+        db.query(models.PasswordResetToken).filter(
+            models.PasswordResetToken.user_id == user.id
+        ).delete(synchronize_session=False)
+
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        db.add(models.PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            created_at=now_iso,
+            expires_at=(now + RESET_TOKEN_TTL).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            used_at=None,
+        ))
+        _audit(db, None, "password.reset_request",
+               target_kind="user", target_id=user.id,
+               summary=f"Password reset requested for {user.email}",
+               details={"email": user.email, "language": language})
+        db.commit()
+
+        # Send only after commit — the email carries the plaintext token, so the
+        # row it corresponds to must be durable first.
+        email_utils.send_password_reset_email(user.email, token, language)
+    except Exception:
+        logging.exception("password reset request processing failed")
+        db.rollback()
+    finally:
+        db.close()
+
+def _dispatch_reset_request(email: str, language: str) -> None:
+    """Fire-and-forget a password-reset request on a bounded daemon thread.
+
+    The endpoint hands off here and returns immediately, so the SMTP round-trip
+    and the DB write never run on the request path (anti-enumeration timing — see
+    _process_reset_request). Bounded by _reset_worker_sem so a flood can't spawn
+    unbounded threads; if the pool is saturated the request is dropped (logged) —
+    acceptable degradation under attack, well above any legitimate volume given
+    the per-IP rate limit. Tests stub main._dispatch_reset_request to run
+    _process_reset_request synchronously."""
+    if not _reset_worker_sem.acquire(blocking=False):
+        logging.warning("password reset worker pool saturated; dropping request")
+        return
+    def _run():
+        try:
+            _process_reset_request(email, language)
+        finally:
+            _reset_worker_sem.release()
+    threading.Thread(target=_run, daemon=True).start()
 
 def _load_active_sessions() -> None:
     """Rehydrate `_active_sessions` from the `auth_sessions` table on startup so

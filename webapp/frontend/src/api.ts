@@ -11,7 +11,7 @@ api.interceptors.response.use(
   (error) => {
     if (error.response && error.response.status === 401) {
       // Public routes that don't require an active session
-      const publicRoutes = ['login', 'register', 'set-password']
+      const publicRoutes = ['login', 'register', 'set-password', 'forgot-password', 'reset-password']
 
       // The guest landing flow probes /me on every page load; a 401 there just
       // means "browsing anonymously" and must NOT bounce the visitor to login.

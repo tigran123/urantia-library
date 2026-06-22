@@ -48,6 +48,24 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS ix_auth_sessions_user    ON auth_sessions(user_id);
 CREATE INDEX IF NOT EXISTS ix_auth_sessions_expires ON auth_sessions(expires_at);
 
+-- One-time, expiring password-reset tokens (the "Forgot your password?" flow).
+-- Only sha256(token) is stored, so a DB read can't reconstruct a live reset
+-- link. Issued by POST /api/forgot-password, consumed once by
+-- POST /api/reset-password (used_at stamped). user_id ON DELETE CASCADE reaps a
+-- deleted user's tokens; _purge_expired_reset_tokens() sweeps expired/used rows
+-- at startup, mirroring auth_sessions.
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash  TEXT NOT NULL,                                        -- sha256(token) hex, 64 chars
+    created_at  TEXT NOT NULL,                                        -- ISO-8601 UTC
+    expires_at  TEXT NOT NULL,                                        -- ISO-8601 UTC
+    used_at     TEXT                                                  -- ISO-8601 UTC; NULL = unused
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_password_reset_tokens_hash    ON password_reset_tokens(token_hash);
+CREATE INDEX        IF NOT EXISTS ix_password_reset_tokens_user    ON password_reset_tokens(user_id);
+CREATE INDEX        IF NOT EXISTS ix_password_reset_tokens_expires ON password_reset_tokens(expires_at);
+
 -- ==============================================================================
 -- 2. The CAS Metadata Vault
 -- ==============================================================================
@@ -326,7 +344,7 @@ CREATE TABLE admin_audit_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at    TEXT    NOT NULL,                       -- ISO-8601 UTC
     actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update' | 'legal.accept'
+    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update' | 'legal.accept' | 'password.reset_request' | 'password.reset_complete'
     target_kind   VARCHAR,                                -- 'book' | 'user' | 'comment' | 'annotation' | NULL
     target_id     VARCHAR,                                -- book hash, user id, comment id, … (VARCHAR holds either int or hash as text)
     summary       VARCHAR NOT NULL,                       -- one-line human-readable
@@ -377,4 +395,4 @@ CREATE INDEX ix_usage_events_kind_ts ON usage_events(kind, ts);
 -- and applies any numbered files in webapp/backend/migrations/ whose number
 -- is greater than the stored value. The backend refuses to start unless this
 -- equals EXPECTED_SCHEMA_VERSION in database.py.
-INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '15');
+INSERT OR IGNORE INTO app_meta(key, value) VALUES ('schema_version', '16');

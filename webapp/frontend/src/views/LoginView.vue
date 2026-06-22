@@ -96,6 +96,9 @@ const handleLogin = async () => {
             <EyeIcon v-else class="h-5 w-5" />
           </button>
         </div>
+        <div class="mt-1 text-right">
+          <router-link :to="{ name: 'forgot-password' }" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">{{ t('auth.forgotPasswordLink') }}</router-link>
+        </div>
       </div>
 
       <button

@@ -8,6 +8,8 @@ import PublicPlaylistView from '../views/PublicPlaylistView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import SetPasswordView from '../views/SetPasswordView.vue'
+import ForgotPasswordView from '../views/ForgotPasswordView.vue'
+import ResetPasswordView from '../views/ResetPasswordView.vue'
 
 import ItemView from '../views/ItemView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
@@ -89,6 +91,16 @@ const router = createRouter({
       path: '/set-password',
       name: 'set-password',
       component: SetPasswordView
+    },
+    {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: ForgotPasswordView
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: ResetPasswordView
     },
     {
       path: '/admin',

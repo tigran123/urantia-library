@@ -170,7 +170,7 @@ def test_set_password_with_checkbox_stamps_current_version(app_ctx):
     c = TestClient(main.app)
     r = c.post("/api/set-password", json={
         "token": "legacy-tok",
-        "password": "hunter2",
+        "password": "hunter2pass",
         "real_name": "Legacy User",
         "accepted_legal": True,
     })
@@ -216,7 +216,7 @@ def test_set_password_without_checkbox_is_400(app_ctx):
     c = TestClient(main.app)
     r = c.post("/api/set-password", json={
         "token": "nobox-tok",
-        "password": "hunter2",
+        "password": "hunter2pass",
         # accepted_legal omitted — server-side default False
     })
     assert r.status_code == 400, r.text
@@ -257,7 +257,7 @@ def test_set_password_audit_row_carries_previous_version(app_ctx):
     c = TestClient(main.app)
     r = c.post("/api/set-password", json={
         "token": "bf-tok",
-        "password": "hunter2",
+        "password": "hunter2pass",
         "accepted_legal": True,
     })
     assert r.status_code == 200, r.text

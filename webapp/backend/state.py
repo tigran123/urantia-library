@@ -37,6 +37,14 @@ def _purge_expired_sessions_locked() -> None:
     for k in expired:
         _active_sessions.pop(k, None)
 
+# Per-IP sliding-window rate-limit bucket for the unauthenticated
+# password-reset endpoints: ip -> list[monotonic timestamps within the window].
+# Pruned per-IP on access (see routers/auth._reset_rate_limited); resets per
+# test because conftest re-imports `state`. The in-process backstop to the nginx
+# `limit_req` on those routes (and the only cap in dev / manual-uvicorn runs).
+_reset_rl: dict[str, list[float]] = {}
+_reset_rl_lock = threading.Lock()
+
 # batch_id -> (audit_row_id, last_touch_ts). In-memory, like _STAGING: a restart
 # mid-batch just starts a fresh audit row for the remaining volumes (rare, and
 # the batch's staging is gone too). Sequential per-batch commits (the client

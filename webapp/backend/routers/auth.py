@@ -12,6 +12,8 @@ import uuid
 import json
 import asyncio
 import logging
+import time
+import hashlib
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, Depends, Cookie, Response, UploadFile, File
@@ -31,7 +33,8 @@ from security import (
 )
 from config import (
     _AVATAR_MAX_BYTES, ONLINE_WINDOW, _now_iso,
-    _AUDIO_EXTS, _VIDEO_EXTS,
+    _AUDIO_EXTS, _VIDEO_EXTS, MIN_PASSWORD_LENGTH,
+    RESET_RL_MAX, RESET_RL_WINDOW_S,
 )
 from deps import (
     get_current_user, get_optional_user, _maybe_refresh_session,
@@ -577,6 +580,12 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
             detail="You must accept the Privacy Policy and Terms of Service to set your password.",
         )
 
+    if len(data.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+        )
+
     # Create active user. The checkbox click is a fresh consent event against
     # the current LEGAL_VERSION — overriding whatever was recorded at registration
     # submit (which may be stale if the admin took days to approve, or NULL for
@@ -605,6 +614,97 @@ async def set_password(data: schemas.UserSetPassword, db: Session = Depends(get_
     db.commit()
 
     return {"message": "Password set successfully. You can now log in."}
+
+def _reset_rate_limited(ip: str) -> bool:
+    """In-process per-IP sliding-window limiter for the unauthenticated reset
+    endpoints. Returns True (→ 429) once this IP has made RESET_RL_MAX requests
+    within the last RESET_RL_WINDOW_S seconds. IP-based, so a 429 leaks no
+    email-existence signal. Backstop to the nginx `limit_req` on these routes (and
+    the only cap in dev / manual-uvicorn runs). The bucket lives in `state` so
+    conftest resets it per test; uvicorn is single-process, so one bucket is
+    process-global and authoritative."""
+    now = time.monotonic()
+    cutoff = now - RESET_RL_WINDOW_S
+    with state._reset_rl_lock:
+        hits = [t for t in state._reset_rl.get(ip, ()) if t > cutoff]
+        if len(hits) >= RESET_RL_MAX:
+            state._reset_rl[ip] = hits          # keep the pruned window; don't record this hit
+            return True
+        hits.append(now)
+        state._reset_rl[ip] = hits
+        return False
+
+@router.post("/api/forgot-password", response_model=schemas.Message)
+async def forgot_password(data: schemas.ForgotPassword, request: Request):
+    """Request a one-time password-reset link.
+
+    Anti-enumeration: the response is the SAME generic message with the SAME
+    status whether or not the email belongs to an account. The endpoint does only
+    a per-IP rate-limit check and a constant-time hand-off to a background worker
+    (_dispatch_reset_request) — the user lookup, token issue, DB commit, and SMTP
+    send all happen OFF the request path (see background._process_reset_request),
+    so neither a DB write+commit (which happens only for a real, active account)
+    nor an SMTP round-trip can leak existence via response timing. A token is
+    issued and an email sent ONLY for an existing, active user, at most once per
+    RESET_RESEND_WINDOW."""
+    ip = request.client.host if request.client else "unknown"
+    if _reset_rate_limited(ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+
+    lang = data.language if data.language in ("en", "ru") else "en"
+    _m()._dispatch_reset_request(data.email, lang)
+    return {"message": "If that email is registered, a password reset link has been sent."}
+
+@router.post("/api/reset-password", response_model=schemas.Message)
+async def reset_password(data: schemas.ResetPassword, request: Request, db: Session = Depends(get_db)):
+    """Consume a reset token and set a new password.
+
+    The token is single-use: the row's used_at is stamped and never accepted
+    again. All three rejection reasons — unknown / already-used / expired —
+    return the SAME generic 400 so the endpoint can't be used to probe token
+    state. On success every one of the user's sessions is terminated (a
+    credential change should evict any existing/compromised session); the user
+    is not auto-logged-in — they sign in fresh with the new password."""
+    ip = request.client.host if request.client else "unknown"
+    if _reset_rate_limited(ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+
+    if len(data.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+        )
+
+    now_iso = _now_iso()
+    token_hash = hashlib.sha256(data.token.encode()).hexdigest()
+    row = db.query(models.PasswordResetToken).filter(
+        models.PasswordResetToken.token_hash == token_hash
+    ).first()
+    if row is None or row.used_at is not None or row.expires_at < now_iso:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link.")
+
+    user = db.query(models.User).filter(models.User.id == row.user_id).first()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link.")
+
+    user.hashed_password = get_password_hash(data.password)
+    row.used_at = now_iso
+    _audit(db, user, "password.reset_complete",
+           target_kind="user", target_id=user.id,
+           summary=f"Password reset completed for {user.email}",
+           details={"email": user.email})
+
+    # Terminate all of the user's sessions. _delete_user_sessions commits —
+    # flushing the password change, the used_at stamp, and the audit row in the
+    # same transaction — then we evict the in-memory entries (delete-then-evict,
+    # the same order/locking discipline as admin deactivate). Reached through
+    # `main` so tests can patch main._delete_user_sessions.
+    _m()._delete_user_sessions(db, user.id)
+    with state._active_sessions_lock:
+        for j in [k for k, v in state._active_sessions.items() if v["user_id"] == user.id]:
+            state._active_sessions.pop(j, None)
+
+    return {"message": "Your password has been reset. You can now log in."}
 
 @router.get("/api/legal/meta")
 async def legal_meta():

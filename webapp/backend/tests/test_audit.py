@@ -303,7 +303,7 @@ def test_register_writes_actorless_request_audit(app_ctx):
         assert d["language"] == "ru"
         # Sent-mail metadata: went to the admin address, captured as sent.
         assert d["notify_email_to"] == "admin@example.com"
-        assert d["notify_email_subject"] == "New Registration Request"
+        assert d["notify_email_subject"] == "New Registration Request — Urantia Library"
         assert d["notify_email_sent"] is True
         assert d["notify_email_error"] is None
     finally:

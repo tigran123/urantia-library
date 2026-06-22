@@ -13,6 +13,7 @@ import logging
 import threading  # noqa: F401 — kept so tests can monkeypatch main.threading.Thread (and main.os)
 import jwt
 import models
+import database  # bound so database.SessionLocal() in _lifespan picks up the test swap
 from database import engine, get_db, verify_schema_version  # get_db kept: tests use main.get_db
 from security import SECRET_KEY, ALGORITHM
 
@@ -40,7 +41,7 @@ from config import (
     _STAGING_TTL_S, _MAX_UPLOAD_BYTES, _MAX_COVER_BYTES, _AVATAR_MAX_BYTES,
     _ACCEPTED_BOOK_EXTS, _AUDIO_EXTS, _VIDEO_EXTS, _MULTI_SUFFIXES, _IMAGE_EXTS,
     _detect_format, _effective_suffix, _text_inner_ext, _USAGE_KINDS_ALL,
-    _escape_like, CODE_EXTENSIONS,
+    _escape_like, CODE_EXTENSIONS, MIN_PASSWORD_LENGTH,
 )
 from state import (
     _last_seen, _last_seen_lock, _active_sessions, _active_sessions_lock,
@@ -70,6 +71,7 @@ from background import (
     _persist_session, _delete_session, _delete_user_sessions, _purge_expired_session_rows,
     _load_active_sessions, _flush_last_seen, _flush_last_seen_once, _last_seen_flush_loop,
     _seed_admin_feedback_settings, _purge_expired_staging, _load_enabled_kinds,
+    _purge_expired_reset_tokens, _dispatch_reset_request, _process_reset_request,
 )
 
 
@@ -110,6 +112,16 @@ async def _lifespan(_app: FastAPI):
         _load_active_sessions()
     except Exception:
         logging.exception("startup: auth session rehydration failed; sessions will re-login")
+    try:
+        # Housekeeping: drop expired/used password-reset tokens. The reset
+        # endpoint already rejects them, so this just keeps the table small.
+        _reset_purge_db = database.SessionLocal()
+        try:
+            _purge_expired_reset_tokens(_reset_purge_db)
+        finally:
+            _reset_purge_db.close()
+    except Exception:
+        logging.exception("startup: password reset token sweep failed; will retry on next restart")
 
     # Periodically mirror the in-memory _last_seen presence map into
     # users.last_seen_at so Admin → Users shows a last-seen time for every user
