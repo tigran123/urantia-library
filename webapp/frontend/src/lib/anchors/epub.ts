@@ -9,6 +9,12 @@ import type { Annotation, AnnotationAnchor } from '../../api'
 
 const CONTEXT_LEN = 64
 
+// The rendered EPUB section carries injected soft hyphens (U+00AD) for
+// cross-platform hyphenation. Strip them from stored selection text so the
+// annotations sidebar shows clean words. (Positioning is CFI-based, so the
+// hyphens don't affect re-anchoring either way.)
+const stripShy = (s: string): string => s.replace(/­/g, '')
+
 export interface EpubAnchor {
   type: 'epub'
   cfiRange: string
@@ -37,14 +43,14 @@ const contextFromRange = (range: Range): { prefix: string; suffix: string } => {
 }
 
 export const anchorFromSelection = (cfiRange: string, range: Range): AnchoredSelection | null => {
-  const selectedText = range.toString()
+  const selectedText = stripShy(range.toString())
   if (!selectedText) return null
   const { prefix, suffix } = contextFromRange(range)
   return {
     anchor: { type: 'epub', cfiRange },
     selectedText,
-    prefix,
-    suffix,
+    prefix: stripShy(prefix),
+    suffix: stripShy(suffix),
   }
 }
 

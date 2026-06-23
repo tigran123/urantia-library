@@ -7,6 +7,30 @@ import type { Annotation, AnnotationAnchor } from '../../api'
 
 const CONTEXT_LEN = 64
 
+// Soft hyphens (U+00AD) are injected into the rendered text by lib/hyphenate.ts
+// for cross-platform hyphenation. All offset bookkeeping below works in
+// "logical" space that ignores them, so an offset means the same thing whether
+// or not the DOM currently carries soft hyphens. This keeps annotations created
+// before hyphenation valid and lets new ones store clean (shy-free) text.
+const SHY = 0x00ad
+const stripShy = (s: string): string => s.replace(/­/g, '')
+// Count non-soft-hyphen characters in s.
+const nonShyLen = (s: string): number => {
+  let n = 0
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) !== SHY) n++
+  return n
+}
+// DOM offset within `data` after `logical` non-soft-hyphen characters.
+const logicalToDomOffset = (data: string, logical: number): number => {
+  let count = 0
+  let i = 0
+  while (i < data.length && count < logical) {
+    if (data.charCodeAt(i) !== SHY) count++
+    i++
+  }
+  return i
+}
+
 export interface HtmlAnchor {
   type: 'html'
   containerAnchor: number
@@ -60,16 +84,16 @@ const pointToTextOffset = (root: HTMLElement, node: Node, nodeOffset: number): n
       targetNode = child
       targetOffset = 0
     } else {
-      // After the last child — total text length of the element.
-      return el.textContent?.length ?? 0
+      // After the last child — total (logical) text length of the element.
+      return nonShyLen(el.textContent ?? '')
     }
   }
   let total = 0
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   let n = walker.nextNode() as Text | null
   while (n) {
-    if (n === targetNode) return total + targetOffset
-    total += n.data.length
+    if (n === targetNode) return total + nonShyLen(n.data.slice(0, targetOffset))
+    total += nonShyLen(n.data)
     n = walker.nextNode() as Text | null
   }
   return null
@@ -83,8 +107,9 @@ const textOffsetToPoint = (root: HTMLElement, offset: number): { node: Text; off
   let n = walker.nextNode() as Text | null
   let last: Text | null = null
   while (n) {
-    if (remaining <= n.data.length) return { node: n, offset: remaining }
-    remaining -= n.data.length
+    const len = nonShyLen(n.data)
+    if (remaining <= len) return { node: n, offset: logicalToDomOffset(n.data, remaining) }
+    remaining -= len
     last = n
     n = walker.nextNode() as Text | null
   }
@@ -101,12 +126,14 @@ export const anchorFromSelection = (container: HTMLElement, range: Range): Ancho
   const endOffset = pointToTextOffset(endInfo.el, range.endContainer, range.endOffset)
   if (startOffset == null || endOffset == null) return null
 
-  const selectedText = range.toString()
+  // Store clean (soft-hyphen-free) text; offsets above are already logical.
+  const selectedText = stripShy(range.toString())
   if (!selectedText) return null
 
-  // Prefix/suffix from start/end element textContent for the text-quote fallback.
-  const startText = startInfo.el.textContent ?? ''
-  const endText = endInfo.el.textContent ?? ''
+  // Prefix/suffix from start/end element textContent for the text-quote
+  // fallback — sliced in logical (shy-free) space to line up with the offsets.
+  const startText = stripShy(startInfo.el.textContent ?? '')
+  const endText = stripShy(endInfo.el.textContent ?? '')
   const prefix = startText.slice(Math.max(0, startOffset - CONTEXT_LEN), startOffset)
   const suffix = endText.slice(endOffset, endOffset + CONTEXT_LEN)
 
@@ -151,12 +178,14 @@ const buildRange = (container: HTMLElement, ann: Annotation): Range | null => {
     try {
       range.setStart(startPoint.node, startPoint.offset)
       range.setEnd(endPoint.node, endPoint.offset)
-      if (range.toString() === ann.selected_text) return range
+      if (stripShy(range.toString()) === ann.selected_text) return range
     } catch { /* ranges that span disconnected nodes throw */ }
   }
 
-  // Text-quote fallback: scan the container for prefix+selected+suffix.
-  const text = container.textContent ?? ''
+  // Text-quote fallback: scan the container for prefix+selected+suffix. Both
+  // the haystack and the stored needle are compared shy-free, and the resulting
+  // index is a logical offset that textOffsetToPoint maps back to the DOM.
+  const text = stripShy(container.textContent ?? '')
   const needle = (ann.text_prefix ?? '') + ann.selected_text + (ann.text_suffix ?? '')
   let idx = text.indexOf(needle)
   if (idx < 0) idx = text.indexOf(ann.selected_text)

@@ -11,6 +11,7 @@
   "dependencies": {
     "epubjs": "^0.3.93",
     "highlight.js": "^11.11.1",
+    "hyphen": "^1.14.1",
     "marked": "^18.0.4",
     "pdfjs-dist": "^5.7.284",
     "vue": "^3.5.34",
@@ -19,6 +20,7 @@
   "devDependencies": {
     "@heroicons/vue": "^2.2.0",
     "@tailwindcss/vite": "^4.2.4",
+    "@types/hyphen": "^1.14.0",
     "@types/node": "^24.12.2",
     "@vitejs/plugin-vue": "^6.0.6",
     "@vue/tsconfig": "^0.9.1",

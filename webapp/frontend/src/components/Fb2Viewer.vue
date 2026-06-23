@@ -11,6 +11,7 @@ import AnnotationsSidebar from './AnnotationsSidebar.vue'
 import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
 import { useAnnotations } from '../composables/useAnnotations'
 import { useHtmlAnnotationLayer } from '../composables/useHtmlAnnotationLayer'
+import { hyphenateElement } from '../lib/hyphenate'
 import { viewerUrls, viewerParams, sourceHashId, sourceLoadKey, type ViewerSource } from './viewerSource'
 
 interface TocEntry {
@@ -28,6 +29,10 @@ const loading = ref(true)
 const error = ref('')
 const html = ref('')
 const lang = ref('')
+// true once soft hyphens were injected (supported language) → use
+// `hyphens: manual` so breaks are identical across platforms; otherwise fall
+// back to native `hyphens: auto` (best-effort, desktop only).
+const hyphenated = ref(false)
 const title = ref('')
 const authors = ref<string[]>([])
 const notes = ref<Record<string, string>>({})
@@ -275,6 +280,7 @@ const initFb2 = async () => {
   error.value = ''
   html.value = ''
   lang.value = ''
+  hyphenated.value = false
   notes.value = {}
   tooltip.value.show = false
   lastSavedAnchor = -1
@@ -289,6 +295,12 @@ const initFb2 = async () => {
     toc.value = res.data.toc || []
     const saved = await loadProgress()
     await nextTick()
+    // Inject soft hyphens before restoring the scroll position and painting
+    // annotations, so the layout is final and the annotation layer (which is
+    // soft-hyphen-agnostic) splits the already-hyphenated text nodes.
+    if (contentEl.value) {
+      hyphenated.value = await hyphenateElement(contentEl.value, lang.value)
+    }
     if (saved !== null) {
       restoring = true
       scrollToAnchor(saved)
@@ -433,6 +445,7 @@ onBeforeUnmount(() => {
         <div
           ref="contentEl"
           class="fb2-content w-full px-4 sm:px-5 lg:px-6 py-8"
+          :class="hyphenated ? 'fb2-hyph-manual' : 'fb2-hyph-auto'"
           :lang="lang || undefined"
           :style="{ fontSize: `calc(${fontScale} * var(--reader-base, 16px))`, fontFamily, lineHeight }"
           v-html="html"
@@ -524,13 +537,22 @@ onBeforeUnmount(() => {
   user-select: text;
   cursor: text;
   -webkit-touch-callout: default;
-  -webkit-hyphens: auto;
-  hyphens: auto;
   overflow-wrap: break-word;
   text-rendering: optimizeLegibility;
   font-kerning: normal;
   widows: 2;
   orphans: 2;
+}
+/* Soft hyphens injected by lib/hyphenate.ts → break only at them so the result
+   is identical on every platform (incl. Android Chrome, where `auto` is a
+   no-op). Unsupported languages keep best-effort native `auto`. */
+.fb2-content.fb2-hyph-manual {
+  -webkit-hyphens: manual;
+  hyphens: manual;
+}
+.fb2-content.fb2-hyph-auto {
+  -webkit-hyphens: auto;
+  hyphens: auto;
 }
 .fb2-content a {
   cursor: pointer;

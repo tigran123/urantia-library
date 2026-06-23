@@ -20,6 +20,7 @@ import AnnotationsSidebar from './AnnotationsSidebar.vue'
 import AnnotationVisibilityToggle from './AnnotationVisibilityToggle.vue'
 import { useAnnotations } from '../composables/useAnnotations'
 import { anchorFromSelection as epubAnchorFromSelection, paintAnnotations as epubPaintAnnotations } from '../lib/anchors/epub'
+import { getHyphenator, hyphenateElementWith, type HyphenateFn } from '../lib/hyphenate'
 import { popoverPositionFromViewport, type PopoverPosition } from '../lib/anchors/popoverPosition'
 import type { Annotation } from '../api'
 import { viewerUrls, sourceHashId, sourceLoadKey, type ViewerSource } from './viewerSource'
@@ -35,6 +36,15 @@ let rendition: Rendition | null = null
 let resizeObs: ResizeObserver | null = null
 let themeObs: MutationObserver | null = null
 let resizeTimer: ReturnType<typeof setTimeout> | null = null
+
+// Hyphenation state for the current book. epub.js renders foreign XHTML in an
+// iframe, so we inject soft hyphens via a content hook (see initEpub). `lang`
+// also fixes a latent bug: the book language was never set on the content.
+let epubLang = ''
+let epubHyphenate: HyphenateFn | null = null
+// 'manual' once we inject soft hyphens (identical breaks on every platform);
+// 'auto' for unsupported languages (best-effort native, desktop only).
+let epubHyphenMode: 'auto' | 'manual' = 'auto'
 
 const loading = ref(true)
 const error = ref('')
@@ -317,8 +327,8 @@ const themeRules = (isDark: boolean) => ({
   body: {
     background: isDark ? '#111827' : '#ffffff',
     color: isDark ? '#f3f4f6' : '#111827',
-    '-webkit-hyphens': 'auto !important',
-    hyphens: 'auto !important',
+    '-webkit-hyphens': `${epubHyphenMode} !important`,
+    hyphens: `${epubHyphenMode} !important`,
     'overflow-wrap': 'break-word',
     'text-rendering': 'optimizeLegibility',
     'font-kerning': 'normal',
@@ -326,8 +336,8 @@ const themeRules = (isDark: boolean) => ({
     orphans: '2',
   },
   'p, li, dd, dt, blockquote': {
-    '-webkit-hyphens': 'auto !important',
-    hyphens: 'auto !important',
+    '-webkit-hyphens': `${epubHyphenMode} !important`,
+    hyphens: `${epubHyphenMode} !important`,
     'text-align': 'justify !important',
     'overflow-wrap': 'break-word !important',
   },
@@ -389,6 +399,9 @@ const initEpub = async () => {
   toc.value = []
   bookTitle.value = ''
   bookAuthors.value = []
+  epubLang = ''
+  epubHyphenate = null
+  epubHyphenMode = 'auto'
 
   try {
     const res = await api.get(viewerUrls(props.source).file, {
@@ -418,6 +431,25 @@ const initEpub = async () => {
     bookTitle.value = book.packaging?.metadata?.title || ''
     const creator = book.packaging?.metadata?.creator
     bookAuthors.value = creator ? [creator] : []
+
+    // Hyphenation: resolve the book language, preload its hyphenator (so the
+    // content hook can run synchronously), and switch the theme to `manual`
+    // when supported. Then register a content hook that — for every rendered
+    // section, before epub.js measures it — sets the language on the content
+    // (fixes native hyphenation/locale) and injects soft hyphens. Hyphenating
+    // before epub.js paints keeps freshly created annotations' CFIs consistent.
+    epubLang = (book.packaging?.metadata?.language as string) || ''
+    epubHyphenate = await getHyphenator(epubLang)
+    epubHyphenMode = epubHyphenate ? 'manual' : 'auto'
+    applyTheme()
+    ;(rendition as any).hooks?.content?.register?.((contents: any) => {
+      try {
+        const doc = contents?.document as Document | undefined
+        if (!doc?.body) return
+        if (epubLang) doc.documentElement.setAttribute('lang', epubLang)
+        if (epubHyphenate) hyphenateElementWith(doc.body, epubHyphenate)
+      } catch { /* malformed section — skip hyphenation */ }
+    })
 
     const savedLocation = await loadProgress()
     if (savedLocation) {
