@@ -956,6 +956,8 @@ const messages = {
           registration_request:    'Registration request',
           registration_approve:    'Registration approved',
           registration_reject:     'Registration rejected',
+          password_reset_request:  'Password reset request',
+          password_reset_complete: 'Password reset completed',
         },
         summary: {
           book_upload:             'Uploaded "{title}" to /{path}',
@@ -983,6 +985,8 @@ const messages = {
           registration_request:    'Registration requested by {email}',
           registration_approve:    'Approved registration for {email}',
           registration_reject:     'Rejected registration for {email}',
+          password_reset_request:  'Password reset requested for {email}',
+          password_reset_complete: 'Password reset completed for {email}',
         },
         field: {
           title:           'title',
@@ -1990,6 +1994,8 @@ const messages = {
           registration_request:    'Запрос регистрации',
           registration_approve:    'Регистрация одобрена',
           registration_reject:     'Регистрация отклонена',
+          password_reset_request:  'Запрос сброса пароля',
+          password_reset_complete: 'Сброс пароля выполнен',
         },
         summary: {
           book_upload:             'Загружено «{title}» в /{path}',
@@ -2017,6 +2023,8 @@ const messages = {
           registration_request:    'Запрос регистрации от {email}',
           registration_approve:    'Одобрена регистрация для {email}',
           registration_reject:     'Отклонена регистрация для {email}',
+          password_reset_request:  'Запрошен сброс пароля для {email}',
+          password_reset_complete: 'Сброс пароля выполнен для {email}',
         },
         field: {
           title:           'название',
