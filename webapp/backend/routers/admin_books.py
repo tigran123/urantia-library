@@ -22,7 +22,7 @@ import schemas
 from database import get_db
 from config import (
     RECOMMENDED_SUBDIR, _TOPDIR_SKIPLIST, _MAX_COVER_BYTES, _is_recommended_path,
-    _detect_format, _now_iso,
+    _detect_format, _effective_suffix, _now_iso,
 )
 from deps import require_admin
 from paths import _first_book_path, _primary_topic_path, _safe_subpath
@@ -121,20 +121,25 @@ def _sanitize_for_fs(name: str, max_len: int = 200) -> str:
 
 def _recommended_basename(book: models.Book) -> str:
     """Filename to use for the symlink under RECOMMENDED_DIR. Prefer a
-    sanitized version of the book title + the format extension carried by
+    sanitized version of the book title + the format suffix carried by
     original_filename; fall back to a sanitized original_filename when the
     title is empty, and to the truncated hash when even that yields nothing
-    after sanitization. Every return value goes through `_sanitize_for_fs`
+    after sanitization. Every component goes through `_sanitize_for_fs`
     so `os.path.join(RECOMMENDED_DIR, ...)` cannot escape RECOMMENDED_DIR
-    via `../` segments in user-controlled metadata."""
+    via `../` segments in user-controlled metadata.
+
+    The suffix comes from `_effective_suffix`, which treats compound formats
+    (`.fb2.zip`, `.txt.zip`, …) as a single unit, so a book uploaded as
+    `something.fb2.zip` is recommended as `<Title>.fb2.zip` rather than the
+    lossy `<Title>.zip` (a `.zip` symlink mis-reads as ZIP everywhere format
+    is inferred from the filename, and downloads lose the real extension)."""
     title = _sanitize_for_fs(book.title or "")
-    ext = ""
-    if book.original_filename and "." in book.original_filename:
-        ext = "." + _sanitize_for_fs(book.original_filename.rsplit(".", 1)[-1])
-        if ext == ".":
-            ext = ""
+    suf = _effective_suffix(book.original_filename or "")   # '', '.pdf', '.fb2.zip', ...
+    # Sanitize each dot-component but keep the dots that make up a compound
+    # suffix (.fb2.zip stays .fb2.zip; control chars in any piece are scrubbed).
+    ext = "".join("." + _sanitize_for_fs(p) for p in suf.split(".") if p) if suf else ""
     if title:
-        return f"{title}{ext}" if ext else title
+        return f"{title}{ext}"
     fallback = _sanitize_for_fs(book.original_filename or "")
     return fallback or book.id[:12]
 

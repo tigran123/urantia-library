@@ -95,6 +95,8 @@ export function fileTypeLabel(name: string): string | null {
   const n = name.toLowerCase()
   if (n.endsWith('.fb2.zip') || n.endsWith('.fb2')) return 'FB2'
   if (n.endsWith('.html.zip') || n.endsWith('.htm.zip')) return 'HTML'
+  if (n.endsWith('.txt.zip')) return 'TXT'
+  if (n.endsWith('.md.zip') || n.endsWith('.markdown.zip')) return 'MD'
   const m = n.match(/\.([^.]+)$/)
   if (!m) return null
   const ext = m[1]

@@ -116,6 +116,36 @@ def test_recommend_creates_symlink_row_and_browse_flag(app_ctx, tmp_path, monkey
         db.close()
 
 
+def test_recommend_preserves_compound_suffix(app_ctx, tmp_path, monkeypatch):
+    """Regression: `_recommended_basename` must keep compound format suffixes
+    (.fb2.zip, .txt.zip, …) intact. It previously took only the last extension
+    (`original_filename.rsplit(".", 1)[-1]`), so a book uploaded as
+    `war.fb2.zip` was recommended as `<Title>.zip` — which mis-reads as ZIP
+    everywhere format is inferred from the filename (the /Recommended listing
+    and its ItemView) and loses the real extension on download. The fix uses
+    `_effective_suffix`, which treats those as a single unit."""
+    helpers, _captured, TestSession = app_ctx
+    main, models = helpers["main"], helpers["models"]
+    helpers["make_user"]("admin@x.com", admin=True)
+    ac = helpers["client_for"]("admin@x.com")
+    hash_ids = _setup(tmp_path, monkeypatch, helpers, books=(
+        ("Topic/war.fb2.zip", "War and Peace"),
+        ("Topic/notes.txt.zip", "Field Notes"),
+    ))
+
+    expected = {
+        hash_ids[0]: "Recommended/War and Peace.fb2.zip",
+        hash_ids[1]: "Recommended/Field Notes.txt.zip",
+    }
+    for hash_id, want in expected.items():
+        r = ac.post(f"/api/admin/books/{hash_id}/recommend")
+        assert r.status_code == 200, r.text
+        assert r.json()["symlink_path"] == want
+        link = os.path.join(main.BOOKS_DIR, want)
+        assert os.path.islink(link)
+        assert os.path.realpath(link) == os.path.realpath(os.path.join(main.DATA_DIR, hash_id))
+
+
 def test_unrecommend_removes_symlink_and_row(app_ctx, tmp_path, monkeypatch):
     helpers, _captured, TestSession = app_ctx
     main, models = helpers["main"], helpers["models"]

@@ -328,6 +328,7 @@ const displayFormat = computed(() => {
   if (isMd.value) return 'Markdown'
   if (isHtml.value) return 'HTML'
   if (isCode.value) return t('app.source_code')
+  if (isTxt.value) return 'TXT'
   return fileExtension.value
 })
 
