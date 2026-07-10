@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from PIL import Image
 import djvu.decode
+import djvu.sexpr
 
 import models
 from database import get_db
@@ -1107,18 +1108,94 @@ async def html_preview(
 
 
 
-def _parse_djvu_bookmark(node) -> dict:
+def _iter_djvu_outline_strings(node):
+    """Yield the raw bytes of every string in a sexpr subtree."""
+    for elem in node:
+        if isinstance(elem, djvu.sexpr.ListExpression):
+            yield from _iter_djvu_outline_strings(elem)
+        elif isinstance(elem, djvu.sexpr.StringExpression):
+            yield elem.bytes
+
+
+def _djvu_outline_legacy(root) -> str:
+    """Pick the fallback codepage for non-UTF-8 outline strings.
+
+    Outline text is supposed to be UTF-8, but legacy scanners emit cp1251
+    (Russian) or cp1252 (Western). Cyrillic cp1251 words show as *runs* of
+    bytes >= 0xC0 (every Cyrillic letter lands there), while cp1252 accents
+    and punctuation appear as isolated high bytes among ASCII. Require two
+    consecutive-high-byte pairs before choosing cp1251 — a single pair can
+    be a stray UTF-16 BOM entry (0xFE 0xFF) in an otherwise cp1252 file."""
+    pairs = 0
+    for raw in _iter_djvu_outline_strings(root):
+        try:
+            raw.decode("utf-8")
+            continue
+        except UnicodeDecodeError:
+            pass
+        prev_hi = False
+        for b in raw:
+            hi = b >= 0xC0
+            if hi and prev_hi:
+                pairs += 1
+                if pairs >= 2:
+                    return "cp1251"
+            prev_hi = hi
+    return "cp1252"
+
+
+def _djvu_expr_text(expr, legacy: str) -> str:
+    """Decode one sexpr string: UTF-8, then the document's legacy codepage,
+    then latin-1 (which never fails)."""
+    if not isinstance(expr, djvu.sexpr.StringExpression):
+        return ""
+    raw = expr.bytes
+    for enc in ("utf-8", legacy):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin-1")
+
+
+def _parse_djvu_bookmark(node, name_to_page: Dict[str, int], legacy: str) -> dict:
     """Convert one djvu sexpr bookmark node into a TOC entry.
 
-    A node is a native tuple (title, link, *children); `link` is "#<page>"
-    where a numeric page is 1-based (matching doc.pages[page-1])."""
-    title = str(node[0]) if len(node) > 0 else ""
-    link = node[1] if len(node) > 1 else ""
+    A node is a ListExpression (title, link, *children); `link` is
+    "#<target>" where a numeric target is a 1-based page number (matching
+    doc.pages[target-1]) and anything else is a component page name (e.g.
+    "#default-848.djvu") resolved through `name_to_page`. Same resolution
+    order as djvulibre: numeric first, then page id/name/title."""
+    elems = list(node)
+    title = _djvu_expr_text(elems[0], legacy) if len(elems) > 0 else ""
+    link = _djvu_expr_text(elems[1], legacy) if len(elems) > 1 else ""
     page = None
-    if isinstance(link, str) and link.startswith("#") and link[1:].isdigit():
-        page = int(link[1:])
-    children = [_parse_djvu_bookmark(c) for c in node[2:]]
+    if link.startswith("#"):
+        target = link[1:]
+        page = int(target) if target.isdigit() else name_to_page.get(target)
+    children = [_parse_djvu_bookmark(c, name_to_page, legacy)
+                for c in elems[2:] if isinstance(c, djvu.sexpr.ListExpression)]
     return {"title": title, "page": page, "children": children}
+
+
+def _djvu_page_names(doc) -> Dict[str, int]:
+    """Map each component page's id/name/title to its 1-based page number.
+    The digits embedded in a page name need not match its page number
+    (components can be skipped), so a lookup table is the only correct way
+    to resolve name links."""
+    mapping: Dict[str, int] = {}
+    try:
+        for f in doc.files:
+            if f.type != "P":
+                continue
+            for key in (f.id, f.name, f.title):
+                if key:
+                    mapping.setdefault(key, f.n_page + 1)
+    except Exception:
+        # A partial (or empty) map just leaves those entries unresolved
+        # (page=None), matching the old behavior for name links.
+        pass
+    return mapping
 
 
 def extract_djvu_outline(file_path: str) -> list:
@@ -1130,8 +1207,12 @@ def extract_djvu_outline(file_path: str) -> list:
     outline = doc.outline
     outline.wait()
     items = list(outline.sexpr)  # [] when the file has no outline
+    if not items:
+        return []
+    name_to_page = _djvu_page_names(doc)
+    legacy = _djvu_outline_legacy(outline.sexpr)
     # items[0] is Symbol('bookmarks'); the rest are bookmark entries.
-    return [_parse_djvu_bookmark(e.value) for e in items[1:]]
+    return [_parse_djvu_bookmark(e, name_to_page, legacy) for e in items[1:]]
 
 
 @router.get("/api/djvu-metadata")
