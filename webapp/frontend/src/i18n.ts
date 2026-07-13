@@ -29,7 +29,7 @@ const messages = {
       // ordinary space — it keeps "5 users", "2 online", etc. from
       // breaking across two lines on narrow screens.
       stats: {
-        books: '{n} book | {n} books',  // NBSP after {n}
+        items: '{n} item | {n} items',  // NBSP after {n}
         audio: '{n} audio | {n} audio',  // NBSP after {n}
         video: '{n} video | {n} video',  // NBSP after {n}
         languages: '{n} language | {n} languages',  // NBSP after {n}
@@ -1068,7 +1068,7 @@ const messages = {
       // ordinary space — it keeps "5 users", "2 online", etc. from
       // breaking across two lines on narrow screens.
       stats: {
-        books: '{n} книга | {n} книги | {n} книг',  // NBSP after {n}
+        items: '{n} элемент | {n} элемента | {n} элементов',  // NBSP after {n}
         audio: '{n} аудио | {n} аудио | {n} аудио',  // NBSP after {n}
         video: '{n} видео | {n} видео | {n} видео',  // NBSP after {n}
         languages: '{n} язык | {n} языка | {n} языков',  // NBSP after {n}

@@ -607,7 +607,7 @@ const handleLogout = async () => {
         <router-link
           :to="{ name: 'search', query: { q: '*' } }"
           class="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
-        >{{ t('app.stats.books', { n: nFmt(stats.total_books) }, stats.total_books) }}</router-link>
+        >{{ t('app.stats.items', { n: nFmt(stats.total_books) }, stats.total_books) }}</router-link>
         <template v-if="stats.total_audio > 0">
           <span class="mx-2">·</span>
           <router-link
