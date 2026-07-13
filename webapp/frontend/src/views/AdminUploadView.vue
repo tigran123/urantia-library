@@ -322,30 +322,37 @@ const copyWorkflow = (from: UploadItem, to: UploadItem) => {
   to.needsReview = from.needsReview
 }
 
-// Volume-incremented title from the template when both filenames carry a number,
-// else the template title verbatim. `to` keeps its own title only when `force`
-// is off and no increment is possible.
-const applyTitle = (from: UploadItem, to: UploadItem, force: boolean) => {
+// Title from the template: volume-incremented when both filenames carry a number
+// AND that number actually appears in the template title (the increment "bites").
+// Otherwise the target keeps its own title; only a blank title is filled verbatim.
+const applyTitle = (from: UploadItem, to: UploadItem) => {
   const tmplTitle = (from.meta.title || '').trim()
   if (!tmplTitle) return
   const fv = detectVolume(sourceName(from.source))
   const tv = detectVolume(sourceName(to.source))
-  if (fv && tv) to.meta.title = incrementTitle(from.meta.title as string, fv.num, tv.num)
-  else if (force) to.meta.title = from.meta.title
+  if (fv && tv) {
+    const inc = incrementTitle(tmplTitle, fv.num, tv.num)
+    if (inc !== tmplTitle) {
+      to.meta.title = inc
+      return
+    }
+  }
+  if (!(to.meta.title || '').trim()) to.meta.title = tmplTitle
+}
+
+// Copy the template's filled metadata fields; blank template fields never
+// clobber a target's own (e.g. extracted) values. Title goes via applyTitle.
+const copyFilledMeta = (from: UploadItem, to: UploadItem) => {
+  for (const k of COPYABLE_META_KEYS) {
+    if ((from.meta[k] || '').trim()) to.meta[k] = from.meta[k]
+  }
+  applyTitle(from, to)
 }
 
 // Auto-prefill (silent, at stage time): only copy metadata to true set members.
 const copyMetaIfSet = (from: UploadItem, to: UploadItem) => {
   if (!sameSet(sourceName(from.source), sourceName(to.source))) return
-  for (const k of COPYABLE_META_KEYS) to.meta[k] = from.meta[k]
-  applyTitle(from, to, false)
-}
-
-// Manual "Apply first to all": force every filled field onto the target,
-// regardless of whether its filename fits the series.
-const forceCopyMeta = (from: UploadItem, to: UploadItem) => {
-  for (const k of COPYABLE_META_KEYS) to.meta[k] = from.meta[k]
-  applyTitle(from, to, true)
+  copyFilledMeta(from, to)
 }
 
 // Runs once when an item is freshly staged.
@@ -359,8 +366,9 @@ const prefillItem = (item: UploadItem) => {
   item.prefilled = true
 }
 
-// Manual re-propagation from the first item after the admin edits it. Forces all
-// filled fields onto every editable item except those ticked "exclude".
+// Manual re-propagation from the first item after the admin edits it. Copies the
+// filled fields onto every editable item except those ticked "exclude"; distinct
+// non-blank titles survive unless a volume increment applies (see applyTitle).
 const applyTemplateToAll = () => {
   const tmpl = templateItem.value
   if (!tmpl) return
@@ -369,7 +377,7 @@ const applyTemplateToAll = () => {
     if (it.status !== 'staged') continue
     if (it.excludeFromApply) continue
     copyWorkflow(tmpl, it)
-    forceCopyMeta(tmpl, it)
+    copyFilledMeta(tmpl, it)
   }
 }
 
