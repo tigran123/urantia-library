@@ -37,7 +37,7 @@ from config import (
     _now_iso,
 )
 from deps import require_admin
-from paths import _safe_under_books, _safe_path_segment, _safe_subpath
+from paths import _safe_under_books, _safe_path_segment, _safe_subpath, _assert_mutation_path
 from cas import (
     _extract_upload_metadata, _extract_media_meta, _extract_cover_to,
     _staged_reads_as, _zip_fb2_inplace, _blake2b_of_file,
@@ -263,14 +263,25 @@ async def admin_upload_book(
     )
 
 
+def _get_owned_staging(staging_id: str, admin: models.User,
+                       status_code: int = 404, detail: str = "Staging not found") -> dict:
+    """Look up a staging record and enforce ownership. staging_ids are
+    unguessable uuid4 hex, but possession alone must not grant another admin
+    preview/commit/cancel rights over someone else's in-flight upload. A record
+    owned by someone else gets the same response as a missing one, so the
+    reply doesn't confirm the id exists."""
+    rec = state._STAGING.get(staging_id)
+    if not rec or rec.get("owner_id") != admin.id:
+        raise HTTPException(status_code=status_code, detail=detail)
+    return rec
+
+
 @router.get("/api/admin/books/upload/{staging_id}/cover.jpg")
 def admin_staging_cover(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
-    rec = state._STAGING.get(staging_id)
-    if not rec:
-        raise HTTPException(status_code=404, detail="Staging not found")
+    rec = _get_owned_staging(staging_id, admin)
     cover = os.path.join(rec["dir"], "cover.jpg")
     if not os.path.exists(cover):
         raise HTTPException(status_code=404, detail="No cover for staging")
@@ -281,11 +292,9 @@ def admin_staging_cover(
 async def admin_staging_cover_override(
     staging_id: str,
     file: UploadFile = File(...),
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
-    rec = state._STAGING.get(staging_id)
-    if not rec:
-        raise HTTPException(status_code=404, detail="Staging not found")
+    rec = _get_owned_staging(staging_id, admin)
     _validate_cover_upload(file)
     raw = file.file.read(_MAX_COVER_BYTES + 1)
     if len(raw) > _MAX_COVER_BYTES:
@@ -305,12 +314,11 @@ async def admin_staging_cover_override(
     return {"cover_url": f"/api/admin/books/upload/{staging_id}/cover.jpg?v={int(datetime.now(timezone.utc).timestamp())}"}
 
 
-def _get_staging_file(staging_id: str) -> str:
+def _get_staging_file(staging_id: str, admin: models.User) -> str:
     """Resolve a staging_id to the absolute path of the staged book file. Used
-    by the embedded-viewer endpoints so the admin can preview before commit."""
-    rec = state._STAGING.get(staging_id)
-    if not rec:
-        raise HTTPException(status_code=404, detail="Staging not found")
+    by the embedded-viewer endpoints so the admin can preview before commit.
+    Owner-scoped via _get_owned_staging."""
+    rec = _get_owned_staging(staging_id, admin)
     path = os.path.join(rec["dir"], rec["filename"])
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Staging file missing")
@@ -320,20 +328,20 @@ def _get_staging_file(staging_id: str) -> str:
 @router.get("/api/admin/books/upload/{staging_id}/file")
 def admin_staging_file(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
     """Serve the raw staged file for embedded preview (PDF, EPUB, image)."""
-    return FileResponse(_get_staging_file(staging_id))
+    return FileResponse(_get_staging_file(staging_id, admin))
 
 
 @router.get("/api/admin/books/upload/{staging_id}/fb2-content")
 async def admin_staging_fb2_content(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
     # No stored-extension gate: the admin may be relabelling a mislabeled file,
     # so we let the reader decide. A genuine FB2 parses; anything else 422s.
-    file_path = _get_staging_file(staging_id)
+    file_path = _get_staging_file(staging_id, admin)
     try:
         xml_bytes = _m()._read_fb2_bytes(file_path)
         return _m()._convert_fb2(xml_bytes)
@@ -348,9 +356,9 @@ async def admin_staging_fb2_content(
 @router.get("/api/admin/books/upload/{staging_id}/md-content")
 async def admin_staging_md_content(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
-    file_path = _get_staging_file(staging_id)
+    file_path = _get_staging_file(staging_id, admin)
     text = _m()._read_text_file(file_path)
     inner = _text_inner_ext(file_path)
     if inner == ".txt":
@@ -363,10 +371,10 @@ async def admin_staging_md_content(
 @router.get("/api/admin/books/upload/{staging_id}/html-content")
 async def admin_staging_html_content(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
     # No stored-extension gate (see fb2-content): let the reader decide.
-    file_path = _get_staging_file(staging_id)
+    file_path = _get_staging_file(staging_id, admin)
     try:
         data = _m()._read_html_bytes(file_path)
         return _m()._convert_html(data)
@@ -381,12 +389,12 @@ async def admin_staging_html_content(
 @router.get("/api/admin/books/upload/{staging_id}/djvu-metadata")
 async def admin_staging_djvu_metadata(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
     # No stored-extension gate (see fb2-content). The decoder is lenient (it
     # happily reports 1 page for a non-DjVu file), so gate on the DjVu magic —
     # the same probe the commit step uses — to keep preview and commit in sync.
-    file_path = _get_staging_file(staging_id)
+    file_path = _get_staging_file(staging_id, admin)
     if _staged_reads_as(file_path, ".djvu") is not True:
         raise HTTPException(status_code=422, detail="Not a valid DjVu file")
     try:
@@ -401,10 +409,10 @@ async def admin_staging_djvu_metadata(
 @router.get("/api/admin/books/upload/{staging_id}/djvu-outline")
 async def admin_staging_djvu_outline(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
     # No stored-extension gate (see fb2-content); gate on the DjVu magic.
-    file_path = _get_staging_file(staging_id)
+    file_path = _get_staging_file(staging_id, admin)
     if _staged_reads_as(file_path, ".djvu") is not True:
         raise HTTPException(status_code=422, detail="Not a valid DjVu file")
     try:
@@ -417,10 +425,10 @@ async def admin_staging_djvu_outline(
 async def admin_staging_djvu_page(
     staging_id: str,
     page: int,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
     # No stored-extension gate (see fb2-content); gate on the DjVu magic.
-    file_path = _get_staging_file(staging_id)
+    file_path = _get_staging_file(staging_id, admin)
     if _staged_reads_as(file_path, ".djvu") is not True:
         raise HTTPException(status_code=422, detail="Not a valid DjVu file")
     if page < 1:
@@ -455,9 +463,16 @@ async def admin_staging_djvu_page(
 @router.delete("/api/admin/books/upload/{staging_id}")
 async def admin_cancel_staging(
     staging_id: str,
-    _admin: models.User = Depends(require_admin),
+    admin: models.User = Depends(require_admin),
 ):
-    rec = state._STAGING.pop(staging_id, None)
+    # Cancel stays idempotent for the owner (an already-expired id is a silent
+    # success), but another admin's record is off limits — same 404 as the
+    # other staging endpoints.
+    with state._STAGING_LOCK:
+        rec = state._STAGING.get(staging_id)
+        if rec and rec.get("owner_id") != admin.id:
+            raise HTTPException(status_code=404, detail="Staging not found")
+        rec = state._STAGING.pop(staging_id, None)
     if rec:
         shutil.rmtree(rec.get("dir", ""), ignore_errors=True)
     return {"cancelled": staging_id}
@@ -627,9 +642,8 @@ async def admin_commit_book(
     """Finalise a staged upload: move file into the CAS vault, link from
     /<top>/<sub>/<filename>, register Book + BookLocation, return AdminBookDetail."""
     _purge_expired_staging()
-    rec = state._STAGING.get(payload.staging_id)
-    if not rec:
-        raise HTTPException(status_code=410, detail="Staging expired or unknown")
+    rec = _get_owned_staging(payload.staging_id, admin,
+                             status_code=410, detail="Staging expired or unknown")
 
     # top_dir is allowed to be empty (root) so admins can create a brand-new
     # top-level category by setting top=/ and subpath=<NewCategory>.
@@ -674,6 +688,11 @@ async def admin_commit_book(
     abs_target = os.path.abspath(os.path.join(_m().BOOKS_DIR, rel_path))
     if not abs_target.startswith(os.path.abspath(_m().BOOKS_DIR) + os.sep):
         raise HTTPException(status_code=400, detail="Path escapes library root")
+    # abspath() is lexical — resolve the destination directory chain too, so a
+    # symlinked component (Topic/escape → outside, or into .data) can't redirect
+    # the makedirs/symlink below. Covers abs_target as well: its parent IS
+    # abs_target_dir.
+    _assert_mutation_path(abs_target_dir, is_dir=True)
 
     # If a registered book *just* showed up at this hash via a concurrent
     # commit (unlikely, but cheap to check), bail out.
@@ -687,23 +706,53 @@ async def admin_commit_book(
 
     # 1. Move the staged file into the vault.
     vault_path = os.path.join(_m().DATA_DIR, file_hash)
+    vault_created = False
     try:
         if not os.path.exists(vault_path):
             os.replace(staging_book, vault_path)
-        else:
-            # Vault file already exists (e.g. from a deleted-but-not-purged earlier).
+            vault_created = True
+        elif os.path.exists(staging_book):
+            # Vault file already exists (e.g. from a deleted-but-not-purged earlier,
+            # or a retried commit whose rollback couldn't restore the staged copy).
             os.remove(staging_book)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Vault write failed: {e}")
 
     # 2. Move the cover into place, if any.
+    cover_dest = os.path.join(_m().COVERS_DIR, f"{file_hash}.jpg")
+    cover_created = False
     if os.path.exists(staging_cover):
         _ensure_writable_dir(_m().COVERS_DIR)
-        cover_dest = os.path.join(_m().COVERS_DIR, f"{file_hash}.jpg")
+        cover_existed = os.path.exists(cover_dest)
         try:
             os.replace(staging_cover, cover_dest)
+            cover_created = not cover_existed
         except OSError as e:
             logging.warning("cover move failed: %s", e)
+
+    def _undo_commit_fs(remove_symlink: bool) -> None:
+        """Best-effort compensation when a step after the vault/cover moves
+        fails: put THIS commit's artifacts back into staging so the staging
+        record stays valid and the admin can simply retry — no orphan vault or
+        cover file left behind. Artifacts that pre-existed the commit (vault
+        file from an earlier delete-without-purge, an already-present cover)
+        are left untouched."""
+        if remove_symlink:
+            try:
+                if os.path.islink(abs_target):
+                    os.remove(abs_target)
+            except OSError:
+                pass
+        if vault_created:
+            try:
+                os.replace(vault_path, staging_book)
+            except OSError:
+                pass  # orphan vault file — reimport_orphans.py can recover it
+        if cover_created:
+            try:
+                os.replace(cover_dest, staging_cover)
+            except OSError:
+                pass
 
     # 3. Create the symlink (relative target so the CAS layout stays portable).
     try:
@@ -711,6 +760,7 @@ async def admin_commit_book(
         rel_vault_target = os.path.relpath(vault_path, abs_target_dir)
         os.symlink(rel_vault_target, abs_target)
     except OSError as e:
+        _undo_commit_fs(remove_symlink=False)
         raise HTTPException(status_code=500, detail=f"Symlink failed: {e}")
 
     # 4. Register in DB.
@@ -763,12 +813,9 @@ async def admin_commit_book(
         db.commit()
     except Exception as e:
         db.rollback()
-        # Best-effort filesystem rollback: remove the symlink we just created.
-        try:
-            if os.path.islink(abs_target):
-                os.remove(abs_target)
-        except OSError:
-            pass
+        # Filesystem rollback: remove the symlink we just created and move the
+        # vault/cover artifacts back into staging so nothing is orphaned.
+        _undo_commit_fs(remove_symlink=True)
         raise HTTPException(status_code=500, detail=f"DB commit failed: {e}")
     db.refresh(book)
 

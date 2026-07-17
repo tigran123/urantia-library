@@ -30,6 +30,14 @@ const ACCEPT_ATTR = '.fb2,.zip,.epub,.pdf,.djvu,.mobi,.azw,.azw3,.prc,.docx,.odt
 const MAX_UPLOAD_BYTES = 850 * 1024 * 1024
 const MAX_BATCH = 200
 
+// New-tab link to an item page. import.meta.env.BASE_URL tracks the Vite base
+// (APP_ROOT_PATH: '/library/' on prod, '/' on dev), so the link works under any
+// mount prefix — a hard-coded '/library' would break other bases. Plain <a>
+// (not router-link) because these deliberately open in a new tab. Encoded per
+// segment: '/' separators survive, '#'/'?'/'%' in filenames don't break the URL.
+const itemHref = (path: string) =>
+  `${import.meta.env.BASE_URL}#/item/${path.split('/').map(encodeURIComponent).join('/')}`
+
 const items = ref<UploadItem[]>([])
 const activeId = ref<string | null>(null)
 const dragOver = ref(false)
@@ -690,7 +698,7 @@ const viewLog = (item: UploadItem) => { logModalId.value = item.localId; showLog
                 <div class="flex gap-2 mt-3">
                   <a
                     v-if="activeItem.existingBook.locations[0]"
-                    :href="`/library/#/item/${activeItem.existingBook.locations[0]}`"
+                    :href="itemHref(activeItem.existingBook.locations[0])"
                     target="_blank" rel="noopener"
                     class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
                   >
@@ -763,7 +771,7 @@ const viewLog = (item: UploadItem) => { logModalId.value = item.localId; showLog
             <div class="px-6 py-4 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
               <a
                 v-if="activeItem.committedBook.locations[0]"
-                :href="`/library/#/item/${activeItem.committedBook.locations[0]}`"
+                :href="itemHref(activeItem.committedBook.locations[0])"
                 target="_blank" rel="noopener"
                 class="inline-flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline"
               >

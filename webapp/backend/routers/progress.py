@@ -34,7 +34,14 @@ async def update_progress(prog: schemas.ReadingProgressCreate, current_user: mod
         pct = max(0.0, min(1.0, float(pct)))
     if current_user is None:  # guest — accept silently, nothing is persisted
         return {"id": 0, "user_id": 0, "hash_id": prog.hash_id, "location": prog.location, "percent": pct}
-    if not _is_admin(current_user) and _book_clearance(prog.hash_id, db) > _clearance_of(current_user):
+    # reading_progress.hash_id has an enforced FK to books.id, and _book_clearance
+    # treats an unknown hash as public — so without this check an unknown hash
+    # would sail past the clearance gate and blow up as an IntegrityError (500)
+    # at commit. 404 for everyone, admins included.
+    book = db.query(models.Book).filter(models.Book.id == prog.hash_id).first()
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not _is_admin(current_user) and (book.clearance or 0) > _clearance_of(current_user):
         raise HTTPException(status_code=403, detail="Forbidden")
     existing = db.query(models.ReadingProgress).filter(
         models.ReadingProgress.user_id == current_user.id,

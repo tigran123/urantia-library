@@ -113,8 +113,11 @@ npm run build    # vue-tsc -b && vite build → frontend/dist (start.sh does thi
 
 Runtime config comes from `webapp/secrets.env` (per-machine, **not** committed);
 see `webapp/secrets.env.example` for the full list. Key variables:
-`JWT_SECRET_KEY`, `COOKIE_SECURE`, `APP_ENV`, `APP_ROOT_PATH`, `APP_URL`,
-`SMTP_USER` / `SMTP_PASSWORD` / `ADMIN_EMAIL`, and `BOOKS_DIR`.
+`JWT_SECRET_KEY`, `COOKIE_SECURE`, `APP_ENV`, `APP_ROOT_PATH`, `VITE_API_URL`,
+`APP_URL`, `SMTP_USER` / `SMTP_PASSWORD` / `ADMIN_EMAIL`, and `BOOKS_DIR`.
+Note that `APP_ROOT_PATH` and `VITE_API_URL` are baked into the SPA at build
+time — after changing either, remove `webapp/frontend/dist` so the next service
+start rebuilds it.
 
 ## Database & migrations
 
@@ -146,6 +149,10 @@ running server (and no `secrets.env`).
 
 The same `urantia-library.service` unit runs the app in production, behind
 nginx (see the `webapp/*.nginx` configs). A deploy is `git pull` → run any
-pending migration (`python migrate.py`) → restart the unit. The full runbook —
-backups, restore-from-backup, integrity scans, and the dev/prod unit drift — is
-in [`CLAUDE.md`](./CLAUDE.md).
+pending migration (`python migrate.py`) → if the pull touched
+`webapp/frontend/` (or `APP_ROOT_PATH`/`VITE_API_URL` changed), remove
+`webapp/frontend/dist` so the restart rebuilds the SPA → restart the unit.
+`start.sh` only builds the frontend when `dist` is *missing*, so skipping the
+removal serves the stale build. The full runbook — backups,
+restore-from-backup, integrity scans, and the dev/prod unit drift — is in
+[`CLAUDE.md`](./CLAUDE.md).

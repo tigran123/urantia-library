@@ -6,6 +6,7 @@ import api, { startIntegrityJob, setBulkBookClearance, recommendBooksBulk, unrec
 import AddToPlaylistPopover from '../components/AddToPlaylistPopover.vue'
 import { useEditClearance } from '../composables/useEditClearance'
 import { fileUrl, getFullUrl } from '../lib/assets'
+import { sanitizeDescription } from '../lib/sanitizeHtml'
 import { pendingServerImports } from '../lib/pendingImports'
 
 const { t, locale } = useI18n({ useScope: 'global' })
@@ -690,7 +691,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   />
                 </div>
                 <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words']" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-                <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
+                <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="sanitizeDescription(item.description)"></p>
               </a>
               <router-link v-else :to="`/browse/${currentPath ? currentPath + '/' : ''}${item.name}`" :class="['flex flex-col items-center bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500', gridCls.card]">
                 <div :class="['aspect-square flex items-center justify-center w-full bg-blue-50/50 dark:bg-gray-700/50 rounded-lg group-hover:bg-blue-50 dark:group-hover:bg-gray-700 transition-colors', gridCls.coverMargin]">
@@ -705,7 +706,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                   />
                 </div>
                 <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words']" :title="item.name">{{ formatFilename(item.name, item.is_dir) }}</h3>
-                <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
+                <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="sanitizeDescription(item.description)"></p>
               </router-link>
             </template>
 
@@ -728,7 +729,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
               <h3 :class="[gridCls.title, 'font-medium text-gray-900 dark:text-gray-100 text-center w-full break-words line-clamp-2']" :title="item.title || item.name">{{ item.title || formatFilename(item.name, item.is_dir) }}</h3>
               <p v-if="item.author" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center w-full truncate font-bold italic']" :title="item.author">{{ item.author }}</p>
               <StarRating v-if="item.rating_count" :rating="item.avg_rating" :count="item.rating_count" class="mt-1" />
-              <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="item.description"></p>
+              <p v-if="item.description" :class="[gridCls.subtitle, 'text-gray-500 dark:text-gray-400 mt-1 text-center line-clamp-3']" :title="item.description" v-html="sanitizeDescription(item.description)"></p>
             </router-link>
           </div>
         </template>
@@ -785,7 +786,7 @@ const formatFilename = (name: string, isDir: boolean, maxLength: number = 32) =>
                     </router-link>
                     <p v-if="!item.is_dir && item.author" class="text-sm text-gray-700 dark:text-gray-300 mt-0.5">{{ item.author }}</p>
                     <p v-if="!item.is_dir && item.title" class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-all">{{ item.name }}</p>
-                    <p v-if="item.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="item.description"></p>
+                    <p v-if="item.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-3" v-html="sanitizeDescription(item.description)"></p>
                   </div>
                 </div>
 

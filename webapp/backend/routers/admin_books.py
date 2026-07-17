@@ -25,7 +25,7 @@ from config import (
     _detect_format, _effective_suffix, _now_iso,
 )
 from deps import require_admin
-from paths import _first_book_path, _primary_topic_path, _safe_subpath
+from paths import _first_book_path, _primary_topic_path, _safe_subpath, _assert_mutation_path
 from cas import _extract_cover_to, _validate_cover_upload, _ensure_writable_dir
 from background import _audit, _record_usage_event
 from serialize import _cover_url_for, _book_to_admin_detail
@@ -185,6 +185,8 @@ def _create_recommendation(db: Session, admin: models.User, book: models.Book) -
     # used throughout main.py for BOOKS_DIR.
     if not os.path.abspath(dst_abs).startswith(os.path.abspath(_m().RECOMMENDED_DIR) + os.sep):
         raise HTTPException(status_code=400, detail="Cannot derive a filename for recommendation")
+    # abspath() is lexical — refuse to create through a symlinked Recommended/.
+    _assert_mutation_path(dst_abs)
     vault_path = os.path.join(_m().DATA_DIR, book.id)
     target = os.path.relpath(vault_path, _m().RECOMMENDED_DIR)
     try:
@@ -220,6 +222,12 @@ def _remove_recommendation(db: Session, hash_id: str) -> tuple[list[str], bool]:
     all_unlinked = True
     for loc in rec_locs:
         abs_path = os.path.join(_m().BOOKS_DIR, loc.symlink_path)
+        try:
+            _assert_mutation_path(abs_path)     # no unlink through a symlinked dir chain
+        except HTTPException:
+            logging.warning("unrecommend: refused traversal: %s", loc.symlink_path)
+            all_unlinked = False
+            continue
         try:
             os.unlink(abs_path)
         except FileNotFoundError:
@@ -533,13 +541,21 @@ async def admin_delete_book(
         models.BookLocation.hash_id == hash_id
     ).all()]
 
-    # Filesystem cleanup. Tolerate missing files — best-effort.
+    # Symlink cleanup first — symlinks are recoverable (recreatable from the
+    # still-committed book_locations rows) if the DB commit below fails, so
+    # they may go before it. Tolerate missing files — best-effort.
     errors = []
     books_root = os.path.abspath(_m().BOOKS_DIR)
     for sp in locations:
         full = os.path.abspath(os.path.join(_m().BOOKS_DIR, sp))
-        # Refuse to touch anything that escapes BOOKS_DIR or that isn't a symlink.
+        # Refuse to touch anything that escapes BOOKS_DIR (lexically or through
+        # a symlinked directory component) or that isn't a symlink.
         if not full.startswith(books_root + os.sep):
+            errors.append(f"refused traversal: {sp}")
+            continue
+        try:
+            _assert_mutation_path(full)
+        except HTTPException:
             errors.append(f"refused traversal: {sp}")
             continue
         if os.path.islink(full):
@@ -548,6 +564,23 @@ async def admin_delete_book(
             except OSError as e:
                 errors.append(f"symlink {sp}: {e}")
 
+    # FK enforcement is ON (database.py), so deleting the book row cascades its
+    # child rows (book_locations, favorites, reading_progress, book_ratings,
+    # book_comments + replies, book_recommendations, playlist_items, annotations)
+    # and SET-NULLs feedback_threads.book_hash_id.
+    db.delete(book)
+    _audit(db, admin, "book.delete",
+           target_kind="book", target_id=hash_id,
+           summary=f'Deleted "{deleted_title}"',
+           details={"title": deleted_title,
+                    "path": locations[0] if locations else None,
+                    "locations": locations})
+    db.commit()
+
+    # Only now — past the point of no rollback — remove the vault bytes and
+    # cover. These are the unrecoverable artifacts: doing it before the commit
+    # would leave a books row whose content is gone if the commit failed
+    # (same ordering as admin_delete_dir).
     vault_file = os.path.join(_m().BOOKS_DIR, ".data", hash_id)
     if os.path.exists(vault_file):
         try:
@@ -561,19 +594,6 @@ async def admin_delete_book(
         except OSError as e:
             errors.append(f"cover: {e}")
 
-    # FK enforcement is ON (database.py), so deleting the book row cascades its
-    # child rows (book_locations, favorites, reading_progress, book_ratings,
-    # book_comments + replies, book_recommendations, playlist_items, annotations)
-    # and SET-NULLs feedback_threads.book_hash_id. On-disk artifacts were
-    # unlinked above — DB cascade can't touch the filesystem.
-    db.delete(book)
-    _audit(db, admin, "book.delete",
-           target_kind="book", target_id=hash_id,
-           summary=f'Deleted "{deleted_title}"',
-           details={"title": deleted_title,
-                    "path": locations[0] if locations else None,
-                    "locations": locations})
-    db.commit()
     return {"deleted": hash_id, "locations": locations, "errors": errors}
 
 
@@ -675,6 +695,10 @@ async def admin_move(
 
     if not os.path.lexists(src_abs):
         raise HTTPException(status_code=404, detail="Source not found")
+    # _rel_under_books is lexical — refuse a source whose directory chain runs
+    # through a symlink (the post-move rmdir sweep would follow it). Parent
+    # chain only: a file move's leaf is the book symlink itself.
+    _assert_mutation_path(src_abs)
 
     # Decide file vs directory. "File" here means a symlink into the CAS vault
     # (i.e. a managed book). Anything else is rejected.
@@ -728,6 +752,16 @@ async def admin_move(
         old_abs = os.path.join(books_abs, old_rel)
         new_abs = os.path.join(books_abs, new_rel)
         new_parent = os.path.dirname(new_abs)
+
+        # Both endpoints of the move must have symlink-free directory chains:
+        # a symlinked component would redirect the makedirs/symlink/remove
+        # below outside the tree (or into infra under it).
+        try:
+            _assert_mutation_path(new_abs)
+            _assert_mutation_path(old_abs)
+        except HTTPException:
+            errors.append({"path": old_rel, "reason": "refused traversal"})
+            continue
 
         # Re-derive a relative symlink target from the NEW parent — the old
         # symlink's relative target is invalid from a different parent.
@@ -864,6 +898,11 @@ def admin_delete_dir(
 
     if not os.path.isdir(target_dir):
         raise HTTPException(status_code=400, detail="Path is not a directory")
+
+    # The islink() check above only inspects the leaf; a symlinked *intermediate*
+    # component (Topic/escape/sub) would point rmtree at a tree outside BOOKS_DIR
+    # (or into infra under it). Resolve the whole chain before deleting.
+    _assert_mutation_path(target_dir, is_dir=True)
 
     # The DB — not the filesystem — is the canonical record of book locations.
     # One indexed prefix scan finds every location under the directory; the

@@ -41,14 +41,29 @@ export function useAnnotations(hashId: Ref<string | null | undefined>) {
   // selection and the native browser menu should work as on any plain page.
   const enabled = computed(() => !!hashId.value)
 
+  // Monotonic token: the composable instance survives book switches inside a
+  // viewer (destroy + re-init, not remount), so overlapping loads must not
+  // resolve out of order and revive the previous book's list.
+  let loadSeq = 0
+
   const load = async () => {
-    if (!hashId.value) return
+    const seq = ++loadSeq
+    if (!hashId.value) {
+      // Hashless source (staging preview / foreign file): the previous book's
+      // annotations must not linger and repaint onto this document.
+      annotations.value = []
+      error.value = ''
+      loading.value = false
+      return
+    }
     loading.value = true
     error.value = ''
     try {
       const res = await getAnnotations(hashId.value)
+      if (seq !== loadSeq) return
       annotations.value = res.data.annotations
     } catch (e: any) {
+      if (seq !== loadSeq) return
       if (e.response?.status === 403) {
         // Caller lacks clearance — silent, just empty list.
         annotations.value = []
@@ -56,7 +71,7 @@ export function useAnnotations(hashId: Ref<string | null | undefined>) {
         error.value = e.response?.data?.detail || e.message || 'Failed to load annotations'
       }
     } finally {
-      loading.value = false
+      if (seq === loadSeq) loading.value = false
     }
   }
 

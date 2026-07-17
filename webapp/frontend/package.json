@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "dompurify": "^3.4.12",
     "epubjs": "^0.3.93",
     "highlight.js": "^11.11.1",
     "hyphen": "^1.14.1",

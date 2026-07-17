@@ -43,6 +43,7 @@ Both dev and prod machines run the backend via the systemd unit `urantia-library
 - `COOKIE_SECURE` — `false` on dev (so the auth cookie works over plain http on the LAN); secure-by-default on prod.
 - `APP_ENV` — `development` enables `--reload`; anything else means prod.
 - `APP_ROOT_PATH` — uvicorn `--root-path` and Vite `base`. Prod: `/library`. Dev: unset.
+- `VITE_API_URL` — API base URL compiled into the SPA (`frontend/src/api.ts`, default `/api`). It does **not** derive from `APP_ROOT_PATH`, so a prefixed mount needs it set explicitly: `/library/api` on the `/library` prod hosts; unset (or `/api`) when the app is served at the domain root. Baked in at build time — changing it (or `APP_ROOT_PATH`) has no effect until `frontend/dist` is removed and rebuilt.
 - `APP_URL` — public base URL inserted into outgoing emails (digests, approvals).
 - `SMTP_USER`, `SMTP_PASSWORD`, `ADMIN_EMAIL` — outbound email + admin notification address.
 - `BOOKS_DIR` — overrides the `/Books` default (rarely needed).
@@ -144,12 +145,15 @@ python verify_integrity.py --skip-orphans   # per-book checks only
 ssh prod
 cd /Books/urantia-library
 git pull
+rm -rf webapp/frontend/dist                                # ONLY if the pull touched webapp/frontend/ (or APP_ROOT_PATH/VITE_API_URL changed) — forces start.sh to rebuild the SPA
 cd webapp/backend
 . .venv/bin/activate
 python migrate.py                                          # snapshot + apply any pending migrations
 sudo systemctl restart urantia-library.service
 sudo systemctl status urantia-library.service              # confirm startup check passed
 ```
+
+The `dist` removal matters because `start.sh` builds the frontend only when `frontend/dist` is **missing** — a plain pull-migrate-restart keeps serving the stale build. Never run `npm run build` by hand instead: it bypasses `secrets.env`, so `APP_ROOT_PATH`/`VITE_API_URL` end up wrong in the output; let the service (whose unit loads the `EnvironmentFile`) do the build.
 
 If the unit fails to restart, the log shows the expected vs actual `schema_version` — either run the missing migration or roll back the pull.
 

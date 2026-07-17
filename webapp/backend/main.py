@@ -63,8 +63,8 @@ from serialize import _rating_stats, _attach_recommendations, _author_name
 from paths import (
     _resolves_into_infra, _first_book_path, _primary_topic_path, _book_clearance,
     assert_can_read_path, _accessible_locations_query, _subtree_is_unmanaged,
-    _safe_under_books, sanitize_fb2_path, sanitize_text_path, sanitize_html_path,
-    sanitize_djvu_path,
+    _safe_under_books, _assert_mutation_path, sanitize_fb2_path,
+    sanitize_text_path, sanitize_html_path, sanitize_djvu_path,
 )
 from background import (
     _send_legal_blast_emails, _maybe_send_legal_blast, _audit, _record_usage_event,

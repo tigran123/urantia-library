@@ -10,6 +10,7 @@ import api, {
   type IntegrityCheckResult, type IntegrityMode, type CommentNode,
 } from '../api'
 import { fileUrl, getFullUrl } from '../lib/assets'
+import { sanitizeDescription } from '../lib/sanitizeHtml'
 import { formatClockLong } from '../lib/itemFormat'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, FlagIcon } from '@heroicons/vue/24/outline'
 import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
@@ -226,7 +227,13 @@ const openPlaylistPopover = (event: Event) => {
 
 const onMembershipChanged = () => { loadContainedKeys() }
 
+// Monotonic token so overlapping loads (rapid navigation between items) can't
+// finish out of order and leave a stale item/title rendered for the current
+// route — only the newest call may touch state after its await.
+let loadSeq = 0
+
 const loadItem = async (path: string) => {
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
@@ -238,12 +245,14 @@ const loadItem = async (path: string) => {
     // opening a book is not a directory navigation, and going through /browse
     // logged a phantom page view for the parent directory on every open.
     const res = await api.get('/item', { params: { path: p } })
+    if (seq !== loadSeq) return
     item.value = res.data
     document.title = (res.data.name || '').replace(/\.[^/.]+$/, "")
   } catch (err: any) {
+    if (seq !== loadSeq) return
     error.value = err.response?.data?.detail || err.message
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -617,7 +626,7 @@ const submitReply = async () => {
             </summary>
             <div v-if="item.description" class="px-6 py-4 border-t border-gray-200 dark:border-gray-700">
               <div class="font-medium text-gray-900 dark:text-gray-100 mb-2">{{ t('app.description') }}</div>
-              <div class="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 whitespace-pre-wrap" v-html="item.description"></div>
+              <div class="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 whitespace-pre-wrap" v-html="sanitizeDescription(item.description)"></div>
             </div>
             <table class="w-full text-sm text-left border-t border-gray-200 dark:border-gray-700">
               <tbody class="divide-y divide-gray-200 dark:divide-gray-700">

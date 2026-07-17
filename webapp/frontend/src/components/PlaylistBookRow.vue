@@ -10,6 +10,7 @@ import { BookmarkIcon as BookmarkIconSolid } from '@heroicons/vue/24/solid'
 import StarRating from './StarRating.vue'
 import QualityMark from './QualityMark.vue'
 import { getFullUrl } from '../lib/assets'
+import { sanitizeDescription } from '../lib/sanitizeHtml'
 import { usePlaylistItem } from '../composables/usePlaylistItem'
 import type { PlaylistItem } from '../api'
 
@@ -64,7 +65,7 @@ const { t, isAdmin, isDir, isOwner, canBookmark, to, typeLabel, displayTitle, re
         {{ displayTitle }}
       </component>
       <p v-if="item.author" class="text-sm text-gray-700 dark:text-gray-300 mt-0.5">{{ item.author }}</p>
-      <p v-if="item.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-2" v-html="item.description"></p>
+      <p v-if="item.description" class="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-2" v-html="sanitizeDescription(item.description)"></p>
 
       <div v-if="!isDir" class="mt-2 text-xs text-gray-400 flex items-center gap-2 flex-wrap">
         <QualityMark

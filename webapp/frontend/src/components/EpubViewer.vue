@@ -402,6 +402,9 @@ const initEpub = async () => {
   epubLang = ''
   epubHyphenate = null
   epubHyphenMode = 'auto'
+  // Never inherit the previous book's flag: percentageFromCfi against a
+  // not-yet-generated locations index would yield a bogus percent.
+  locationsReady = false
 
   try {
     const res = await api.get(viewerUrls(props.source).file, {
@@ -486,7 +489,13 @@ const initEpub = async () => {
     // first paint isn't blocked. Once ready, re-save with the now-known
     // percent so the bookshelf bar updates without waiting for the user to
     // turn a page.
+    // This promise is detached and `book`/`hashId` are read live, so a slow
+    // generation finishing after the user switched books would flag the NEW
+    // book's (ungenerated) index as ready and fire a spurious progress save
+    // against it — bail unless the book that generated is still the one open.
+    const generatedBook = book
     book.locations.generate(1024).then(() => {
+      if (book !== generatedBook) return
       locationsReady = true
       const cfi = currentCfi()
       if (cfi) saveProgress(cfi)
@@ -530,6 +539,7 @@ const destroyBook = () => {
   resizeObs?.disconnect()
   resizeObs = null
   if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null }
+  locationsReady = false
   if (book) {
     book.destroy()
     book = null

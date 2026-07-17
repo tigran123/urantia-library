@@ -207,6 +207,32 @@ def _safe_under_books(path: str) -> str:
         raise HTTPException(status_code=403, detail="Forbidden")
     return target
 
+def _assert_mutation_path(abs_path: str, *, is_dir: bool = False) -> None:
+    """Realpath guard for admin filesystem-mutation targets (symlink create/
+    remove, makedirs, rmtree). Complements the callers' lexical abspath checks:
+    abspath() never resolves symlinks, so a symlinked directory *component*
+    with a benign name (Topic/escape → /tmp/outside) slips the prefix check and
+    would redirect the mutation outside the tree — or into infra that lives
+    under BOOKS_DIR. The target need not exist: realpath() resolves the
+    existing prefix, which is exactly where a planted symlink would sit.
+
+    is_dir=False resolves only the parent chain, because the operation acts on
+    the leaf itself (creating or removing a symlink) — a book symlink's leaf
+    legitimately resolves into .data, and a dangling one (vault file already
+    gone) must stay deletable, which a full resolve would refuse via the
+    skiplist. is_dir=True (makedirs/rmtree targets) resolves the leaf too,
+    since those operations follow a symlinked leaf."""
+    checked = abs_path.rstrip(os.sep)
+    if not is_dir:
+        checked = os.path.dirname(checked)
+    real_base = os.path.realpath(_m().BOOKS_DIR)
+    real_checked = os.path.realpath(checked)
+    if real_checked != real_base and not real_checked.startswith(real_base + os.sep):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    rel = os.path.relpath(real_checked, real_base)
+    if rel != "." and rel.split(os.sep, 1)[0] in _TOPDIR_SKIPLIST:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
 def sanitize_fb2_path(path: str) -> str:
     """Ensure path is within BOOKS_DIR (realpath + skiplist guard via
     _safe_under_books), exists, and is an FB2 (or .fb2.zip) file."""

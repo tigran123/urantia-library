@@ -16,6 +16,7 @@ import { gridItemSize, GRID_CLASSES, gridCls, estimateGridCols, roundToRowMultip
 import { formatBytes, fileTypeLabel, formatShortDate } from '../lib/itemFormat'
 import { useEditClearance } from '../composables/useEditClearance'
 import { fileUrl, getFullUrl } from '../lib/assets'
+import { sanitizeDescription } from '../lib/sanitizeHtml'
 
 const { editClearance } = useEditClearance()
 const route = useRoute()
@@ -508,7 +509,9 @@ const wrapMatches = (html: string) => {
 }
 
 const highlightText = (text: string) => wrapMatches(escapeHtml(text || ''))
-const highlightHtml = (html: string) => wrapMatches(html || '')
+// Sanitize BEFORE wrapping so the injected <mark> survives; the wrap only
+// inserts a fixed, attribute-quote-free snippet, so the output stays safe.
+const highlightHtml = (html: string) => wrapMatches(sanitizeDescription(html || ''))
 
 // Localized label for a match-context field ('description' | 'series' | …).
 const matchFieldLabel = (field: string) => t(`search.matched_field.${field}`)

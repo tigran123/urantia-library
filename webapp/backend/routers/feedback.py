@@ -692,12 +692,16 @@ async def reply_to_feedback(
     thread.updated_at = now
     db.commit()
 
-    if kind != "internal":
-        if is_admin_actor:
+    if is_admin_actor:
+        # Internal notes are invisible to the user, so they never trigger a
+        # reply email — but a status flip is user-visible (a `status` message
+        # is persisted above) regardless of the note's kind, so its email must
+        # not be gated on the kind.
+        if kind != "internal":
             _maybe_email_user_update(thread, db, change="reply")
-            if status_flipped:
-                _maybe_email_user_update(thread, db, change="status")
-        # User replies don't trigger an admin email — admins see updates on next inbox load.
+        if status_flipped:
+            _maybe_email_user_update(thread, db, change="status")
+    # User replies don't trigger an admin email — admins see updates on next inbox load.
 
     return {"ok": True}
 
