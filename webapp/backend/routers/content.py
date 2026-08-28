@@ -1198,11 +1198,28 @@ def _djvu_page_names(doc) -> Dict[str, int]:
     return mapping
 
 
+def _djvu_uri(file_path: str) -> str:
+    """Canonicalise a book path before handing it to libdjvu.
+
+    libdjvu caches decoded documents keyed by URI, and a book's symlink path is
+    stable across an admin file replacement — so any worker that had already
+    decoded the previous bytes keeps serving them from cache: a stale outline, a
+    stale page count, and a 500 once the superseded vault file is removed out
+    from under the cached document. The resolved path is .data/<blake2b>, which
+    changes precisely when the content changes, so a stale hit is impossible.
+
+    Safe to resolve here: sanitize_djvu_path (via _safe_under_books) has already
+    run the traversal + skiplist guards on the caller-supplied path, including a
+    realpath containment check, and assert_can_read_path has authorised it.
+    """
+    return os.path.realpath(file_path)
+
+
 def extract_djvu_outline(file_path: str) -> list:
     """Extract the embedded outline (bookmarks) of a DjVu file as a nested
     list of {title, page, children}. Returns [] when the file has none."""
     ctx = djvu.decode.Context()
-    doc = ctx.new_document(djvu.decode.FileURI(file_path))
+    doc = ctx.new_document(djvu.decode.FileURI(_djvu_uri(file_path)))
     doc.decoding_job.wait()
     outline = doc.outline
     outline.wait()
@@ -1226,7 +1243,7 @@ async def djvu_metadata(
     assert_can_read_path(file_path, current_user, db)
     try:
         ctx = djvu.decode.Context()
-        doc = ctx.new_document(djvu.decode.FileURI(file_path))
+        doc = ctx.new_document(djvu.decode.FileURI(_djvu_uri(file_path)))
         doc.decoding_job.wait()
         total_pages = len(doc.pages)
         # Treat djvu-metadata as the book-open signal (one event per open);
@@ -1282,7 +1299,7 @@ async def djvu_page(
 
     try:
         ctx = djvu.decode.Context()
-        doc = ctx.new_document(djvu.decode.FileURI(file_path))
+        doc = ctx.new_document(djvu.decode.FileURI(_djvu_uri(file_path)))
         doc.decoding_job.wait()
 
         if page > len(doc.pages):
