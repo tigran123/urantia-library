@@ -22,6 +22,7 @@ import {
 } from '../components/upload/uploadTypes'
 import { detectVolume, sameSet, naturalCompare, incrementTitle } from '../lib/volume'
 import { pendingServerImports } from '../lib/pendingImports'
+import { stageLocalFile } from '../lib/stageUpload'
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -244,30 +245,14 @@ const stageItem = async (item: UploadItem) => {
 
   const ac = new AbortController()
   aborters.set(item.localId, ac)
-  const form = new FormData()
-  form.append('file', item.source.file)
   try {
-    const resp = await fetch(`${api.defaults.baseURL ?? '/api'}/admin/books/upload`, {
-      method: 'POST', body: form, credentials: 'include', signal: ac.signal,
-    })
-    if (!resp.ok || !resp.body) {
-      const text = await resp.text().catch(() => '')
-      throw new Error(text || `HTTP ${resp.status}`)
-    }
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      let idx
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const raw = buf.slice(0, idx)
-        buf = buf.slice(idx + 2)
-        handleSse(item, raw)
-      }
-    }
+    applyStaged(item, await stageLocalFile(item.source.file, {
+      signal: ac.signal,
+      onLog: (entry) => {
+        item.log.push(entry)
+        item.progress = Math.min(95, item.progress + 6)
+      },
+    }))
   } catch (err: any) {
     if (err?.name !== 'AbortError') {
       item.errorMsg = err?.message || 'Upload failed'
@@ -299,25 +284,6 @@ const applyStaged = (item: UploadItem, payload: any) => {
     item.meta = { ...DEFAULT_META, ...(payload.extracted_metadata || {}) }
     item.status = 'staged'
     prefillItem(item)
-  }
-}
-
-const handleSse = (item: UploadItem, raw: string) => {
-  let eventName = 'message'
-  let dataStr = ''
-  for (const line of raw.split('\n')) {
-    if (line.startsWith('event:')) eventName = line.slice(6).trim()
-    else if (line.startsWith('data:')) dataStr += line.slice(5).trim()
-  }
-  if (!dataStr) return
-  let payload: any
-  try { payload = JSON.parse(dataStr) } catch { return }
-
-  if (eventName === 'log') {
-    item.log.push(payload)
-    item.progress = Math.min(95, item.progress + 6)
-  } else if (eventName === 'done') {
-    applyStaged(item, payload)
   }
 }
 

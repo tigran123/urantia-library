@@ -53,6 +53,7 @@ from cas import (
     _resolve_vault_hash, _VERIFY_CHUNK, _blake2b_of_file, _verify_book_sync,
     _staged_reads_as, _zip_fb2_inplace, _run, _extract_upload_metadata,
     _extract_media_meta, _extract_cover_to, _read_text_bytes,
+    _rekey_book, _discover_book_hash_refs, _BOOK_HASH_REFS,
 )
 from deps import (
     _decode_claims, _current_jti, get_current_user, require_admin, get_optional_user,

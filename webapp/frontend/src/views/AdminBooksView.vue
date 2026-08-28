@@ -110,6 +110,21 @@ const onSaved = (updated: any) => {
   }
 }
 
+const onReplaced = ({ oldHashId, book }: { oldHashId: string; book: any }) => {
+  // A replace re-keys the book, so the row's hash_id and its cover URL both
+  // move. `editingId` and the ?hash= deep link have to follow or the still-open
+  // modal (and a reload) would point at a hash that no longer exists.
+  const row = matches.value.find(m => m.hash_id === oldHashId)
+  if (row) {
+    row.hash_id = book.id
+    row.cover_url = book.cover_url
+  }
+  editingId.value = book.id
+  if (route.query.hash === oldHashId) {
+    router.replace({ query: { ...route.query, hash: book.id } })
+  }
+}
+
 const onDeleted = (hashId: string) => {
   matches.value = matches.value.filter(x => x.hash_id !== hashId)
   total.value = Math.max(0, total.value - 1)
@@ -414,6 +429,6 @@ watch(() => route.query.hash, openFromQuery)
       <p v-else-if="!searching && query" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.no_matches') }}</p>
     </section>
 
-    <BookMetadataEditor :hash-id="editingId" @close="closeEditor" @saved="onSaved" @deleted="onDeleted" />
+    <BookMetadataEditor :hash-id="editingId" @close="closeEditor" @saved="onSaved" @deleted="onDeleted" @replaced="onReplaced" />
   </div>
 </template>

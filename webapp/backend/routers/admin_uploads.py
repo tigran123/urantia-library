@@ -1,9 +1,9 @@
 """Router module (extracted from main.py): the admin Add-Book / import wizard —
 the multipart upload SSE stream, staging cover/file/format-preview endpoints,
-the importable-file expansion, stage-from-server-path, and the final commit that
-moves a staged file into the CAS vault. Includes the batch-upload audit folding
-helper and the staging-file resolver. Moved verbatim from main.py (no logic
-change).
+the importable-file expansion, stage-from-server-path, the final commit that
+moves a staged file into the CAS vault, and the replace-file endpoint that swaps
+an existing book's bytes while keeping its identity. Includes the batch-upload
+audit folding helper and the staging-file resolver.
 
 The staging content-preview endpoints reuse CONTENT helpers that still live in
 main.py until Wave 3 (`_read_fb2_bytes`, `_convert_fb2`, `_convert_txt`,
@@ -37,11 +37,14 @@ from config import (
     _now_iso,
 )
 from deps import require_admin
-from paths import _safe_under_books, _safe_path_segment, _safe_subpath, _assert_mutation_path
+from paths import (
+    _safe_under_books, _safe_path_segment, _safe_subpath, _assert_mutation_path,
+    _first_book_path,
+)
 from cas import (
     _extract_upload_metadata, _extract_media_meta, _extract_cover_to,
     _staged_reads_as, _zip_fb2_inplace, _blake2b_of_file,
-    _validate_cover_upload, _ensure_writable_dir,
+    _validate_cover_upload, _ensure_writable_dir, _rekey_book,
 )
 from background import _audit, _purge_expired_staging
 from serialize import _book_to_admin_detail
@@ -825,3 +828,236 @@ async def admin_commit_book(
         state._STAGING.pop(payload.staging_id, None)
 
     return _book_to_admin_detail(book, db)
+
+
+# ---------- Admin: replace a book's physical file (keeping its identity) ------
+
+
+def _relink(abs_link: str, vault_path: str) -> None:
+    """Atomically re-point a book symlink at `vault_path`.
+
+    Writing a temp link beside the destination and os.replace()-ing it over
+    means the path is never momentarily absent, so a concurrent reader sees
+    either the old link or the new one and never a 404. os.replace acts on the
+    symlink itself, not on what it points at. The relative target is re-derived
+    from this link's own parent so the CAS layout stays portable — the same rule
+    admin_move follows."""
+    parent = os.path.dirname(abs_link)
+    os.makedirs(parent, exist_ok=True)
+    tmp = os.path.join(parent, f".relink-{uuid.uuid4().hex}")
+    os.symlink(os.path.relpath(vault_path, parent), tmp)
+    try:
+        os.replace(tmp, abs_link)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+@router.post("/api/admin/books/{hash_id}/replace", response_model=schemas.AdminBookDetail)
+async def admin_replace_book_file(
+    hash_id: str,
+    payload: schemas.BookReplaceRequest,
+    admin: models.User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Swap an existing book's bytes for a freshly staged file, keeping the book.
+
+    A book's id IS the BLAKE2b hash of its file, so corrected bytes necessarily
+    mean a new primary key. Everything else is carried across: the curated
+    metadata, clearance, the cover, every symlink location (Recommended/
+    included), and every row referencing the book — ratings, comments,
+    annotations, reading progress, playlist entries. That is the whole point:
+    upload-new-then-delete-old loses all of it, and readers who had the book in
+    a playlist would never receive the correction.
+    """
+    book = db.query(models.Book).filter(models.Book.id == hash_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    rec = _get_owned_staging(payload.staging_id, admin,
+                             status_code=410, detail="Staging expired or unknown")
+    staging_book = _get_staging_file(payload.staging_id, admin)
+    new_hash = rec["hash"]
+
+    # Both of these are already refused upstream — the staging step short-circuits
+    # any hash it finds in `books` into its duplicate branch and destroys the
+    # staged dir — so they only fire if another admin committed that hash in the
+    # window between staging and here.
+    if new_hash == hash_id:
+        raise HTTPException(status_code=409,
+                            detail="That file is identical to the current one")
+    clash = db.query(models.Book).filter(models.Book.id == new_hash).first()
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=f'That file is already in the library as "{clash.title or new_hash[:12]}"')
+
+    # Same-extension lock. original_filename is the committed basename, so it
+    # agrees with every book_locations path; holding it fixed keeps those paths,
+    # the Recommended/ basename and the per-format annotation anchors all valid.
+    want_suffix = _effective_suffix(book.original_filename or "")
+    if _effective_suffix(rec["filename"]) != want_suffix:
+        raise HTTPException(status_code=400,
+                            detail=f"Replacement must keep the {want_suffix} extension")
+    if _staged_reads_as(staging_book, want_suffix) is False:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File does not appear to be a valid {want_suffix.lstrip('.').upper()}")
+
+    locations = [r[0] for r in db.query(models.BookLocation.symlink_path).filter(
+        models.BookLocation.hash_id == hash_id
+    ).all()]
+    # Snapshot everything read off the ORM object now: `book` is keyed by the
+    # old PK and gets expunged before the re-key.
+    old_size = book.size
+    title = book.title or hash_id[:12]
+    audit_path = _first_book_path(db, hash_id)
+
+    old_vault = os.path.join(_m().DATA_DIR, hash_id)
+    new_vault = os.path.join(_m().DATA_DIR, new_hash)
+    old_cover = os.path.join(_m().COVERS_DIR, f"{hash_id}.jpg")
+    new_cover = os.path.join(_m().COVERS_DIR, f"{new_hash}.jpg")
+    staging_cover = os.path.join(rec["dir"], "cover.jpg")
+
+    # 1. Move the new bytes into the vault. The OLD vault file stays put until
+    #    the DB commit lands, so every step below is still recoverable.
+    vault_created = False
+    try:
+        if not os.path.exists(new_vault):
+            os.replace(staging_book, new_vault)
+            vault_created = True
+        elif os.path.exists(staging_book):
+            # Vault file already there (a retried replace whose rollback couldn't
+            # restore the staged copy). Keep the vault, drop the duplicate.
+            os.remove(staging_book)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Vault write failed: {e}")
+
+    # 2. Carry the cover over under the new name. A hand-uploaded cover is the
+    #    one artifact here that can't be re-derived, so it wins; only a book with
+    #    no cover at all adopts the one extracted from the replacement.
+    cover_moved = cover_adopted = False
+    _ensure_writable_dir(_m().COVERS_DIR)
+    try:
+        if os.path.exists(old_cover):
+            os.replace(old_cover, new_cover)
+            cover_moved = True
+        elif os.path.exists(staging_cover):
+            os.replace(staging_cover, new_cover)
+            cover_adopted = True
+    except OSError as e:
+        logging.warning("replace %s: cover move failed: %s", hash_id, e)
+
+    relinked: list[str] = []
+
+    def _undo_replace_fs() -> None:
+        """Best-effort compensation for steps 1-3 when a later step fails: put
+        the symlinks back on the old vault file (still present — it is only
+        removed after the commit), restore the cover name, and return the new
+        bytes to staging so the admin can simply retry."""
+        for sp in relinked:
+            try:
+                _relink(os.path.join(_m().BOOKS_DIR, sp), old_vault)
+            except OSError:
+                pass
+        if cover_moved:
+            try:
+                os.replace(new_cover, old_cover)
+            except OSError:
+                pass
+        elif cover_adopted:
+            try:
+                os.replace(new_cover, staging_cover)
+            except OSError:
+                pass
+        if vault_created:
+            try:
+                os.replace(new_vault, staging_book)
+            except OSError:
+                pass  # orphan vault file — reimport_orphans.py can recover it
+
+    # 3. Re-point every registered symlink at the new vault file. `locations`
+    #    already includes the Recommended/ link, so it needs no special case.
+    books_root = os.path.abspath(_m().BOOKS_DIR)
+    try:
+        for sp in locations:
+            full = os.path.abspath(os.path.join(_m().BOOKS_DIR, sp))
+            # Same pair of guards admin_delete_book applies: the lexical prefix
+            # check plus a realpath resolve of the parent chain, so a symlinked
+            # directory component can't redirect the write out of the tree.
+            if not full.startswith(books_root + os.sep):
+                raise HTTPException(status_code=403, detail="Forbidden")
+            _assert_mutation_path(full)
+            _relink(full, new_vault)
+            relinked.append(sp)
+    except HTTPException:
+        _undo_replace_fs()
+        raise
+    except OSError as e:
+        _undo_replace_fs()
+        raise HTTPException(status_code=500, detail=f"Symlink update failed: {e}")
+
+    # 4. Re-key the book, then refresh only what describes the bytes.
+    new_size = None
+    try:
+        new_size = os.path.getsize(new_vault)
+    except OSError:
+        pass
+    ext = os.path.splitext(rec["filename"])[1].lstrip(".").lower()
+    if ext in _AUDIO_EXTS or ext in _VIDEO_EXTS:
+        duration, bitrate = await asyncio.to_thread(_extract_media_meta, new_vault)
+    else:
+        duration = bitrate = None
+
+    # Detach the stale ORM object first: it is keyed by the old PK, so once the
+    # re-key runs any later touch would try to refresh it from a row that no
+    # longer exists. Just this one object — `admin` stays attached for _audit.
+    db.expunge(book)
+    try:
+        _rekey_book(db, hash_id, new_hash)
+        fresh = db.query(models.Book).filter(models.Book.id == new_hash).one()
+        fresh.size = new_size
+        fresh.duration = duration
+        fresh.bitrate = bitrate
+        # The new bytes have never been checked; keeping the old verdict would
+        # make Admin -> Integrity report a scan that never ran on this file.
+        fresh.last_verified_at = None
+        fresh.last_verified_ok = None
+        fresh.last_verified_mode = None
+        fresh.last_verified_error = None
+        _audit(db, admin, "book.replace",
+               target_kind="book", target_id=new_hash,
+               summary=f'Replaced the file of "{title}"',
+               details={"title": title, "path": audit_path,
+                        "old_hash": hash_id, "new_hash": new_hash,
+                        "old_size": old_size, "new_size": new_size,
+                        "filename": rec["filename"], "locations": locations})
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        _undo_replace_fs()
+        raise
+    except Exception as e:
+        db.rollback()
+        _undo_replace_fs()
+        raise HTTPException(status_code=500, detail=f"DB commit failed: {e}")
+
+    # 5. Past the point of no rollback: drop the superseded vault file. Nothing
+    #    else can reference it — books.id is the PK, so one hash is one book —
+    #    and the ordering mirrors admin_delete_book: unrecoverable artifacts go
+    #    only after the commit that made them unreachable.
+    if os.path.exists(old_vault):
+        try:
+            os.remove(old_vault)
+        except OSError as e:
+            logging.warning("replace %s -> %s: stale vault file left behind: %s",
+                            hash_id, new_hash, e)
+    shutil.rmtree(rec["dir"], ignore_errors=True)
+    with state._STAGING_LOCK:
+        state._STAGING.pop(payload.staging_id, None)
+
+    db.refresh(fresh)
+    return _book_to_admin_detail(fresh, db)

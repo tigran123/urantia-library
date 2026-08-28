@@ -9,8 +9,10 @@ import {
   CheckIcon,
   PencilSquareIcon,
   TrashIcon,
+  ArrowUpTrayIcon,
 } from '@heroicons/vue/24/outline'
 import api from '../api'
+import { stageLocalFile } from '../lib/stageUpload'
 import MetadataFields from './MetadataFields.vue'
 import ClearanceControl from './ClearanceControl.vue'
 import CoverPreview from './CoverPreview.vue'
@@ -40,6 +42,9 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'saved', book: BookDetail): void
   (e: 'deleted', hashId: string): void
+  // Distinct from 'saved' on purpose: a replace changes the book's id, and both
+  // parents match 'saved' payloads by hash_id — they would silently no-op.
+  (e: 'replaced', payload: { oldHashId: string; book: BookDetail }): void
 }>()
 
 const editing = ref<BookDetail | null>(null)
@@ -50,6 +55,15 @@ const reextracting = ref(false)
 const error = ref('')
 const coverFile = ref<File | null>(null)
 const hashCopied = ref(false)
+
+// Replace-file state. Declared up here with the other refs rather than beside
+// the replace logic below: the props.hashId watcher is `immediate`, so it runs
+// during setup and would hit the temporal dead zone on anything declared later.
+const replaceInputEl = ref<HTMLInputElement | null>(null)
+const replacing = ref(false)
+const replaceProgress = ref(0)
+const replaceError = ref('')
+const replaceDone = ref(false)
 
 // Inline rename: track which location is being renamed and the draft value.
 const renamingLoc = ref<string | null>(null)
@@ -116,6 +130,8 @@ const load = async (id: string) => {
 watch(
   () => props.hashId,
   (id) => {
+    replaceError.value = ''
+    replaceDone.value = false
     if (id) load(id)
     else { editing.value = null; coverFile.value = null }
   },
@@ -191,6 +207,85 @@ const deleteBook = async () => {
     error.value = err.response?.data?.detail || err.message
   } finally {
     deleting.value = false
+  }
+}
+
+// ---- replace the physical file ---------------------------------------------
+
+// The extension is locked to the current one — the backend enforces it. Keeping
+// it is what lets every symlink path, the Recommended/ basename and the
+// per-format annotation anchors survive the swap untouched. Mirrors
+// config._effective_suffix's handling of the compound suffixes.
+const currentSuffix = computed(() => {
+  const name = (editing.value?.original_filename || '').toLowerCase()
+  const compound = name.match(/\.(fb2|txt|md|markdown|html|htm)\.zip$/)
+  if (compound) return compound[0]
+  const simple = name.match(/\.[^.]+$/)
+  return simple ? simple[0] : ''
+})
+
+const pickReplacement = () => {
+  if (!editing.value) return
+  const ok = window.confirm(t('admin.replace.confirm', {
+    title: editing.value.title || editing.value.id.slice(0, 12),
+  }))
+  if (!ok) return
+  replaceError.value = ''
+  replaceDone.value = false
+  replaceInputEl.value?.click()
+}
+
+const onReplacementPicked = async (e: Event) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''          // so the same file can be re-picked after an error
+  if (!file || !editing.value) return
+
+  const oldHashId = editing.value.id
+  replacing.value = true
+  replaceProgress.value = 0
+  replaceError.value = ''
+  let stagingId: string | null = null
+  try {
+    const staged = await stageLocalFile(file, {
+      onLog: () => { replaceProgress.value = Math.min(95, replaceProgress.value + 6) },
+    })
+    // Staging refuses bytes it already knows, so a re-upload of the very same
+    // file lands here rather than in the replace endpoint.
+    if (staged.existing) {
+      replaceError.value = staged.existing.id === oldHashId
+        ? t('admin.replace.err_identical')
+        : t('admin.replace.err_duplicate', {
+            title: staged.existing.title || staged.existing.id.slice(0, 12),
+          })
+      return
+    }
+    if (staged.error || !staged.staging_id) {
+      replaceError.value = staged.error || t('admin.replace.err_generic')
+      return
+    }
+    stagingId = staged.staging_id
+    replaceProgress.value = 100
+    const res = await api.post(
+      `/admin/books/${encodeURIComponent(oldHashId)}/replace`,
+      { staging_id: stagingId },
+    )
+    stagingId = null         // consumed by the backend
+    editing.value = { ...res.data }
+    coverFile.value = null
+    replaceDone.value = true
+    emit('replaced', { oldHashId, book: res.data })
+  } catch (err: any) {
+    replaceError.value = err.response?.data?.detail || err.message
+  } finally {
+    // A staged file the backend never took would otherwise sit in the staging
+    // dir until the hourly TTL sweep.
+    if (stagingId) {
+      try {
+        await api.delete(`/admin/books/upload/${encodeURIComponent(stagingId)}`)
+      } catch { /* best effort */ }
+    }
+    replacing.value = false
   }
 }
 
@@ -316,6 +411,41 @@ const reextractCover = async () => {
                 </label>
               </div>
             </div>
+          </div>
+
+          <div class="border-t border-gray-100 dark:border-gray-700 pt-5 mt-5">
+            <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">{{ t('admin.replace.heading') }}</div>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">{{ t('admin.replace.hint', { ext: currentSuffix }) }}</p>
+            <p class="inline-flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400 mb-3">
+              <ExclamationTriangleIcon class="w-3.5 h-3.5 shrink-0 mt-px" />
+              <span>{{ t('admin.replace.warning') }}</span>
+            </p>
+            <div class="flex items-center gap-3 flex-wrap">
+              <button
+                @click="pickReplacement"
+                :disabled="replacing || saving || deleting"
+                class="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              >
+                <ArrowPathIcon v-if="replacing" class="w-4 h-4 animate-spin" />
+                <ArrowUpTrayIcon v-else class="w-4 h-4" />
+                <span>{{ t('admin.replace.button') }}</span>
+              </button>
+              <span v-if="replacing" class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.replace.uploading', { n: replaceProgress }) }}
+              </span>
+              <span v-else-if="replaceDone" class="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+                <CheckIcon class="w-3.5 h-3.5" />
+                <span>{{ t('admin.replace.done') }}</span>
+              </span>
+            </div>
+            <div v-if="replaceError" class="mt-2 text-xs text-red-600 dark:text-red-400">{{ replaceError }}</div>
+            <input
+              ref="replaceInputEl"
+              type="file"
+              class="hidden"
+              :accept="currentSuffix"
+              @change="onReplacementPicked"
+            />
           </div>
         </div>
 

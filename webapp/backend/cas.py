@@ -1,7 +1,7 @@
 """Foundation module (extracted from main.py): content-addressable-storage
-helpers — vault-hash resolution, BLAKE2b hashing, per-book integrity
-verification, format detection by bytes, upload metadata/cover extraction, and
-text-byte reads. Depends on config (+ models/database). No import cycle: it does
+helpers — vault-hash resolution, BLAKE2b hashing, re-keying a book onto a new
+content hash, per-book integrity verification, format detection by bytes, upload
+metadata/cover extraction, and text-byte reads. Depends on config (+ models/database). No import cycle: it does
 NOT import main."""
 import os
 import re
@@ -15,6 +15,7 @@ import logging
 from typing import Optional
 from fastapi import HTTPException, UploadFile
 from PIL import Image
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 import models
 from config import (
@@ -80,6 +81,87 @@ def _blake2b_of_file(path: str) -> str:
         for chunk in iter(lambda: f.read(_VERIFY_CHUNK), b""):
             h.update(chunk)
     return h.hexdigest()
+
+# --- Re-keying a book to a new content hash ---------------------------------
+
+# Every (table, column) in the schema that references books.id. `books.id` IS
+# the BLAKE2b hash of the file, so correcting a book's bytes necessarily changes
+# its primary key and every one of these has to follow it. Kept as an explicit,
+# greppable list; _rekey_book validates it against the live schema before acting.
+_BOOK_HASH_REFS = [
+    ("book_locations",       "hash_id"),
+    ("favorites",            "hash_id"),      # dormant table, but rows exist
+    ("reading_progress",     "hash_id"),
+    ("book_ratings",         "hash_id"),
+    ("book_comments",        "hash_id"),
+    ("annotations",          "hash_id"),
+    ("book_recommendations", "hash_id"),
+    ("playlist_items",       "book_hash_id"),
+    ("feedback_threads",     "book_hash_id"),
+    ("usage_events",         "hash_id"),
+]
+
+
+def _discover_book_hash_refs(db: Session) -> set[tuple[str, str]]:
+    """Every (table, column) in the LIVE schema whose foreign key targets
+    books.id, read straight out of SQLite. The completeness oracle for
+    _BOOK_HASH_REFS — used by _rekey_book's guard and asserted against in
+    tests/test_replace_file.py."""
+    found: set[tuple[str, str]] = set()
+    tables = [r[0] for r in db.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )).fetchall()]
+    for tbl in tables:
+        # Names come from sqlite_master, never from user input.
+        for row in db.execute(text(f'PRAGMA foreign_key_list("{tbl}")')).mappings():
+            if (row["table"] or "").lower() == "books":
+                found.add((tbl, row["from"]))
+    return found
+
+
+def _rekey_book(db: Session, old_hash: str, new_hash: str) -> None:
+    """Move a books row — and every row that references it — onto a new hash.
+
+    Runs inside the caller's transaction; the caller commits. The ordering is
+    what lets this work under `PRAGMA foreign_keys=ON` with no deferral:
+
+      1. INSERT the new parent as a full column copy, so all the curated
+         metadata (title, author, clearance, import_date, …) is preserved.
+      2. UPDATE every child to point at it. No unique-constraint collision is
+         possible — nothing carried `new_hash` a moment ago.
+      3. DELETE the old parent, childless by now, so its ON DELETE CASCADE /
+         SET NULL actions fire against nothing.
+
+    Step 3 is why the guard is load-bearing: a books-referencing table missing
+    from _BOOK_HASH_REFS would not be moved in step 2 and would then be silently
+    cascade-deleted — user data gone, no error raised. So the live schema is
+    interrogated first and any unknown reference aborts before a single write.
+    """
+    unknown = _discover_book_hash_refs(db) - set(_BOOK_HASH_REFS)
+    if unknown:
+        raise RuntimeError(
+            "refusing to re-key book: columns referencing books.id are missing "
+            f"from _BOOK_HASH_REFS: {sorted(unknown)}"
+        )
+
+    params = {"new": new_hash, "old": old_hash}
+    # Column list off the LIVE table, not off models.Book: a full copy has to
+    # carry whatever the row actually holds. Reading the model instead would
+    # drop any column the DB has and the model doesn't, silently, and blow up on
+    # any column the model has and the DB doesn't.
+    collist = ", ".join(
+        f'"{r[1]}"' for r in db.execute(text("PRAGMA table_info(books)")) if r[1] != "id"
+    )
+    db.execute(text(
+        f"INSERT INTO books (id, {collist}) "
+        f"SELECT :new, {collist} FROM books WHERE id = :old"
+    ), params)
+    for tbl, col in _BOOK_HASH_REFS:
+        db.execute(
+            text(f'UPDATE "{tbl}" SET "{col}" = :new WHERE "{col}" = :old'), params
+        )
+    db.execute(text("DELETE FROM books WHERE id = :old"), {"old": old_hash})
+
 
 def _verify_book_sync(hash_id: str, mode: str, db: Session) -> dict:
     """Run integrity checks for a single book and persist the result.

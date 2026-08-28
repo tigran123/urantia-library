@@ -140,6 +140,17 @@ const onEditorSaved = (updated: any) => {
   }
 }
 
+const onEditorReplaced = async () => {
+  // The book kept its path but changed its hash, so nothing on this page can be
+  // patched in place: the cover URL, every per-hash call (progress, rating,
+  // annotations, playlist membership) and the viewer's load key all key off it.
+  // A plain re-fetch refreshes the lot, and the new hash in sourceLoadKey is
+  // what makes the open viewer reload the corrected bytes. The modal is left
+  // open and untouched — it already swapped itself to the new detail, and every
+  // action inside it works off editing.id rather than the hash-id prop.
+  await loadItem(currentPath.value)
+}
+
 const onEditorDeleted = () => {
   // The book this page shows is gone. If we got here from a playlist (see the
   // ?from= tag PlaylistDetailView attaches), bounce back to that playlist;
@@ -871,7 +882,7 @@ const submitReply = async () => {
 
     </div>
 
-    <BookMetadataEditor :hash-id="editingId" @close="editingId = null" @saved="onEditorSaved" @deleted="onEditorDeleted" />
+    <BookMetadataEditor :hash-id="editingId" @close="editingId = null" @saved="onEditorSaved" @deleted="onEditorDeleted" @replaced="onEditorReplaced" />
 
     <!-- Integrity verification modal -->
     <div

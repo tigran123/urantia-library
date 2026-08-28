@@ -539,6 +539,18 @@ const messages = {
       clearance_invalid: 'Clearance must be a non-negative integer.',
       recommend_selected: 'Recommend',
       unrecommend_selected: 'Unrecommend',
+      replace: {
+        heading: 'File',
+        button: 'Replace file…',
+        hint: 'Swap in a corrected {ext} while the book keeps its identity — metadata, cover, ratings, comments, annotations, reading positions, playlist entries and its place in Recommended all carry over. The extension must stay the same.',
+        warning: 'Reading positions and annotations are anchored to the text, not to the file. If the replacement re-flows or re-paginates the book, they may land in a different place.',
+        confirm: 'Replace the file of “{title}”? Everything readers have attached to this book is kept, but positions and annotations may shift if the new file is not paginated identically.',
+        uploading: 'Uploading… {n}%',
+        done: 'File replaced.',
+        err_identical: 'That file is byte-for-byte identical to the current one — nothing to replace.',
+        err_duplicate: 'That file is already in the library as “{title}”.',
+        err_generic: 'Replacement failed.'
+      },
       move: {
         heading: 'Reorganise',
         from: 'From',
@@ -1577,6 +1589,18 @@ const messages = {
       clearance_invalid: 'Допуск должен быть неотрицательным целым числом.',
       recommend_selected: 'Рекомендовать',
       unrecommend_selected: 'Убрать',
+      replace: {
+        heading: 'Файл',
+        button: 'Заменить файл…',
+        hint: 'Подставить исправленный {ext}, сохранив книгу: метаданные, обложка, оценки, комментарии, заметки, позиции чтения, элементы плейлистов и место в «Рекомендуемом» переносятся на новый файл. Расширение должно остаться прежним.',
+        warning: 'Позиции чтения и заметки привязаны к тексту, а не к файлу. Если новый файл переразбит текст или страницы, они могут оказаться в другом месте.',
+        confirm: 'Заменить файл книги «{title}»? Всё, что читатели связали с этой книгой, сохранится, но позиции и заметки могут сместиться, если разбивка на страницы отличается.',
+        uploading: 'Загрузка… {n}%',
+        done: 'Файл заменён.',
+        err_identical: 'Этот файл побайтово совпадает с текущим — заменять нечего.',
+        err_duplicate: 'Этот файл уже есть в библиотеке как «{title}».',
+        err_generic: 'Не удалось заменить файл.'
+      },
       move: {
         heading: 'Реорганизация',
         from: 'Откуда',

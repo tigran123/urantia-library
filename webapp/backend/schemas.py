@@ -128,6 +128,14 @@ class UploadCommitRequest(BaseModel):
     batch_id: Optional[str] = None
 
 
+class BookReplaceRequest(BaseModel):
+    """Swap an existing book's physical file for freshly staged bytes. The book
+    keeps its title/author/clearance and every reference to it (ratings,
+    comments, annotations, reading progress, playlist entries, Recommended
+    placement) — only books.id changes, because it IS the file's BLAKE2b hash."""
+    staging_id: str
+
+
 class TouchStagingRequest(BaseModel):
     staging_ids: List[str] = []
 

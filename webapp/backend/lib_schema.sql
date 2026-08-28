@@ -344,7 +344,7 @@ CREATE TABLE admin_audit_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at    TEXT    NOT NULL,                       -- ISO-8601 UTC
     actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update' | 'legal.accept' | 'password.reset_request' | 'password.reset_complete'
+    action        VARCHAR NOT NULL,                       -- 'book.upload' | 'book.edit' | 'book.delete' | 'book.move' | 'book.replace' | 'book.cover' | 'book.clearance' | 'book.recommend' | 'book.unrecommend' | 'user.clearance' | 'user.session_terminate' | 'comment.moderate' | 'annotation.moderate' | 'usage.kinds_update' | 'legal.accept' | 'password.reset_request' | 'password.reset_complete'
     target_kind   VARCHAR,                                -- 'book' | 'user' | 'comment' | 'annotation' | NULL
     target_id     VARCHAR,                                -- book hash, user id, comment id, … (VARCHAR holds either int or hash as text)
     summary       VARCHAR NOT NULL,                       -- one-line human-readable
