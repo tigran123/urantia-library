@@ -10,6 +10,7 @@ import api, {
   type IntegrityCheckResult, type IntegrityMode, type CommentNode,
 } from '../api'
 import { fileUrl, getFullUrl } from '../lib/assets'
+import { sourceLoadKey } from '../components/viewerSource'
 import { sanitizeDescription } from '../lib/sanitizeHtml'
 import { formatClockLong } from '../lib/itemFormat'
 import { DocumentIcon, ArrowDownTrayIcon, BookmarkIcon, PencilSquareIcon, ShieldCheckIcon, XMarkIcon, CheckCircleIcon, XCircleIcon, FlagIcon } from '@heroicons/vue/24/outline'
@@ -362,6 +363,16 @@ const viewerSource = computed(() => ({
   path: item.value?.path ?? '',
   hashId: item.value?.hash_id ?? '',
 }))
+
+// Remount the viewer whenever the BYTES change identity, not just the path.
+// The viewers each reset their own state from an internal watch, which is
+// enough for navigating between books; an admin replacing a file is the case
+// that breaks it — same path, same component instance, new content — and it
+// relies on every viewer resetting every piece of internal state (outline,
+// page count, current page, zoom, error) correctly. Keying on the hash makes
+// Vue tear the instance down and build a fresh one instead, which is what a
+// manual page reload does and why that always fixed it.
+const viewerKey = computed(() => sourceLoadKey(viewerSource.value))
 
 const textPreview = ref<{ text: string; html: string }>({ text: '', html: '' })
 
@@ -853,22 +864,22 @@ const submitReply = async () => {
           <ImageViewer v-else-if="isImage" :src="getDownloadUrl()" />
           
           <!-- PDF Viewer (pdfjs-dist) -->
-          <PdfViewer v-else-if="isPdf" :source="viewerSource" />
+          <PdfViewer v-else-if="isPdf" :key="viewerKey" :source="viewerSource" />
 
           <!-- DjVu Viewer -->
-          <DjvuViewer v-else-if="isDjvu" :source="viewerSource" />
+          <DjvuViewer v-else-if="isDjvu" :key="viewerKey" :source="viewerSource" />
 
           <!-- EPUB Viewer -->
-          <EpubViewer v-else-if="isEpub" :source="viewerSource" />
+          <EpubViewer v-else-if="isEpub" :key="viewerKey" :source="viewerSource" />
 
           <!-- FB2 Viewer (also handles .fb2.zip) -->
-          <Fb2Viewer v-else-if="isFb2" :source="viewerSource" />
+          <Fb2Viewer v-else-if="isFb2" :key="viewerKey" :source="viewerSource" />
 
           <!-- Markdown / plain text / code viewer -->
-          <MdViewer v-else-if="isMd || isTxt || isCode" :source="viewerSource" />
+          <MdViewer v-else-if="isMd || isTxt || isCode" :key="viewerKey" :source="viewerSource" />
 
           <!-- HTML Viewer (also handles .html.zip) -->
-          <HtmlViewer v-else-if="isHtml" :source="viewerSource" />
+          <HtmlViewer v-else-if="isHtml" :key="viewerKey" :source="viewerSource" />
 
           <!-- Unsupported -->
           <div v-else class="text-center p-8">
