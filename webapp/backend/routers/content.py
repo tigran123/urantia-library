@@ -1238,6 +1238,12 @@ async def djvu_metadata(
             path=path,
         )
         return {"total_pages": total_pages}
+    except HTTPException:
+        # Re-raise deliberate status codes (e.g. the 404 above) unchanged —
+        # the blanket handler below would otherwise re-wrap them as a 500 whose
+        # detail reads "404: Page not found", which is both wrong and actively
+        # misleading when diagnosing a viewer failure.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1251,6 +1257,12 @@ async def djvu_outline(
     assert_can_read_path(file_path, current_user, db)
     try:
         return {"toc": extract_djvu_outline(file_path)}
+    except HTTPException:
+        # Re-raise deliberate status codes (e.g. the 404 above) unchanged —
+        # the blanket handler below would otherwise re-wrap them as a 500 whose
+        # detail reads "404: Page not found", which is both wrong and actively
+        # misleading when diagnosing a viewer failure.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1294,6 +1306,12 @@ async def djvu_page(
         img.save(output_buffer, format="JPEG", quality=85)
 
         return Response(content=output_buffer.getvalue(), media_type="image/jpeg", headers=headers)
+    except HTTPException:
+        # Re-raise deliberate status codes (e.g. the 404 above) unchanged —
+        # the blanket handler below would otherwise re-wrap them as a 500 whose
+        # detail reads "404: Page not found", which is both wrong and actively
+        # misleading when diagnosing a viewer failure.
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
