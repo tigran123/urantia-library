@@ -497,6 +497,30 @@ onBeforeUnmount(() => {
 .md-content .md-ul { list-style: disc; }
 .md-content .md-ol { list-style: decimal; }
 .md-content .md-li { margin: 0.15em 0; }
+.md-content .md-li > .md-ul,
+.md-content .md-li > .md-ol { margin-bottom: 0; }
+.md-content .md-li > .md-ul { list-style: circle; }
+/* A loose list item or a blockquote wraps its text in <p>: no gap after the last. */
+.md-content .md-li > .md-p:last-child,
+.md-content .md-blockquote > .md-p:last-child { margin-bottom: 0; }
+.md-content .md-table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+.md-content .md-table th,
+.md-content .md-table td {
+  border: 1px solid rgba(127,127,127,0.35);
+  padding: 0.35em 0.7em;
+  vertical-align: top;
+  text-align: left;
+}
+.md-content .md-table th {
+  font-weight: 600;
+  background: rgba(127,127,127,0.08);
+}
 .md-content .md-hr {
   border: 0;
   border-top: 1px solid rgba(127,127,127,0.4);
@@ -547,6 +571,7 @@ onBeforeUnmount(() => {
 .md-content--preview .md-ul,
 .md-content--preview .md-ol { margin: 0 0 0.4em 1.1em; }
 .md-content--preview .md-li { margin: 0; }
+.md-content--preview .md-table { margin: 0.35em 0; font-size: 0.9em; }
 .md-content--preview .md-image { display: none; }
 .md-content--preview .md-codeblock {
   padding: 0.25em 0.5em;

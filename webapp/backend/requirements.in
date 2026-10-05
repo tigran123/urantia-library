@@ -9,6 +9,7 @@ pydantic[email]
 aiofiles
 python-multipart
 geoip2
+markdown-it-py
 
 # Dev-only — needed for the pytest suite under tests/. Not imported by the
 # server at runtime.

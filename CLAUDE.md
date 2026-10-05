@@ -7,7 +7,7 @@ This file provides guidance to any AI agent when working with code in this repos
 `/Books` is the root of a personal book library. The actual code project lives at `/Books/urantia-library` (a separate git repo); everything else under `/Books` (`Grammars/`, `Law/`, etc.) is library content browsed by that app.
 
 - `/Books/urantia-library/webapp/backend` — FastAPI service. `main.py` is now a ~260-line wiring entry point (the `FastAPI` app + middleware + `_lifespan` + mounts + `include_router(...)` + a `main.<symbol>` backward-compat re-export block); routes live in the `routers/` package and shared helpers/state in the foundation modules (`config.py`, `state.py`, `cas.py`, `deps.py`, `serialize.py`, `paths.py`, `background.py`), alongside the thin shell (`database.py`, `models.py`, `schemas.py`, `security.py`, `email_utils.py`). See "Backend module layout" under Conventions.
-- `/Books/urantia-library/webapp/frontend` — Vue 3 + Vite + TailwindCSS SPA, served as static assets in production. Multi-format reader: PDF (pdfjs-dist), EPUB (epubjs), DJVU, FB2, Markdown (highlight.js), HTML, plain images.
+- `/Books/urantia-library/webapp/frontend` — Vue 3 + Vite + TailwindCSS SPA, served as static assets in production. Multi-format reader: PDF (pdfjs-dist), EPUB (epubjs), DJVU, FB2, Markdown (parsed by the backend with markdown-it-py, `_MdRenderer` in `routers/content.py`; highlight.js in the browser), HTML, plain images.
 - `/Books/urantia-library/webapp/generate-thumbnails.py` — one-shot tooling that generates thumbnails for image directories; not run by the webapp.
 - `/Books/urantia-library/webapp/backend/reimport_orphans.py` — recovery tool used after restoring `lib.db` from a backup; see "Restoring from a backup" below.
 - `/Books/urantia-library/webapp/backend/verify_integrity.py` — standalone full integrity scan (CLI equivalent of the Admin → Integrity full scan); read-only. See "Verifying integrity from the CLI" below.
@@ -148,6 +148,7 @@ git pull
 rm -rf webapp/frontend/dist                                # ONLY if the pull touched webapp/frontend/ (or APP_ROOT_PATH/VITE_API_URL changed) — forces start.sh to rebuild the SPA
 cd webapp/backend
 . .venv/bin/activate
+uv pip sync requirements.txt                               # ONLY if the pull touched requirements.txt — a new package is otherwise missing at startup
 python migrate.py                                          # snapshot + apply any pending migrations
 sudo systemctl restart urantia-library.service
 sudo systemctl status urantia-library.service              # confirm startup check passed

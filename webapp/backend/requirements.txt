@@ -65,8 +65,12 @@ idna==3.14
     #   yarl
 iniconfig==2.3.0
     # via pytest
+markdown-it-py==4.2.0
+    # via -r requirements.in
 maxminddb==3.1.1
     # via geoip2
+mdurl==0.1.2
+    # via markdown-it-py
 multidict==6.7.1
     # via
     #   aiohttp
