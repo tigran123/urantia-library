@@ -1,27 +1,29 @@
+# The Urantia Library on pi5, at the root. ulib.sigmaai.au.nginx, on the VPS
+# behind sigmaai.au, is this file but for the names and the certificate.
+
 # Per-IP rate limit for the library's credential-facing endpoints. 10 req/min
-# steady, burst of 5, applied below to /api/login and /api/register. Lives at
-# http context because limit_req_zone can only be declared there — the include
-# from /etc/nginx/nginx.conf puts everything in this file inside http {}.
+# steady, burst of 5, applied below to /api/login, /api/register and the two
+# password-reset endpoints. Lives at http context because limit_req_zone can
+# only be declared there — the include from /etc/nginx/nginx.conf puts
+# everything in this file inside http {}. Declared once per host: a second
+# declaration of the zone fails nginx -t.
 limit_req_zone $binary_remote_addr zone=urantia_auth:10m rate=10r/m;
 
 server {
     listen 80;
-    server_name ulib.ddns.net proxyai.ddns.net urantia.zapto.org;
+    server_name ulib.ddns.net urantia.zapto.org;
 
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name ulib.ddns.net proxyai.ddns.net urantia.zapto.org;
+    server_name ulib.ddns.net urantia.zapto.org;
 
     ssl_certificate /etc/letsencrypt/live/ulib.ddns.net/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/ulib.ddns.net/privkey.pem;
 
     location / {
-        allow 89.242.93.253;
-        deny all;
-
         client_max_body_size 1024M;
         proxy_request_buffering off;   # stream the upload straight through
         proxy_read_timeout 600s;       # slow uplinks need more than the 60s default
@@ -34,28 +36,11 @@ server {
     }
 
     # Rate-limit credential endpoints to slow credential-stuffing + registration
-    # spam. Burst absorbs typos/autofill retries; nodelay returns 429 instantly
-    # past that rather than queueing the request.
-    location ~ ^/api/(login|register)$ {
-        allow 89.242.93.253;
-        deny all;
-
-        limit_req zone=urantia_auth burst=5 nodelay;
-        limit_req_status 429;
-
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # Password-reset endpoints: same rate-limit as the credential block above, but
-    # PUBLICLY reachable (no allow/deny) — a user who forgot their password is by
-    # definition not coming from the admin IP. Kept as a SEPARATE block so the
-    # login/register IP-lock stays intact. The backend also enforces an in-process
-    # per-IP backstop (config.RESET_RL_*).
-    location ~ ^/api/(forgot-password|reset-password)$ {
+    # spam + password-reset abuse (email-bombing / enumeration). Burst absorbs
+    # typos/autofill retries; nodelay returns 429 instantly past that rather than
+    # queueing the request. (The backend also has an in-process per-IP backstop —
+    # see config.RESET_RL_* — so dev / manual-uvicorn runs are capped too.)
+    location ~ ^/api/(login|register|forgot-password|reset-password)$ {
         limit_req zone=urantia_auth burst=5 nodelay;
         limit_req_status 429;
 
@@ -71,9 +56,6 @@ server {
     # mapping is invariant for the lifetime of the build — a new build
     # emits new filenames and never reuses an old hash for different bytes.
     location ~ ^/assets/ {
-        allow 89.242.93.253;
-        deny all;
-
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

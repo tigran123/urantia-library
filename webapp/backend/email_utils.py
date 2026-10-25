@@ -15,7 +15,7 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", 465))
 SMTP_USER = os.environ.get("SMTP_USER", "admin@example.com")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "password")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@sigmaai.ai")
-APP_URL = os.environ.get("APP_URL", "https://sigmaai.ai/library")
+APP_URL = os.environ.get("APP_URL", "https://ulib.sigmaai.au")
 
 def _send_email(to_email: str, subject: str, html_content: str) -> tuple[bool, str | None]:
     """Send a single-part HTML email. Returns (ok, error): (True, None) when SMTP

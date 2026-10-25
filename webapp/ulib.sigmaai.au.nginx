@@ -1,0 +1,69 @@
+# The Urantia Library on the VPS behind sigmaai.au, at the root of a name of its
+# own since 2026-10-25 (it was sigmaai.au/library/ until then, which now only
+# redirects here: see sigmaai.au.nginx). ulib.ddns.net.nginx, on pi5, is this
+# file but for the names and the certificate.
+
+# Per-IP rate limit for the library's credential-facing endpoints. 10 req/min
+# steady, burst of 5, applied below to /api/login, /api/register and the two
+# password-reset endpoints. Lives at http context because limit_req_zone can
+# only be declared there — the include from /etc/nginx/nginx.conf puts
+# everything in this file inside http {}. Declared once per host: a second
+# declaration of the zone fails nginx -t.
+limit_req_zone $binary_remote_addr zone=urantia_auth:10m rate=10r/m;
+
+server {
+    listen 80;
+    server_name ulib.sigmaai.au;
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name ulib.sigmaai.au;
+
+    ssl_certificate /etc/letsencrypt/live/ulib.sigmaai.au/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ulib.sigmaai.au/privkey.pem;
+
+    location / {
+        client_max_body_size 1024M;
+        proxy_request_buffering off;   # stream the upload straight through
+        proxy_read_timeout 600s;       # slow uplinks need more than the 60s default
+
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Rate-limit credential endpoints to slow credential-stuffing + registration
+    # spam + password-reset abuse (email-bombing / enumeration). Burst absorbs
+    # typos/autofill retries; nodelay returns 429 instantly past that rather than
+    # queueing the request. (The backend also has an in-process per-IP backstop —
+    # see config.RESET_RL_* — so dev / manual-uvicorn runs are capped too.)
+    location ~ ^/api/(login|register|forgot-password|reset-password)$ {
+        limit_req zone=urantia_auth burst=5 nodelay;
+        limit_req_status 429;
+
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Long-lived caching for Vite's content-hashed chunks under /assets/.
+    # The filename embeds a hash of the file's bytes, so the URL→bytes
+    # mapping is invariant for the lifetime of the build — a new build
+    # emits new filenames and never reuses an old hash for different bytes.
+    location ~ ^/assets/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+}
