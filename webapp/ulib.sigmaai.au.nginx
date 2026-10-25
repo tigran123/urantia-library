@@ -53,17 +53,8 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Long-lived caching for Vite's content-hashed chunks under /assets/.
-    # The filename embeds a hash of the file's bytes, so the URL→bytes
-    # mapping is invariant for the lifetime of the build — a new build
-    # emits new filenames and never reuses an old hash for different bytes.
-    location ~ ^/assets/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
-    }
+    # Nothing here for /assets/: the app sets Cache-Control itself
+    # (spa_cache_headers in main.py), a year and immutable for /assets/, never
+    # for index.html, and only on a 200. An add_header here sent the header
+    # twice, and on a missing asset's 404 too.
 }
